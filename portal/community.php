@@ -936,6 +936,8 @@ const MY_USER_ID = <?= $uid ?>;
 const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
 const SAVED_LAT = <?= is_null($saved_gps_lat)?'null':(float)$saved_gps_lat ?>;
 const SAVED_LNG = <?= is_null($saved_gps_lng)?'null':(float)$saved_gps_lng ?>;
+const USER_BRGY = <?= json_encode((string)$user_brgy) ?>;
+const USER_MUNI = <?= json_encode((string)$user_muni) ?>;
 const INIT_COLOR = '<?= htmlspecialchars($avatar_color) ?>';
 const DM_KEY = `sentri_dm_${MY_USER_ID}`;
 
@@ -946,7 +948,7 @@ const CL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',he
 const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#ea580c','#d97706','#16a34a','#0891b2','#374151','#be185d','#0f766e','#7c2d12','#1d4ed8'];
 
 let allReports=[], curView='feed';
-let userLat=SAVED_LAT, userLng=SAVED_LNG, hasGPS=SAVED_LAT!==null;
+let userLat=SAVED_LAT, userLng=SAVED_LNG, hasGPS=SAVED_LAT!==null, liveGPS=false;
 const alertTimes={};
 
 /* Dark mode */
@@ -961,8 +963,8 @@ function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.
 window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
 
 /* GPS */
-function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent='GPS Active';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
-function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;navigator.geolocation.watchPosition(pos=>{userLat=pos.coords.latitude;userLng=pos.coords.longitude;if(!hasGPS){hasGPS=true;updateChip();}checkProximity();},()=>updateChip(),{enableHighAccuracy:true,maximumAge:15000,timeout:20000});}
+function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent=liveGPS?'GPS Live':'GPS Saved';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
+function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;navigator.geolocation.watchPosition(pos=>{if(pos.coords.accuracy&&pos.coords.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){userLat=SAVED_LAT;userLng=SAVED_LNG;hasGPS=true;liveGPS=false;updateChip();checkProximity();return;}userLat=pos.coords.latitude;userLng=pos.coords.longitude;hasGPS=true;liveGPS=true;updateChip();checkProximity();},()=>updateChip(),{enableHighAccuracy:true,maximumAge:0,timeout:20000});}
 function haversine(a,b,c,d){const R=6371000,dL=(c-a)*Math.PI/180,dN=(d-b)*Math.PI/180,x=Math.sin(dL/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dN/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
 function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now();allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const d=haversine(userLat,userLng,r.latitude,r.longitude);if(d<=(r.radius_m||200)){if(now-(alertTimes[r.id]||0)<300000)return;alertTimes[r.id]=now;showToast(r,Math.round(d));}});}
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
@@ -1129,11 +1131,11 @@ function clearPin(){
  document.getElementById('clearPinBtn').style.display='none';
 }
 function onRadiusChange(val){pickerRadius=parseInt(val);document.getElementById('radiusVal').textContent=pickerRadius>=1000?(pickerRadius/1000).toFixed(1)+' km':pickerRadius+' m';document.getElementById('r_radius_m').value=pickerRadius;if(pickerCircle)pickerCircle.setRadius(pickerRadius);}
-async function reverseGeocode(lat,lng){try{const res=await fetch(`../api/geocode_proxy.php?lat=${lat}&lon=${lng}`);const d=await res.json();if(d&&d.address){const a=d.address;if(!document.getElementById('r_location').value)document.getElementById('r_location').value=a.road||a.hamlet||a.suburb||'';if(!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=a.suburb||a.village||a.quarter||a.neighbourhood||'';if(!document.getElementById('r_city').value)document.getElementById('r_city').value=a.city||a.town||a.municipality||'';if(!document.getElementById('r_province').value)document.getElementById('r_province').value=a.state||a.province||'';}}catch{}}
+async function reverseGeocode(lat,lng){try{const res=await fetch(`../api/geocode_proxy.php?lat=${lat}&lon=${lng}`);const d=await res.json();if(d&&d.address){const a=d.address;const locEl=document.getElementById('r_location'),brgyEl=document.getElementById('r_barangay'),cityEl=document.getElementById('r_city'),provEl=document.getElementById('r_province');const road=a.road||a.pedestrian||a.residential||a.amenity||a.building||a.hamlet||a.neighbourhood||'';const brgy=a.quarter||a.neighbourhood||a.suburb||a.village||a.hamlet||USER_BRGY||'';const city=a.city||a.town||a.municipality||a.county||USER_MUNI||'';const prov=a.state||a.province||a.region||'';if(locEl)locEl.value=road;if(brgyEl)brgyEl.value=brgy;if(cityEl&&city)cityEl.value=city;if(provEl&&prov)provEl.value=prov;}}catch{}}
 function useMyLocation(){
  const btn=document.getElementById('locateBtn');
- if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
  if(!navigator.geolocation){
+ if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
  const cf=document.getElementById('r_city');if(cf)cf.focus();
  return;
  }
@@ -1142,19 +1144,29 @@ function useMyLocation(){
  navigator.geolocation.getCurrentPosition(pos=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ if(pos.coords.accuracy&&pos.coords.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){
+ placePin(SAVED_LAT,SAVED_LNG,true);
+ return;
+ }
+ userLat=pos.coords.latitude;userLng=pos.coords.longitude;hasGPS=true;liveGPS=true;updateChip();
  placePin(pos.coords.latitude,pos.coords.longitude,true);
  },err=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
  const cf=document.getElementById('r_city');
  if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}
- },{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+ },{enableHighAccuracy:true,timeout:12000,maximumAge:0});
 }
 
 /* Post report modal */
 function openModal(){
  document.getElementById('modalOverlay').classList.add('open');
- if(SAVED_LAT!==null&&SAVED_LNG!==null){setTimeout(()=>placePin(SAVED_LAT,SAVED_LNG,true),250);}
+ if(USER_BRGY&&!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=USER_BRGY;
+ if(USER_MUNI&&!document.getElementById('r_city').value)document.getElementById('r_city').value=USER_MUNI;
+ const initLat=liveGPS&&userLat!==null?userLat:SAVED_LAT;
+ const initLng=liveGPS&&userLng!==null?userLng:SAVED_LNG;
+ if(initLat!==null&&initLng!==null){setTimeout(()=>placePin(initLat,initLng,true),250);}
 }
 function closeModal(){
  document.getElementById('modalOverlay').classList.remove('open');
