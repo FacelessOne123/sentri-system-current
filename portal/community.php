@@ -1203,7 +1203,7 @@ function applySeverity(cat){
  const sev=(SEVERITY_MAP[cat]||{})[sel?sel.value:'']||'caution';
  document.getElementById('r_status').value=sev;
  const wrap=document.getElementById('autoSeverity'),badge=document.getElementById('autoSeverityBadge');
- if(wrap&&badge){badge.className='badge '+sev;badge.textContent=ucFirst(sev);wrap.style.display='flex';}
+ if(wrap&&badge){badge.style.animation='none';void badge.offsetWidth;badge.style.animation='';badge.className='badge '+sev;badge.textContent=ucFirst(sev);wrap.style.display='flex';}
 }
 
 function clearStatusSelection(){

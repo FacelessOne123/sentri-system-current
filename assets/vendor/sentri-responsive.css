@@ -89,3 +89,186 @@
   .severity-row { grid-template-columns: 1fr !important; }
   .sev-btn { flex-direction: row !important; justify-content: center !important; gap: 8px !important; }
 }
+
+/* ── Global SenTri UI Polish & Micro-Animations ───────────────────────────── */
+@keyframes sentriFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes sentriSlideUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes sentriScalePop {
+  0%   { opacity: 0; transform: scale(0.92) translateY(10px); }
+  70%  { opacity: 1; transform: scale(1.015) translateY(0); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes sentriRowSlide {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes sentriDangerPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.35); }
+  50%      { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+}
+@keyframes sentriBadgePop {
+  0%   { transform: scale(0.82); opacity: 0.4; }
+  60%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes sentriHeroFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+
+/* Smooth page & section entrances */
+.content, .hero-inner, .login-card, .signup-card {
+  animation: sentriSlideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.hero-eyebrow {
+  animation: sentriSlideUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.05s both, sentriHeroFloat 4s ease-in-out 1s infinite;
+}
+.hero h1 {
+  animation: sentriSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+.hero p {
+  animation: sentriSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+}
+.hero-ctas {
+  animation: sentriSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.28s both;
+}
+.hero-stats {
+  animation: sentriSlideUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.36s both;
+}
+
+/* Staggered stat cards, portal cards, feature cards, panels & report cards */
+.stat-card, .map-stat, .portal-card, .feat-card, .card, .panel, .report-card, .contact-card {
+  animation: sentriSlideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 0.22s ease,
+              background-color 0.25s ease !important;
+}
+.stat-grid > *:nth-child(1), .stats-row > *:nth-child(1), .portals-grid > *:nth-child(1), .features-grid > *:nth-child(1) { animation-delay: 0.04s; }
+.stat-grid > *:nth-child(2), .stats-row > *:nth-child(2), .portals-grid > *:nth-child(2), .features-grid > *:nth-child(2) { animation-delay: 0.10s; }
+.stat-grid > *:nth-child(3), .stats-row > *:nth-child(3), .portals-grid > *:nth-child(3), .features-grid > *:nth-child(3) { animation-delay: 0.16s; }
+.stat-grid > *:nth-child(4), .stats-row > *:nth-child(4), .portals-grid > *:nth-child(4), .features-grid > *:nth-child(4) { animation-delay: 0.22s; }
+.portals-grid > *:nth-child(5), .features-grid > *:nth-child(5) { animation-delay: 0.28s; }
+.features-grid > *:nth-child(6) { animation-delay: 0.34s; }
+
+/* Interactive hover lift & icon bounce on cards */
+.stat-card:hover, .map-stat:hover, .report-card:hover, .contact-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.11) !important;
+}
+.stat-card .stat-icon, .portal-card .portal-icon, .feat-card .feat-icon {
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.stat-card:hover .stat-icon, .portal-card:hover .portal-icon, .feat-card:hover .feat-icon {
+  transform: scale(1.12) rotate(-4deg);
+}
+
+/* Staggered table rows & hover slide */
+tbody tr {
+  animation: sentriRowSlide 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: background-color 0.18s ease, transform 0.18s ease;
+}
+tbody tr:nth-child(1)  { animation-delay: 0.04s; }
+tbody tr:nth-child(2)  { animation-delay: 0.08s; }
+tbody tr:nth-child(3)  { animation-delay: 0.12s; }
+tbody tr:nth-child(4)  { animation-delay: 0.16s; }
+tbody tr:nth-child(5)  { animation-delay: 0.20s; }
+tbody tr:nth-child(6)  { animation-delay: 0.24s; }
+tbody tr:nth-child(7)  { animation-delay: 0.28s; }
+tbody tr:nth-child(8)  { animation-delay: 0.32s; }
+tbody tr:hover td {
+  background-color: rgba(59, 130, 246, 0.04) !important;
+}
+
+/* Modals & Overlays spring entrance */
+.modal-bg.show, .modal-overlay.open, .detail-overlay.open, .mini-map-modal.open, #navModalOverlay.show {
+  animation: sentriFadeIn 0.22s ease out both;
+  backdrop-filter: blur(4px);
+}
+.modal-bg.show .modal, .modal-overlay.open .modal, .detail-overlay.open .detail-modal, .mini-map-modal.open .mini-map-box {
+  animation: sentriScalePop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both !important;
+}
+
+/* Category selector & sub-type dropdown animations */
+.cat-opt {
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+              border-color 0.2s ease,
+              background-color 0.2s ease,
+              box-shadow 0.2s ease !important;
+}
+.cat-opt:hover {
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+}
+.cat-opt.selected {
+  transform: scale(1.04);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.22);
+}
+.cat-opt i {
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.cat-opt:hover i, .cat-opt.selected i {
+  transform: scale(1.18);
+}
+.incident-fields, .loc-details-panel, .opt-panel, .picker-section {
+  animation: sentriSlideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1) both !important;
+}
+#autoSeverityBadge {
+  animation: sentriBadgePop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* Urgent pulse on dangerous status pills & badges */
+.badge.dangerous, .pill-dangerous {
+  animation: sentriDangerPulse 2.2s infinite;
+}
+
+/* Tactile button & navigation micro-interactions */
+button, .btn, .post-btn, .btn-login, .btn-submit, .btn-action, .btn-icon, .locate-btn-big, .vote-btn, .pin-chip, .rf-btn, .filter-btn {
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.2s ease,
+              background-color 0.2s ease,
+              filter 0.18s ease !important;
+}
+button:hover:not(:disabled), .post-btn:hover, .btn-login:hover, .btn-submit:hover, .btn-action:hover:not(:disabled), .btn-icon:hover:not(:disabled), .locate-btn-big:hover:not(:disabled), .vote-btn:hover, .pin-chip:hover {
+  transform: translateY(-2px);
+}
+button:active:not(:disabled), .post-btn:active, .btn-login:active, .btn-submit:active, .btn-action:active:not(:disabled), .btn-icon:active:not(:disabled), .locate-btn-big:active:not(:disabled), .vote-btn:active {
+  transform: translateY(0) scale(0.96) !important;
+}
+
+/* Sidebar nav links smooth slide on hover */
+.menu a, .sb-nav a {
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease, color 0.2s ease !important;
+}
+.menu a:hover, .sb-nav a:hover {
+  transform: translateX(4px);
+}
+
+/* Map pin drop & dangerous radar ring animations */
+@keyframes sentriPinDrop {
+  0%   { opacity: 0; transform: translateY(-22px) scale(0.7); }
+  65%  { opacity: 1; transform: translateY(3px) scale(1.06); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes sentriRadarRing {
+  0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.55); }
+  70%  { box-shadow: 0 0 0 12px rgba(220, 38, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+.leaflet-marker-icon > svg, .leaflet-marker-icon > div {
+  animation: sentriPinDrop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.leaflet-marker-icon > div[style*="#dc2626"], .leaflet-marker-icon > div[style*="#e53e3e"] {
+  animation: sentriPinDrop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both, sentriRadarRing 2s infinite 0.45s;
+}
+.leaflet-popup-content-wrapper {
+  animation: sentriScalePop 0.24s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+
