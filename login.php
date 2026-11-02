@@ -91,6 +91,24 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 @media(max-width:840px){.hero-badge{display:none;}.gov-links{display:none;}.form-card{padding:22px 20px 18px;margin-top:18px;}.form-wrap{max-width:480px;padding:0 16px 24px;}.hero-inner h2{font-size:1.3rem;}}
 @media(max-width:580px){.form-card{padding:18px 14px 16px;margin-top:14px;}.form-wrap{max-width:100%;padding:0 12px 20px;}.hero-inner h2{font-size:1.2rem;}}
 
+/* ── Guide video popup ── */
+.guide-overlay{position:fixed;inset:0;background:rgba(6,36,68,.82);backdrop-filter:blur(4px);z-index:9999;display:none;align-items:center;justify-content:center;padding:20px;}
+.guide-overlay.open{display:flex;animation:guideFade .25s ease;}
+.guide-box{background:#fff;border-radius:16px;width:100%;max-width:880px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);animation:guidePop .3s cubic-bezier(.34,1.56,.64,1);}
+.guide-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:3px solid var(--gold);}
+.guide-title{font-family:'Poppins',sans-serif;font-size:.95rem;font-weight:800;color:var(--navy);display:flex;align-items:center;gap:8px;}
+.guide-title i{color:var(--gold-dark);}
+.guide-x{background:#f3f4f6;border:none;width:32px;height:32px;border-radius:8px;cursor:pointer;color:#374151;font-size:1rem;display:flex;align-items:center;justify-content:center;transition:background .15s;}
+.guide-x:hover{background:#e5e7eb;}
+.guide-video{display:block;width:100%;max-height:70vh;background:#000;}
+.guide-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;}
+.guide-hint{font-size:.76rem;color:var(--muted);}
+.guide-skip{background:linear-gradient(135deg,var(--navy),var(--navy-light));color:#fff;border:none;padding:9px 20px;border-radius:9px;font-size:.84rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;display:inline-flex;align-items:center;gap:7px;}
+.guide-skip:hover{filter:brightness(1.1);}
+@keyframes guideFade{from{opacity:0}to{opacity:1}}
+@keyframes guidePop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+@media(max-width:580px){.guide-hint{display:none;}.guide-foot{justify-content:flex-end;}}
+
 /* ── Motion ── */
 @keyframes msgError{0%{opacity:0;transform:translateY(-4px);}50%{opacity:1;transform:translateY(0);}100%{transform:translateY(0);}}
 @keyframes msgSuccess{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
@@ -167,8 +185,64 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  </div>
 </div>
 <footer class="site-footer"><p>SenTri Community Safety Incident Reporting System - For official and community use only. <a href="gov/login.php">Government Portal</a></p></footer>
+
+<!-- Guide video popup -->
+<div class="guide-overlay" id="guideOverlay" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+ <div class="guide-box">
+  <div class="guide-head">
+   <div class="guide-title" id="guideTitle"><i class="fas fa-circle-play"></i> Quick Guide: How to Use SenTri</div>
+   <button type="button" class="guide-x" id="guideClose" aria-label="Close and continue"><i class="fas fa-xmark"></i></button>
+  </div>
+  <video class="guide-video" id="guideVideo" controls playsinline preload="none"></video>
+  <div class="guide-foot">
+   <span class="guide-hint">Press <b>Esc</b> to skip</span>
+   <button type="button" class="guide-skip" id="guideSkip">Skip <i class="fas fa-forward"></i></button>
+  </div>
+ </div>
+</div>
+
 <script>
 let timerInterval = null;
+
+/* ── Guide video popup ── */
+const GUIDE_SRC='assets/video/GuideVideoTutorial.mp4';
+let guideRedirect=null;
+
+function openGuide(redirectUrl){
+ guideRedirect=redirectUrl;
+ const ov=document.getElementById('guideOverlay'),v=document.getElementById('guideVideo');
+ if(!v.getAttribute('src'))v.src=GUIDE_SRC;
+ ov.classList.add('open');
+ document.getElementById('guideSkip').focus();
+ const p=v.play();
+ if(p&&p.catch)p.catch(()=>{}); // if the browser blocks autoplay, the user can press play
+}
+
+async function afterLogin(redirectUrl){
+ let show=false;
+ try{
+  const res=await fetch('api/guide.php',{method:'POST'});
+  const d=await res.json();
+  show=!!d.show;
+ }catch{}
+ if(show)openGuide(redirectUrl);
+ else window.location.href=redirectUrl;
+}
+
+function finishGuide(){
+ const ov=document.getElementById('guideOverlay');
+ if(!ov.classList.contains('open'))return; // prevents a double redirect
+ document.getElementById('guideVideo').pause();
+ ov.classList.remove('open');
+ const url=guideRedirect;guideRedirect=null;
+ if(url)window.location.href=url;
+}
+
+document.getElementById('guideSkip').addEventListener('click',finishGuide);
+document.getElementById('guideClose').addEventListener('click',finishGuide);
+document.getElementById('guideVideo').addEventListener('ended',finishGuide);
+document.getElementById('guideVideo').addEventListener('error',finishGuide); // video missing -> never block login
+document.addEventListener('keydown',e=>{if(e.key==='Escape')finishGuide();});
 
 function togglePw(){const f=document.getElementById('pwField');const b=f.nextElementSibling;const s=f.type==='password';f.type=s?'text':'password';b.textContent=s?'HIDE':'SHOW';}
 
@@ -200,7 +274,7 @@ document.getElementById('otpForm').addEventListener('submit',async e=>{
  try{
  const res=await fetch('login.php',{method:'POST',body:new FormData(e.target)});
  const data=await res.json();
- if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
+ if(data.status==='success'){showMsg('success',data.message||'Signed in!');setTimeout(()=>afterLogin(data.redirect),500);}
  else{
  showMsg('error',data.message||'Invalid OTP.');
  btn.disabled=false;btn.innerHTML=orig;
@@ -246,7 +320,7 @@ document.getElementById('loginForm').addEventListener('submit',async e=>{
  try{
  const res=await fetch('login.php',{method:'POST',body:new FormData(e.target)});
  const data=await res.json();
- if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
+ if(data.status==='success'){showMsg('success',data.message||'Signed in!');setTimeout(()=>afterLogin(data.redirect),500);}
  else if(data.status==='must_reset'){showMsg('success',data.message||'Redirecting to password setup...');setTimeout(()=>window.location.href=data.redirect,900);}
  else if(data.status==='otp_required'){
  showMsg('success',data.message||'Enter the 6-digit code from your email.');
