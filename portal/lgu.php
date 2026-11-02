@@ -9,6 +9,7 @@ $uid = (int)$_SESSION['user_id'];
 $fname = $_SESSION['first_name'];
 $view = $_GET['view'] ?? 'overview';
 $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
+$has_esc_col = sentri_table_has_column($conn, 'reports', 'escalated_to_lgu');
 
 $stmt = $conn->prepare("SELECT email,last_name,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
 $stmt->bind_param("i",$uid); $stmt->execute();
@@ -35,6 +36,20 @@ $caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_
 $safe = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
 $contacts_count = cq($conn,"SELECT COUNT(*) FROM emergency_contacts WHERE is_active=1");
 
+// ── Real DB-derived responder & resolution telemetry ──
+$resp_total_cnt = cq($conn, "SELECT COUNT(*) FROM users WHERE role='first_responder'");
+$resp_approved_cnt = cq($conn, "SELECT COUNT(*) FROM users WHERE role='first_responder' AND is_approved=1");
+$has_resolved_col = sentri_table_has_column($conn, 'reports', 'resolved_at');
+if ($has_resolved_col) {
+ $resolved_today = cq($conn, "SELECT COUNT(*) FROM reports WHERE is_archived=0 AND status='safe' AND resolved_at IS NOT NULL AND DATE(resolved_at)=CURDATE()");
+} else {
+ $resolved_today = 0;
+}
+
+// Optional GET filter used by the "Reports by Barangay" drill-down bars.
+$brgy_filter = trim($_GET['barangay'] ?? '');
+$brgy_unspecified = (strcasecmp($brgy_filter, 'Unspecified') === 0);
+
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
 
 // ── Per-view data ──────────────────────────────────────────────────────────
@@ -43,7 +58,19 @@ $danger_reports = $all_reports = $brgy_stats = $contacts = [];
 if ($view === 'overview' || $view === 'all_reports') {
  $limit = ($view === 'overview') ? 15 : 100;
  $status_filter = ($view === 'overview') ? "AND r.status='dangerous'" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 $status_filter ORDER BY r.created_at DESC LIMIT $limit");
+ $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
+ $brgy_cond = '';
+ $bind_brgy = false;
+ if ($view === 'all_reports' && $brgy_filter !== '') {
+ if ($brgy_unspecified) {
+ $brgy_cond = " AND (r.barangay IS NULL OR TRIM(r.barangay)='')"; // group label fallback
+ } else {
+ $brgy_cond = " AND r.barangay = ?";
+ $bind_brgy = true;
+ }
+ }
+ $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
+ if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) {
  if($view==='overview') $danger_reports[]=$row; else $all_reports[]=$row;
@@ -61,11 +88,10 @@ if ($view === 'contacts') {
  if ($cs) while($r=$cs->fetch_assoc()) $contacts[]=$r;
 }
 
-// ── SLA & Telemetry KPIs ──
+// ── SLA & Telemetry KPIs (all DB-derived; no fabricated fallbacks) ──
 $sla_row = $conn->query("SELECT AVG(TIMESTAMPDIFF(MINUTE, accepted_at, responded_at)) as avg_resp, COUNT(CASE WHEN status='safe' THEN 1 END) as safe_cnt, COUNT(*) as total_cnt FROM reports WHERE is_archived=0")->fetch_assoc();
-$avg_resp_time = round((float)($sla_row['avg_resp'] ?? 6.8), 1);
-if ($avg_resp_time <= 0) $avg_resp_time = 7.4;
-$resolution_rate = (!empty($sla_row['total_cnt'])) ? round(($sla_row['safe_cnt'] / $sla_row['total_cnt']) * 100, 1) : 100;
+$avg_resp_time = round((float)($sla_row['avg_resp'] ?? 0), 1); // 0.0 = no accepted→responded telemetry yet
+$resolution_rate = !empty($sla_row['total_cnt']) ? round(($sla_row['safe_cnt'] / $sla_row['total_cnt']) * 100, 1) : null;
 $active_deployed_units = (int)cq($conn, "SELECT COUNT(DISTINCT assigned_to) FROM reports WHERE is_archived=0 AND status='dangerous' AND assigned_to IS NOT NULL");
 
 
@@ -271,6 +297,7 @@ $page_titles = [
  --navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;
  --gold:#f39c12;--text:#111827;--muted:#6b7280;
  --border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;
+ --sentri-danger:#b91c1c;--sentri-caution:#b45309;--sentri-safe:#166534;
 }
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 html,body{height:100%;}
@@ -448,9 +475,9 @@ tr:hover td{background:#fafafa;}
  padding:3px 9px;border-radius:20px;font-size:0.7rem;font-weight:700;
  white-space:nowrap;
 }
-.pill-dangerous{background:#fef2f2;color:#991b1b;}
-.pill-caution{background:#fffbeb;color:#92400e;}
-.pill-safe{background:#f0fdf4;color:#166534;}
+.pill-dangerous{background:#fef2f2;color:var(--sentri-danger);}
+.pill-caution{background:#fffbeb;color:var(--sentri-caution);}
+.pill-safe{background:#f0fdf4;color:var(--sentri-safe);}
 .cat-chip{
  display:inline-flex;align-items:center;gap:5px;
  font-size:0.72rem;font-weight:600;color:var(--navy);
@@ -504,6 +531,16 @@ tr:hover td{background:#fafafa;}
 }
 .overlay.show{display:block;}
 
+/* ── TOAST NOTIFICATIONS ── */
+.toast-container{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:10px;pointer-events:none;}
+.toast{display:flex;align-items:center;gap:10px;padding:13px 18px;border-radius:12px;font-size:0.84rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,0.18);pointer-events:all;animation:toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1);min-width:260px;max-width:360px;}
+.toast-success{background:#166534;color:#fff;}
+.toast-error{background:#991b1b;color:#fff;}
+.toast-info{background:#1e40af;color:#fff;}
+.toast-warning{background:var(--sentri-caution);color:#fff;}
+.toast i{font-size:1rem;flex-shrink:0;}
+@keyframes toastIn{from{opacity:0;transform:translateY(16px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);}}
+
 /* ── RESPONSIVE ── */
 @media(max-width:1100px){
  .stat-grid{grid-template-columns:repeat(3,1fr);}
@@ -547,6 +584,9 @@ tr:hover td{background:#fafafa;}
 <body>
 
 <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
 
 <aside class="sidebar" id="sidebar">
  <div class="sb-header">
@@ -654,8 +694,13 @@ tr:hover td{background:#fafafa;}
  </div>
  <div>
  <div style="font-size:0.72rem;color:rgba(255,255,255,0.75);text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Avg. Dispatch SLA</div>
+ <?php if($avg_resp_time > 0): ?>
  <div style="font-size:1.4rem;font-weight:900;line-height:1.2;"><?= $avg_resp_time ?> <span style="font-size:0.82rem;font-weight:600;color:rgba(255,255,255,0.85);">mins</span></div>
- <div style="font-size:0.7rem;color:#86efac;margin-top:2px;"><i class="fas fa-arrow-trend-down"></i> Response target active</div>
+ <div style="font-size:0.7rem;color:#d1d5db;margin-top:2px;"><i class="fas fa-route"></i> Accepted &rarr; responded telemetry</div>
+ <?php else: ?>
+ <div style="font-size:1.4rem;font-weight:900;line-height:1.2;color:rgba(255,255,255,0.6);">&mdash;</div>
+ <div style="font-size:0.7rem;color:rgba(255,255,255,0.55);margin-top:2px;">No dispatch telemetry data yet</div>
+ <?php endif; ?>
  </div>
  </div>
  <div style="background:linear-gradient(135deg,#064e3b 0%,#059669 100%);color:#fff;border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 4px 16px rgba(5,150,105,0.18);">
@@ -664,8 +709,12 @@ tr:hover td{background:#fafafa;}
  </div>
  <div>
  <div style="font-size:0.72rem;color:rgba(255,255,255,0.75);text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Resolution Success Rate</div>
+ <?php if($resolution_rate !== null): ?>
  <div style="font-size:1.4rem;font-weight:900;line-height:1.2;"><?= $resolution_rate ?>%</div>
- <div style="font-size:0.7rem;color:#d1fae5;margin-top:2px;"><i class="fas fa-circle-check"></i> Safety verification status</div>
+ <?php else: ?>
+ <div style="font-size:1.4rem;font-weight:900;line-height:1.2;color:rgba(255,255,255,0.6);">&mdash;</div>
+ <?php endif; ?>
+ <div style="font-size:0.7rem;color:#d1fae5;margin-top:2px;"><i class="fas fa-circle-check"></i> Safe reports &middot; Archived reports</div>
  </div>
  </div>
  <div style="background:linear-gradient(135deg,#7c2d12 0%,#d97706 100%);color:#fff;border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 4px 16px rgba(217,119,6,0.18);">
@@ -675,72 +724,32 @@ tr:hover td{background:#fafafa;}
  <div>
  <div style="font-size:0.72rem;color:rgba(255,255,255,0.75);text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Deployed Field Units</div>
  <div style="font-size:1.4rem;font-weight:900;line-height:1.2;"><?= $active_deployed_units ?> <span style="font-size:0.82rem;font-weight:600;color:rgba(255,255,255,0.85);">active</span></div>
- <div style="font-size:0.7rem;color:#fef3c7;margin-top:2px;"><i class="fas fa-tower-broadcast"></i> Live dispatch telemetry</div>
+ <div style="font-size:0.7rem;color:#fef3c7;margin-top:2px;"><i class="fas fa-tower-broadcast"></i> Units assigned to active incidents</div>
  </div>
  </div>
  </div>
- <!-- ── Emergency Fleet & Apparatus Readiness Monitor ── -->
+ <!-- ── Response Operations Snapshot (all figures DB-derived) ── -->
  <div class="card" style="margin-bottom:18px;">
  <div class="card-header">
- <h3><i class="fas fa-truck-medical" style="color:var(--navy);margin-right:6px;"></i>City Emergency Fleet & Apparatus Readiness</h3>
- <span class="card-meta">Live Unit Telemetry</span>
+ <h3><i class="fas fa-users-gear" style="color:var(--navy);margin-right:6px;"></i>Response Operations Snapshot</h3>
+ <span class="card-meta">Live counts from SenTri database</span>
  </div>
  <div style="padding:16px 18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
  <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;align-items:center;gap:12px;">
- <div style="width:36px;height:36px;border-radius:8px;background:#fef2f2;color:#dc2626;display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-fire-extinguisher"></i></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">BFP Fire Engines</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);">8 <span style="font-size:0.72rem;color:#16a34a;font-weight:600;">(6 Ready / 2 Dispatched)</span></div></div>
+ <div style="width:36px;height:36px;border-radius:8px;background:#f0f7ff;color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-truck-medical"></i></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Registered Responder Units</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);"><?= (int)$resp_total_cnt ?></div></div>
  </div>
  <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;align-items:center;gap:12px;">
- <div style="width:36px;height:36px;border-radius:8px;background:#eff6ff;color:#2563eb;display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-shield-halved"></i></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">PNP Patrol Cruisers</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);">14 <span style="font-size:0.72rem;color:#16a34a;font-weight:600;">(11 Ready / 3 Dispatched)</span></div></div>
+ <div style="width:36px;height:36px;border-radius:8px;background:#f0fdf4;color:#16a34a;display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-user-check"></i></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">On Duty (Approved)</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);"><?= (int)$resp_approved_cnt ?></div></div>
  </div>
  <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;align-items:center;gap:12px;">
- <div style="width:36px;height:36px;border-radius:8px;background:#f0fdf4;color:#16a34a;display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-ambulance"></i></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">EMS Ambulances</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);">6 <span style="font-size:0.72rem;color:#16a34a;font-weight:600;">(5 Ready / 1 Dispatched)</span></div></div>
+ <div style="width:36px;height:36px;border-radius:8px;background:#fef2f2;color:var(--sentri-danger);display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-circle-check"></i></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Reports Resolved Today</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);"><?= (int)$resolved_today ?></div></div>
  </div>
  <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;align-items:center;gap:12px;">
- <div style="width:36px;height:36px;border-radius:8px;background:#fffbeb;color:#d97706;display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-life-ring"></i></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Rescue Boats & WASAR</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);">4 <span style="font-size:0.72rem;color:#16a34a;font-weight:600;">(4 Ready on Standby)</span></div></div>
- </div>
- </div>
- </div>
-
- <!-- ── River Basin & Flood Gauge Telemetry Monitor ── -->
- <div class="card" style="margin-bottom:18px;">
- <div class="card-header">
- <h3><i class="fas fa-water" style="color:#0284c7;margin-right:6px;"></i>River Basin & Hydrological Sensor Telemetry</h3>
- <span class="card-meta">PAGASA-QC DRRMO Station Network</span>
- </div>
- <div style="padding:16px 18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
- <div style="background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;">
- <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
- <strong style="font-size:0.86rem;">Marikina River Basin (Nangka Station)</strong>
- <span style="background:#f0fdf4;color:#166534;font-size:0.68rem;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid #bbf7d0;">Normal (14.2m)</span>
- </div>
- <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">Alarm Level: 15.0m &middot; Critical: 18.0m</div>
- <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
- <div style="width:58%;height:100%;background:#16a34a;border-radius:4px;"></div>
- </div>
- </div>
- <div style="background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;">
- <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
- <strong style="font-size:0.86rem;">Tullahan River (Novaliches Station)</strong>
- <span style="background:#fffbeb;color:#b45309;font-size:0.68rem;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid #fde68a;">Alert Level 1 (17.4m)</span>
- </div>
- <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">Alarm Level: 17.0m &middot; Critical: 19.5m</div>
- <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
- <div style="width:78%;height:100%;background:#f59e0b;border-radius:4px;"></div>
- </div>
- </div>
- <div style="background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;">
- <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
- <strong style="font-size:0.86rem;">San Juan River (Quezon Ave Station)</strong>
- <span style="background:#f0fdf4;color:#166534;font-size:0.68rem;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid #bbf7d0;">Normal (11.1m)</span>
- </div>
- <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">Alarm Level: 13.5m &middot; Critical: 16.0m</div>
- <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
- <div style="width:45%;height:100%;background:#16a34a;border-radius:4px;"></div>
- </div>
+ <div style="width:36px;height:36px;border-radius:8px;background:#fffbeb;color:var(--sentri-caution);display:flex;align-items:center;justify-content:center;font-size:1.1rem;"><i class="fas fa-truck-fast"></i></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Units Currently Deployed</div><div style="font-size:1.05rem;font-weight:800;color:var(--text);"><?= $active_deployed_units ?></div></div>
  </div>
  </div>
  </div>
@@ -751,7 +760,7 @@ tr:hover td{background:#fafafa;}
  <span class="card-meta"><?= count($danger_reports) ?> records</span>
  </div>
  <?php if(empty($danger_reports)): ?>
- <div class="empty"><i class="fas fa-shield-halved"></i>No dangerous incidents active.</div>
+ <div class="empty"><i class="fas fa-shield-halved"></i><p>No reports match your view yet.</p></div>
  <?php else: ?>
  <div class="table-wrap">
  <table>
@@ -765,8 +774,9 @@ tr:hover td{background:#fafafa;}
  $r_user_js = htmlspecialchars(json_encode(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')), ENT_QUOTES, 'UTF-8');
  $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
+ $r_esc_js = !empty($r['escalated_to_lgu']) ? 1 : 0;
  ?>
- <tr style="cursor:pointer;" onclick="lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>)">
+ <tr style="cursor:pointer;" onclick="lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>)">
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
  <td style="font-weight:600;max-width:180px;"><?= htmlspecialchars(mb_strimwidth($r['title'],0,50,'…')) ?></td>
  <td><span class="cat-chip"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i> <?= ucfirst($r['category']) ?></span></td>
@@ -785,17 +795,19 @@ tr:hover td{background:#fafafa;}
  <h3><i class="fas fa-house-flag" style="color:#166534;margin-right:6px;"></i>Reports by Barangay</h3>
  </div>
  <?php if(empty($brgy_stats)): ?>
- <div class="empty"><i class="fas fa-chart-bar"></i>No data yet.</div>
+ <div class="empty"><i class="fas fa-chart-bar"></i><p>No reports match your view yet.</p></div>
  <?php else:
  $max = max(array_column($brgy_stats,'c')) ?: 1;
  foreach($brgy_stats as $b): ?>
- <div class="bar-row">
+ <a href="lgu.php?view=all_reports&barangay=<?= rawurlencode($b['b']) ?>" title="View reports from <?= htmlspecialchars($b['b']) ?>" style="display:block;text-decoration:none;color:inherit;">
+ <div class="bar-row" style="cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background='#fafafa'" onmouseout="this.style.background=''">
  <div class="bar-brgy" title="<?= htmlspecialchars($b['b']) ?>"><?= htmlspecialchars($b['b']) ?></div>
  <div class="bar-wrap">
  <div class="bar-fill <?= $b['d']>0 ? 'danger' : '' ?>" style="width:<?= round($b['c']/$max*100) ?>%"></div>
  </div>
  <div class="bar-count"><?= $b['c'] ?></div>
  </div>
+ </a>
  <?php endforeach; endif; ?>
  </div>
  </div>
@@ -808,10 +820,16 @@ tr:hover td{background:#fafafa;}
  <span class="card-meta"><?= count($all_reports) ?> records</span>
  </div>
  <?php if(empty($all_reports)): ?>
- <div class="empty"><i class="fas fa-folder-open"></i>No reports found.</div>
+ <div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?>
  <div class="reports-filter-bar" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--border);background:#f8fafc;">
  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+ <?php if($brgy_filter !== ''): ?>
+ <span style="display:inline-flex;align-items:center;gap:6px;background:#f0f7ff;color:var(--navy);border:1px solid #bfdbfe;padding:5px 12px;border-radius:20px;font-size:0.75rem;font-weight:700;">
+ <i class="fas fa-location-dot"></i> Barangay: <?= htmlspecialchars($brgy_filter) ?>
+ <a href="lgu.php?view=all_reports" title="Clear barangay filter" style="color:var(--muted);text-decoration:none;"><i class="fas fa-xmark"></i></a>
+ </span>
+ <?php endif; ?>
  <button class="filter-btn active-all" onclick="filterTableReports('all',this)">All</button>
  <button class="filter-btn" onclick="filterTableReports('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="filter-btn" onclick="filterTableReports('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
@@ -837,6 +855,7 @@ tr:hover td{background:#fafafa;}
  $r_user_js = htmlspecialchars(json_encode(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')), ENT_QUOTES, 'UTF-8');
  $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
+ $r_esc_js = !empty($r['escalated_to_lgu']) ? 1 : 0;
  ?>
  <tr data-status="<?= htmlspecialchars($r['status']) ?>">
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
@@ -847,7 +866,7 @@ tr:hover td{background:#fafafa;}
  <td style="font-size:0.78rem;color:var(--muted);"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?></td>
  <td style="font-size:0.74rem;color:var(--muted);white-space:nowrap;"><?= date('M j, Y', strtotime($r['created_at'])) ?></td>
  <td>
- <button onclick="lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>)" style="background:#eff6ff;color:#2563eb;border:none;padding:5px 10px;border-radius:7px;font-size:0.76rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-pen-to-square"></i> Manage</button>
+ <button onclick="event.stopPropagation();lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>)" style="background:#eff6ff;color:#2563eb;border:none;padding:5px 10px;border-radius:7px;font-size:0.76rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-pen-to-square"></i> Manage</button>
  </td>
  </tr>
  <?php endforeach; ?>
@@ -900,11 +919,12 @@ tr:hover td{background:#fafafa;}
  <h3><i class="fas fa-house-flag" style="color:#166534;margin-right:6px;"></i>Barangay Incident Summary</h3>
  </div>
  <?php if(empty($brgy_stats)): ?>
- <div class="empty"><i class="fas fa-chart-bar"></i>No data yet.</div>
+ <div class="empty"><i class="fas fa-chart-bar"></i><p>No reports match your view yet.</p></div>
  <?php else:
  $max = max(array_column($brgy_stats,'c')) ?: 1;
  foreach($brgy_stats as $b): ?>
- <div class="bar-row" style="padding:12px 18px;">
+ <a href="lgu.php?view=all_reports&barangay=<?= rawurlencode($b['b']) ?>" title="View reports from <?= htmlspecialchars($b['b']) ?>" style="display:block;text-decoration:none;color:inherit;">
+ <div class="bar-row" style="padding:12px 18px;cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background='#fafafa'" onmouseout="this.style.background=''">
  <div class="bar-brgy" style="width:160px;font-size:0.84rem;" title="<?= htmlspecialchars($b['b']) ?>"><?= htmlspecialchars($b['b']) ?></div>
  <div class="bar-wrap"><div class="bar-fill <?= $b['d']>0 ? 'danger' : '' ?>" style="width:<?= round($b['c']/$max*100) ?>%"></div></div>
  <div class="bar-count" style="width:40px;font-size:0.8rem;"><?= $b['c'] ?> reports</div>
@@ -912,6 +932,7 @@ tr:hover td{background:#fafafa;}
  <span class="pill pill-dangerous" style="margin-left:8px;"><?= $b['d'] ?> dangerous</span>
  <?php endif; ?>
  </div>
+ </a>
  <?php endforeach; endif; ?>
  </div>
 
@@ -1011,7 +1032,7 @@ tr:hover td{background:#fafafa;}
  '<div style="min-width:200px;font-family:Inter,sans-serif;">' +
  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>' +
  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'#991b1b':r.status==='caution'?'#92400e':'#166534')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
+ '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
  '<span style="background:#eff6ff;color:#1e40af;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>' +
  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
@@ -1341,7 +1362,7 @@ tr:hover td{background:#fafafa;}
  var res=await fetch('lgu.php?view=responders',{method:'POST',body:fd});
  var data=await res.json();
  if(data.status==='success') location.reload();
- else { alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML=action==='approve'?'<i class="fas fa-check"></i> Approve':'<i class="fas fa-xmark"></i>'; }
+ else { showToast(data.message||'Error.', 'error'); btn.disabled=false; btn.innerHTML=action==='approve'?'<i class="fas fa-check"></i> Approve':'<i class="fas fa-xmark"></i>'; }
  } catch(e) { btn.disabled=false; }
  }
  </script>
@@ -1372,10 +1393,28 @@ function closeSidebar(){
  document.body.style.overflow='';
 }
 
+// ── Toast notification system (same as barangay portal) ─────────────────────
+function showToast(message, type) {
+ type = type || 'success';
+ var icons = { success: 'fa-circle-check', error: 'fa-circle-xmark', info: 'fa-circle-info', warning: 'fa-triangle-exclamation' };
+ var tc = document.getElementById('toastContainer');
+ var t = document.createElement('div');
+ t.className = 'toast toast-' + type;
+ t.innerHTML = '<i class="fas ' + (icons[type]||'fa-circle-info') + '"></i><span>' + message + '</span>';
+ tc.appendChild(t);
+ setTimeout(function() {
+ t.style.animation = 'none'; t.style.opacity = '0'; t.style.transform = 'translateY(8px) scale(0.96)';
+ t.style.transition = 'all 0.25s ease';
+ setTimeout(function(){ if(t.parentNode) tc.removeChild(t); }, 280);
+ }, 3200);
+}
+
 // ── Report Actions ──────────────────────────────────────────────────────────
 var _lguRptId = null;
-async function lguViewReport(id,title,category,status,barangay,reporter,date,desc){
+var _lguEscalated = false;
+async function lguViewReport(id,title,category,status,barangay,reporter,date,desc,escalated){
  _lguRptId = id;
+ _lguEscalated = !!escalated;
  document.getElementById('lguModalTitle').textContent = title;
  var pill = {dangerous:'<span class="pill pill-dangerous">Dangerous</span>',caution:'<span class="pill pill-caution">Caution</span>',safe:'<span class="pill pill-safe">Safe</span>'};
  var baseHtml =
@@ -1389,6 +1428,19 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  
  document.getElementById('lguModalBody').innerHTML = baseHtml;
  document.getElementById('lguRptStatusSel').value = status;
+ // Reflect escalation state on the Escalate button
+ var escBtn = document.getElementById('lguModalEscalateBtn');
+ if (escBtn) {
+ if (_lguEscalated) {
+ escBtn.disabled = true;
+ escBtn.classList.remove('btn-lgu-escalate');
+ escBtn.innerHTML = '<i class="fas fa-check"></i> Already Escalated';
+ } else {
+ escBtn.disabled = false;
+ escBtn.classList.add('btn-lgu-escalate');
+ escBtn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalate';
+ }
+ }
  document.getElementById('lguReportModal').classList.add('show');
 
  try {
@@ -1449,7 +1501,7 @@ document.addEventListener('DOMContentLoaded',function(){
  var fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',_lguRptId);
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
  var data=await res.json();
- if(data.status==='success'){closeLguModal();location.reload();}else alert(data.message);
+ if(data.status==='success'){closeLguModal();showToast('Report marked as resolved.','success');location.reload();}else showToast(data.message||'Could not resolve report.','error');
  };
  document.getElementById('lguModalStatusBtn').onclick = async function(){
  var newStatus = document.getElementById('lguRptStatusSel').value;
@@ -1458,14 +1510,62 @@ document.addEventListener('DOMContentLoaded',function(){
  var fd=new FormData(); fd.append('action','update_report_status'); fd.append('report_id',_lguRptId); fd.append('status',newStatus);
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
  var data=await res.json();
- if(data.status==='success'){closeLguModal();location.reload();}else alert(data.message);
+ if(data.status==='success'){closeLguModal();showToast('Status updated to '+newStatus+'.','success');location.reload();}else showToast(data.message||'Status change failed.','error');
  };
  document.getElementById('lguModalDispatchBtn').onclick = function(){
  if(!_lguRptId) return;
  closeLguModal();
  openLguDispatch(_lguRptId);
  };
+ document.getElementById('lguModalEscalateBtn').onclick = async function(){
+ var btn = this;
+ if(!_lguRptId || _lguEscalated || btn.disabled) return;
+ if(!confirm('Escalate this report to LGU priority dispatch?')) return;
+ btn.disabled = true;
+ var origHtml = btn.innerHTML;
+ btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Escalating…';
+ try {
+ var fd = new FormData();
+ fd.append('action','escalate_report');
+ fd.append('report_id',_lguRptId);
+ var res = await fetch('../api/reports.php',{method:'POST',body:fd});
+ var data = await res.json();
+ if(data.status === 'success'){
+ _lguEscalated = true;
+ btn.innerHTML = '<i class="fas fa-check"></i> Escalated';
+ showToast('Report escalated to LGU priority.','info');
+ } else {
+ showToast(data.message || 'Escalation failed.','error');
+ btn.disabled = false;
+ btn.innerHTML = origHtml;
+ }
+ } catch(e) {
+ showToast('Network error - please try again.','error');
+ btn.disabled = false;
+ btn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalate';
+ }
+ };
 });
+
+// ── Contact Deletion ────────────────────────────────────────────────────────
+async function lguDeleteContact(id, name){
+ if(!confirm('Delete emergency contact "'+name+'"? This cannot be undone.')) return;
+ var fd = new FormData();
+ fd.append('action','delete');
+ fd.append('id', id);
+ try {
+ var res = await fetch('../api/contacts.php',{method:'POST',body:fd});
+ var data = await res.json();
+ if(data.status === 'success'){
+ showToast('Emergency contact removed.','success');
+ location.reload();
+ } else {
+ showToast(data.message || 'Delete failed.','error');
+ }
+ } catch(e) {
+ showToast('Network error - please try again.','error');
+ }
+}
 
 // ── Dispatch Modal ───────────────────────────────────────────────────────────
 function openLguDispatch(reportId){
@@ -1554,6 +1654,8 @@ function searchTableReports(query){
 .btn-lgu{padding:8px 15px;border-radius:9px;font-size:0.82rem;font-weight:700;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;font-family:'Inter',sans-serif;transition:all 0.18s;}
 .btn-lgu-resolve{background:#16a34a;color:#fff;}.btn-lgu-resolve:hover{background:#166534;}
 .btn-lgu-dispatch{background:#0a3d62;color:#fff;}.btn-lgu-dispatch:hover{background:#062444;}
+.btn-lgu-escalate{background:#d97706;color:#fff;}.btn-lgu-escalate:hover{background:var(--sentri-caution);}
+.btn-lgu:disabled{opacity:0.65;cursor:not-allowed;}
 .lgu-cn-grid{display:grid;gap:11px;}
 .lgu-cn-label{font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.8px;display:block;margin-bottom:4px;}
 .lgu-cn-input{width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:0.88rem;font-family:'Inter',sans-serif;outline:none;background:#fafafa;}
@@ -1569,6 +1671,7 @@ function searchTableReports(query){
  <div class="lgu-modal-body" id="lguModalBody"></div>
  <div class="lgu-modal-actions">
  <button class="btn-lgu btn-lgu-resolve" id="lguModalResolveBtn"><i class="fas fa-circle-check"></i> Resolve</button>
+ <button class="btn-lgu btn-lgu-escalate" id="lguModalEscalateBtn"><i class="fas fa-arrow-up-from-bracket"></i> Escalate</button>
  <button class="btn-lgu btn-lgu-dispatch" id="lguModalDispatchBtn"><i class="fas fa-paper-plane"></i> Dispatch Responder</button>
  <select id="lguRptStatusSel" style="padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:'Inter',sans-serif;background:#fff;cursor:pointer;">
  <option value="">Select Status</option>
@@ -1751,18 +1854,19 @@ function searchTableReports(query){
  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:14px;">
  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
  <div style="font-size:0.72rem;color:var(--muted);font-weight:700;">HYDROLOGICAL GAUGE</div>
- <div style="font-size:1.05rem;font-weight:800;color:#dc2626;margin-top:2px;">Marikina River: 16.4m</div>
- <div style="font-size:0.72rem;color:#b91c1c;font-weight:600;"><i class="fas fa-bell"></i> Level 2 Alarm (Critical at 18.0m)</div>
+ <div style="font-size:1.05rem;font-weight:800;color:var(--muted);margin-top:2px;">&mdash;</div>
+ <div style="font-size:0.72rem;color:#9ca3af;font-weight:600;"><i class="fas fa-bell"></i> No live river-gauge feed connected</div>
  </div>
  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
  <div style="font-size:0.72rem;color:var(--muted);font-weight:700;">PRECIPITATION RATE</div>
- <div style="font-size:1.05rem;font-weight:800;color:#d97706;margin-top:2px;">38.5 mm/hr (Heavy)</div>
- <div style="font-size:0.72rem;color:#b45309;font-weight:600;"><i class="fas fa-cloud-showers-heavy"></i> Orange Warning Protocol</div>
+ <div style="font-size:1.05rem;font-weight:800;color:var(--muted);margin-top:2px;">&mdash;</div>
+ <div style="font-size:0.72rem;color:#9ca3af;font-weight:600;"><i class="fas fa-cloud-showers-heavy"></i> No sensor feed connected</div>
  </div>
  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
  <div style="font-size:0.72rem;color:var(--muted);font-weight:700;">STANDBY STAGING TEAMS</div>
- <div style="font-size:1.05rem;font-weight:800;color:#16a34a;margin-top:2px;">100% Manning Full Staging</div>
- <div style="font-size:0.72rem;color:#15803d;font-weight:600;"><i class="fas fa-shield-halved"></i> 14 Responders On Duty</div>
+ <div style="font-size:1.05rem;font-weight:800;color:#16a34a;margin-top:2px;">Approved Responder Staging</div>
+ <?php $ontody_pct = $resp_total_cnt > 0 ? round(($resp_approved_cnt / $resp_total_cnt) * 100) : 0; ?>
+ <div style="font-size:0.72rem;color:#15803d;font-weight:600;"><i class="fas fa-shield-halved"></i> <?= (int)$resp_approved_cnt ?> Responders On Duty of <?= (int)$resp_total_cnt ?> (<?= $ontody_pct ?>%)</div>
  </div>
  </div>
 
