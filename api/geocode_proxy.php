@@ -18,7 +18,7 @@ if ($lat === null || $lon === null || $lat < -90 || $lat > 90 || $lon < -180 || 
 }
 
 $url = sprintf(
- 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%s&lon=%s',
+ 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%s&lon=%s&zoom=18&addressdetails=1',
  urlencode((string)$lat),
  urlencode((string)$lon)
 );
