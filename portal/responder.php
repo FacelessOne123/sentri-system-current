@@ -392,13 +392,13 @@ tr:hover td{background:#fafafa;}
     <button type="button" id="btnSafetyCheckin" onclick="openSafetyCheckinModal()" title="Responder PPE & Hazard Exposure Check-In" style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;padding:5px 10px;border-radius:20px;font-size:0.72rem;font-weight:700;cursor:pointer;transition:all 0.2s;">
      <i class="fas fa-shield-heart"></i> Safety Check-In
     </button>
-    <div class="resp-status-picker" style="display:flex;align-items:center;gap:6px;background:#f8fafc;padding:4px 8px;border-radius:20px;border:1px solid var(--border);font-size:0.72rem;font-weight:700;">
+    <div class="resp-status-picker" style="display:flex;align-items:center;gap:6px;background:#f8fafc;padding:4px 8px;border-radius:20px;border:1px solid var(--border);font-size:0.72rem;font-weight:700;" title="Duty status is saved on this device only — it is not shared with dispatch or other responders.">
      <span id="dutyStatusDot" style="width:8px;height:8px;border-radius:50%;background:#10b981;box-shadow:0 0 6px #10b981;"></span>
-     <select id="dutyStatusSel" onchange="changeDutyStatus(this.value)" style="border:none;background:transparent;font-size:0.72rem;font-weight:700;color:var(--text);outline:none;cursor:pointer;">
-      <option value="available">On Duty · Ready</option>
-      <option value="en_route">Dispatched · En Route</option>
-      <option value="on_scene">At Scene · Engaged</option>
-      <option value="off_duty">Off Duty</option>
+     <select id="dutyStatusSel" onchange="changeDutyStatus(this.value)" title="(This device only) Duty status is saved on this device only — it is not shared with dispatch or other responders." style="border:none;background:transparent;font-size:0.72rem;font-weight:700;color:var(--text);outline:none;cursor:pointer;">
+      <option value="available">On Duty · Ready (This device only)</option>
+      <option value="en_route">Dispatched · En Route (This device only)</option>
+      <option value="on_scene">At Scene · Engaged (This device only)</option>
+      <option value="off_duty">Off Duty (This device only)</option>
      </select>
     </div>
    </div>
@@ -861,7 +861,7 @@ function setGpsText(lat, lng, saved){
 }
 
 async function captureMyGps(btn){
- if(!navigator.geolocation){ alert('Geolocation is not supported on this device.'); return; }
+ if(!navigator.geolocation){ showRespToast('Geolocation is not supported on this device.', 'error'); return; }
  var prev = btn.innerHTML; btn.disabled = true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating';
  navigator.geolocation.getCurrentPosition(async function(pos){
  var lat = pos.coords.latitude;
@@ -875,17 +875,17 @@ async function captureMyGps(btn){
  if(data.status==='success'){
  responderGps.lat = data.lat; responderGps.lng = data.lng;
  setGpsText(data.lat, data.lng, true);
- alert('GPS location saved.');
+ showRespToast('GPS location saved.', 'success');
  } else {
- alert(data.message || 'Could not save GPS location.');
+ showRespToast(data.message || 'Could not save GPS location.', 'error');
  }
  } catch(e){
- alert('Could not save GPS location.');
+ showRespToast('Could not save GPS location.', 'error');
  }
  btn.disabled = false; btn.innerHTML = prev;
  }, function(){
  btn.disabled = false; btn.innerHTML = prev;
- alert('Location access was denied.');
+ showRespToast('Location access was denied.', 'error');
  }, {enableHighAccuracy:true, timeout:12000, maximumAge:0});
 }
 
@@ -931,7 +931,7 @@ function applyNavRotation(){
 }
 function viewOnMap(lat, lng, title){
  if(lat===null||lng===null||typeof lat==='undefined'||typeof lng==='undefined'||lat===''||lng===''){
- alert('This report has no GPS coordinates.'); return;
+ showRespToast('This report has no GPS coordinates.', 'error'); return;
  }
  document.getElementById('navModalTitle').textContent = title || 'Incident Location';
  document.getElementById('navModalInfo').innerHTML = '';
@@ -944,10 +944,28 @@ function viewOnMap(lat, lng, title){
  },50);
 }
 async function markArrivedSilently(reportId){
+ if(!confirm('You arrived on site \u2014 mark this incident as responded?')){
+ navArrived = false;
+ document.getElementById('navModalInfo').innerHTML = '<span><i class="fas fa-circle-info"></i> Still navigating \u2014 incident not marked as responded.</span>';
+ return;
+ }
+ var fd=new FormData(); fd.append('action','report_responded'); fd.append('report_id',reportId);
  try{
- var fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',reportId);
- await fetch('../api/reports.php',{method:'POST',body:fd});
- }catch(e){}
+ var res=await fetch('../api/reports.php',{method:'POST',body:fd});
+ var data=await res.json();
+ if(data.status==='success'){
+ showRespToast('Incident marked as responded.', 'success');
+ setTimeout(function(){ closeNavModal(); location.reload(); }, 1200);
+ } else {
+ navArrived = false;
+ document.getElementById('navModalInfo').innerHTML = '<span><i class="fas fa-circle-exclamation"></i> Could not mark as responded \u2014 use the "Responded to LGU" button.</span>';
+ showRespToast(data.message || 'Could not mark this incident as responded.', 'error');
+ }
+ } catch(e){
+ navArrived = false;
+ document.getElementById('navModalInfo').innerHTML = '<span><i class="fas fa-circle-exclamation"></i> Could not mark as responded \u2014 use the "Responded to LGU" button.</span>';
+ showRespToast('Network error \u2014 could not mark this incident as responded.', 'error');
+ }
 }
 function drawNavRoute(group){
  var url = 'https://router.project-osrm.org/route/v1/driving/'+responderGps.lng+','+responderGps.lat+';'+navDest.lng+','+navDest.lat+'?overview=full&geometries=geojson';
@@ -992,18 +1010,16 @@ function onNavPosition(pos){
  var dist = haversine(lat,lng,navDest.lat,navDest.lng);
  if(dist <= ARRIVAL_RADIUS_M && !navArrived){
  navArrived = true;
- document.getElementById('navModalInfo').innerHTML = '<span class="nav-arrived"><i class="fas fa-flag-checkered"></i> You have arrived! Marking as responded\u2026</span>';
+ document.getElementById('navModalInfo').innerHTML = '<span class="nav-arrived"><i class="fas fa-flag-checkered"></i> You have arrived! Confirm to mark as responded\u2026</span>';
  var rid = navReportId;
  stopNavTracking();
- markArrivedSilently(rid).then(function(){
- setTimeout(function(){ closeNavModal(); location.reload(); }, 1200);
- });
+ markArrivedSilently(rid);
  }
  }
 }
 function openNavigation(lat, lng, reportId){
  if(lat === null || lng === null || typeof lat === 'undefined' || typeof lng === 'undefined' || lat === '' || lng === ''){
- alert('This report has no GPS coordinates.');
+ showRespToast('This report has no GPS coordinates.', 'error');
  return;
  }
  document.getElementById('navModalTitle').textContent = 'Navigate to Incident';
@@ -1053,8 +1069,8 @@ async function acceptAssignment(id,btn){
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
  var data=await res.json();
  if(data.status==='success') location.reload();
- else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
- }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
+ else{ showRespToast(data.message||'Error accepting assignment.','error'); btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
+ }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; showRespToast('Network error — could not accept assignment.','error'); }
 }
 
 async function markResponded(id,btn){
@@ -1064,8 +1080,8 @@ async function markResponded(id,btn){
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
  var data=await res.json();
  if(data.status==='success') location.reload();
- else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
- }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
+ else{ showRespToast(data.message||'Error.','error'); btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
+ }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; showRespToast('Network error — could not mark as responded.','error'); }
 }
 
 async function resolve(id,btn){
@@ -1076,8 +1092,8 @@ async function resolve(id,btn){
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
  var data=await res.json();
  if(data.status==='success') location.reload();
- else{ alert(data.message||'Error resolving report.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-circle-check"></i> Resolve'; }
- }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-circle-check"></i> Resolve'; }
+ else{ showRespToast(data.message||'Error resolving report.','error'); btn.disabled=false; btn.innerHTML='<i class="fas fa-circle-check"></i> Resolve'; }
+ }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-circle-check"></i> Resolve'; showRespToast('Network error — could not resolve report.','error'); }
 }
 
 

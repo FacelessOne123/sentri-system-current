@@ -496,6 +496,10 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 <body>
 <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
 <div id="toastContainer"></div>
+<script>
+/* Generic action toast — reuses the nearby-alert toast component styles */
+function actionToast(message,type){const clsMap={success:'safe',error:'dangerous',info:'caution'};const iconMap={safe:'fa-circle-check',dangerous:'fa-circle-xmark',caution:'fa-triangle-exclamation'};const cls=clsMap[type]||'caution';const t=document.createElement('div');t.className=`toast ${cls}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${iconMap[cls]}"></i></div><div><div class="toast-title">${esc(message)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
+</script>
 
 <!-- ═══ SIDEBAR ═══ -->
 <aside class="sidebar" id="sidebar">
@@ -518,7 +522,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  <div class="stat-label-s">Community Overview</div>
  <div class="stat-box"><div class="num"><?= $total_reports ?></div><div class="lbl">Active Reports</div></div>
  <div class="stat-box danger-box"><div class="num"><?= $danger_count ?></div><div class="lbl">Dangerous Areas</div></div>
- <div class="stat-box caution-box"><div class="num"><?= $safe_count ?></div><div class="lbl">Caution Areas</div></div>
+ <div class="stat-box caution-box"><div class="num"><?= $safe_count ?></div><div class="lbl">Safe Areas</div></div>
  </div>
  <div class="sidebar-footer">
  <div class="dm-row" onclick="toggleDark()">
@@ -936,6 +940,8 @@ const MY_USER_ID = <?= $uid ?>;
 const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
 const SAVED_LAT = <?= is_null($saved_gps_lat)?'null':(float)$saved_gps_lat ?>;
 const SAVED_LNG = <?= is_null($saved_gps_lng)?'null':(float)$saved_gps_lng ?>;
+const USER_BRGY = <?= json_encode((string)$user_brgy) ?>;
+const USER_MUNI = <?= json_encode((string)$user_muni) ?>;
 const INIT_COLOR = '<?= htmlspecialchars($avatar_color) ?>';
 const DM_KEY = `sentri_dm_${MY_USER_ID}`;
 
@@ -946,7 +952,7 @@ const CL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',he
 const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#ea580c','#d97706','#16a34a','#0891b2','#374151','#be185d','#0f766e','#7c2d12','#1d4ed8'];
 
 let allReports=[], curView='feed';
-let userLat=SAVED_LAT, userLng=SAVED_LNG, hasGPS=SAVED_LAT!==null;
+let userLat=SAVED_LAT, userLng=SAVED_LNG, hasGPS=SAVED_LAT!==null, liveGPS=false;
 const alertTimes={};
 
 /* Dark mode */
@@ -961,8 +967,8 @@ function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.
 window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
 
 /* GPS */
-function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent='GPS Active';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
-function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;navigator.geolocation.watchPosition(pos=>{userLat=pos.coords.latitude;userLng=pos.coords.longitude;if(!hasGPS){hasGPS=true;updateChip();}checkProximity();},()=>updateChip(),{enableHighAccuracy:true,maximumAge:15000,timeout:20000});}
+function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent=liveGPS?'GPS Live':'GPS Saved';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
+function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;navigator.geolocation.watchPosition(pos=>{if(pos.coords.accuracy&&pos.coords.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){userLat=SAVED_LAT;userLng=SAVED_LNG;hasGPS=true;liveGPS=false;updateChip();checkProximity();return;}userLat=pos.coords.latitude;userLng=pos.coords.longitude;hasGPS=true;liveGPS=true;updateChip();checkProximity();},()=>updateChip(),{enableHighAccuracy:true,maximumAge:0,timeout:20000});}
 function haversine(a,b,c,d){const R=6371000,dL=(c-a)*Math.PI/180,dN=(d-b)*Math.PI/180,x=Math.sin(dL/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dN/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
 function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now();allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const d=haversine(userLat,userLng,r.latitude,r.longitude);if(d<=(r.radius_m||200)){if(now-(alertTimes[r.id]||0)<300000)return;alertTimes[r.id]=now;showToast(r,Math.round(d));}});}
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
@@ -1032,15 +1038,20 @@ function resetFilters(){['searchInput','statusFilter','categoryFilter'].forEach(
 function quickFilterStatus(status){const sf=document.getElementById('statusFilter');if(sf){sf.value=status;renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}}
 
 async function crowdVerify(id){
+ const fd=new FormData();fd.append('action','vote');fd.append('report_id',id);fd.append('vote','up');
+ try{
+ const res=await fetch('../api/reports.php',{method:'POST',body:fd});
+ const d=await res.json();
+ if(d.status==='success'){
  const r=allReports.find(x=>x.id==id);
- if(r){
- r.upvotes=(r.upvotes||0)+1;
+ if(r){r.upvotes=d.upvotes;r.downvotes=d.downvotes;r.user_vote=d.user_vote;}
  renderFeed(CURRENT_VIEW==='my_reports');
- showToast('Incident verified! Community trust score updated.', 'success');
- }
+ actionToast('Incident verified! Community trust score updated.','success');
+ }else actionToast(d.message||'Could not verify this incident.','error');
+ }catch{actionToast('Network error — could not verify this incident.','error');}
 }
 async function vote(id,vt){const fd=new FormData();fd.append('action','vote');fd.append('report_id',id);fd.append('vote',vt);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){const r=allReports.find(x=>x.id==id);if(r){r.upvotes=d.upvotes;r.downvotes=d.downvotes;r.user_vote=d.user_vote;}renderFeed(CURRENT_VIEW==='my_reports');}}catch{}}
-async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');}}catch{}}
+async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');actionToast('Report deleted.','success');}else actionToast(d.message||'Could not delete this report.','error');}catch{actionToast('Network error — could not delete this report.','error');}}
 
 /* View toggle (overview only) */
 function switchView(v){curView=v;const feedEl=document.getElementById('feed'),mapEl=document.getElementById('inlineMapWrap');if(!feedEl||!mapEl)return;if(v==='map'){feedEl.style.display='none';mapEl.style.display='block';document.getElementById('btnFeed').classList.remove('active');document.getElementById('btnMap').classList.add('active');setTimeout(()=>{initInlineMap();if(inlineMap)inlineMap.invalidateSize();},200);}else{feedEl.style.display='';mapEl.style.display='none';document.getElementById('btnMap').classList.remove('active');document.getElementById('btnFeed').classList.add('active');}}
@@ -1129,11 +1140,11 @@ function clearPin(){
  document.getElementById('clearPinBtn').style.display='none';
 }
 function onRadiusChange(val){pickerRadius=parseInt(val);document.getElementById('radiusVal').textContent=pickerRadius>=1000?(pickerRadius/1000).toFixed(1)+' km':pickerRadius+' m';document.getElementById('r_radius_m').value=pickerRadius;if(pickerCircle)pickerCircle.setRadius(pickerRadius);}
-async function reverseGeocode(lat,lng){try{const res=await fetch(`../api/geocode_proxy.php?lat=${lat}&lon=${lng}`);const d=await res.json();if(d&&d.address){const a=d.address;if(!document.getElementById('r_location').value)document.getElementById('r_location').value=a.road||a.hamlet||a.suburb||'';if(!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=a.suburb||a.village||a.quarter||a.neighbourhood||'';if(!document.getElementById('r_city').value)document.getElementById('r_city').value=a.city||a.town||a.municipality||'';if(!document.getElementById('r_province').value)document.getElementById('r_province').value=a.state||a.province||'';}}catch{}}
+async function reverseGeocode(lat,lng){try{const res=await fetch(`../api/geocode_proxy.php?lat=${lat}&lon=${lng}`);const d=await res.json();if(d&&d.address){const a=d.address;const locEl=document.getElementById('r_location'),brgyEl=document.getElementById('r_barangay'),cityEl=document.getElementById('r_city'),provEl=document.getElementById('r_province');const road=a.road||a.pedestrian||a.residential||a.amenity||a.building||a.hamlet||a.neighbourhood||'';const brgy=a.quarter||a.neighbourhood||a.suburb||a.village||a.hamlet||USER_BRGY||'';const city=a.city||a.town||a.municipality||a.county||USER_MUNI||'';const prov=a.state||a.province||a.region||'';if(locEl)locEl.value=road;if(brgyEl)brgyEl.value=brgy;if(cityEl&&city)cityEl.value=city;if(provEl&&prov)provEl.value=prov;}}catch{}}
 function useMyLocation(){
  const btn=document.getElementById('locateBtn');
- if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
  if(!navigator.geolocation){
+ if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
  const cf=document.getElementById('r_city');if(cf)cf.focus();
  return;
  }
@@ -1142,19 +1153,29 @@ function useMyLocation(){
  navigator.geolocation.getCurrentPosition(pos=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ if(pos.coords.accuracy&&pos.coords.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){
+ placePin(SAVED_LAT,SAVED_LNG,true);
+ return;
+ }
+ userLat=pos.coords.latitude;userLng=pos.coords.longitude;hasGPS=true;liveGPS=true;updateChip();
  placePin(pos.coords.latitude,pos.coords.longitude,true);
  },err=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
  const cf=document.getElementById('r_city');
  if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}
- },{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+ },{enableHighAccuracy:true,timeout:12000,maximumAge:0});
 }
 
 /* Post report modal */
 function openModal(){
  document.getElementById('modalOverlay').classList.add('open');
- if(SAVED_LAT!==null&&SAVED_LNG!==null){setTimeout(()=>placePin(SAVED_LAT,SAVED_LNG,true),250);}
+ if(USER_BRGY&&!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=USER_BRGY;
+ if(USER_MUNI&&!document.getElementById('r_city').value)document.getElementById('r_city').value=USER_MUNI;
+ const initLat=liveGPS&&userLat!==null?userLat:SAVED_LAT;
+ const initLng=liveGPS&&userLng!==null?userLng:SAVED_LNG;
+ if(initLat!==null&&initLng!==null){setTimeout(()=>placePin(initLat,initLng,true),250);}
 }
 function closeModal(){
  document.getElementById('modalOverlay').classList.remove('open');
@@ -1191,7 +1212,7 @@ function applySeverity(cat){
  const sev=(SEVERITY_MAP[cat]||{})[sel?sel.value:'']||'caution';
  document.getElementById('r_status').value=sev;
  const wrap=document.getElementById('autoSeverity'),badge=document.getElementById('autoSeverityBadge');
- if(wrap&&badge){badge.className='badge '+sev;badge.textContent=ucFirst(sev);wrap.style.display='flex';}
+ if(wrap&&badge){badge.style.animation='none';void badge.offsetWidth;badge.style.animation='';badge.className='badge '+sev;badge.textContent=ucFirst(sev);wrap.style.display='flex';}
 }
 
 function clearStatusSelection(){
@@ -1242,6 +1263,17 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  let loc=document.getElementById('r_location').value.trim();
  if(!loc){const la=document.getElementById('r_latitude').value,ln=document.getElementById('r_longitude').value;loc=la&&ln?`Near ${parseFloat(la).toFixed(5)}, ${parseFloat(ln).toFixed(5)}`:city;}
 
+ /* Client-side photo validation — the backend silently drops invalid files,
+ so reject them here so users are told instead of lied to. */
+ const _phCheck=document.getElementById('r_photos');
+ if(_phCheck&&_phCheck.files.length){
+ const problems=[];
+ Array.from(_phCheck.files).slice(0,3).forEach(f=>{
+ if(f.size>5*1024*1024)problems.push('"'+f.name+'" is '+Math.round(f.size/1048576)+' MB (max 5 MB)');
+ else if(!['image/png','image/jpeg','image/webp'].includes(f.type))problems.push('"'+f.name+'" is not a JPG, PNG, or WEBP image');
+ });
+ if(problems.length){showMsg(msgEl,'error','Invalid photo: '+problems.join('; ')+'. Remove or replace it and resubmit.');return;}
+ }
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
@@ -1257,7 +1289,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
   const data=await res.json();
   if(data.status==='success'){
    showMsg(msgEl,'success','Report posted!');
-   if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);fetch('../api/contacts.php',{method:'POST',body:nfd}).catch(()=>{});}
+   if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);const NOTIFY_FAIL='Emergency contacts could not be auto-notified — please call the hotline directly.';fetch('../api/contacts.php',{method:'POST',body:nfd}).then(async rc=>{try{const rd=await rc.json();if(rd.status!=='success')actionToast(NOTIFY_FAIL,'info');}catch{actionToast(NOTIFY_FAIL,'info');}}).catch(()=>actionToast(NOTIFY_FAIL,'info'));}
    setTimeout(()=>{closeModal();fetchReports();},1000);
   }else showMsg(msgEl,'error',data.message||'Failed to submit.');
  }catch{showMsg(msgEl,'error','Network error.');}

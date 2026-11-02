@@ -148,7 +148,7 @@ $page_titles = [
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <style>
-:root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;}
+:root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;--sentri-danger:#b91c1c;--sentri-caution:#b45309;--sentri-safe:#166534;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 html,body{height:100%;}
 body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overflow-x:hidden;}
@@ -211,9 +211,9 @@ tr:last-child td{border-bottom:none;}
 tr:hover td{background:#fafafa;}
 /* PILLS */
 .pill{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:0.7rem;font-weight:700;white-space:nowrap;}
-.pill-dangerous{background:#fef2f2;color:#991b1b;}
-.pill-caution{background:#fffbeb;color:#92400e;}
-.pill-safe{background:#f0fdf4;color:#166534;}
+.pill-dangerous{background:#fef2f2;color:var(--sentri-danger);}
+.pill-caution{background:#fffbeb;color:var(--sentri-caution);}
+.pill-safe{background:#f0fdf4;color:var(--sentri-safe);}
 .cat-chip{display:inline-flex;align-items:center;gap:5px;font-size:0.72rem;font-weight:600;color:var(--navy);background:#eff6ff;padding:3px 8px;border-radius:6px;white-space:nowrap;}
 /* ACTION BTNS */
 .btn-icon{width:30px;height:30px;border:none;border-radius:7px;cursor:pointer;font-size:0.8rem;display:inline-flex;align-items:center;justify-content:center;transition:all 0.15s;}
@@ -284,7 +284,7 @@ tr:hover td{background:#fafafa;}
 .rpt-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
 @media(max-width:700px){.map-stats,.rpt-stats{grid-template-columns:1fr 1fr;}#incidentMap{height:340px;}}
 /* REPORT DETAIL MODAL */
-.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center;padding:20px;}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1200;align-items:center;justify-content:center;padding:20px;}
 .modal-bg.show{display:flex;}
 .modal{background:#fff;border-radius:16px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
 .modal-header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
@@ -405,7 +405,7 @@ tr:hover td{background:#fafafa;}
  </div>
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta"><?= count($reports) ?> records</span></div>
- <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports found.</p></div>
+ <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
@@ -429,7 +429,7 @@ tr:hover td{background:#fafafa;}
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
  <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
  </div>
- <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports found.</p></div>
+ <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
@@ -547,7 +547,7 @@ tr:hover td{background:#fafafa;}
  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'#991b1b':r.status==='caution'?'#92400e':'#166534')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
+ '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
  '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
@@ -730,7 +730,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  document.getElementById('modalTitle').textContent = title;
 
  // Status colour
- var statusColors = { dangerous: ['#fef2f2','#991b1b'], caution: ['#fffbeb','#92400e'], safe: ['#f0fdf4','#166534'] };
+ var statusColors = { dangerous: ['#fef2f2','var(--sentri-danger)'], caution: ['#fffbeb','var(--sentri-caution)'], safe: ['#f0fdf4','var(--sentri-safe)'] };
  var sc = statusColors[status] || ['#f3f4f6','#374151'];
  var isResolved = (status === 'safe');
 
@@ -935,6 +935,7 @@ async function changeStatus(newStatus) {
 
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
+ if (!confirm('Mark this report as resolved?')) return;
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
  var fd = new FormData();
@@ -960,6 +961,7 @@ function quickResolve(id, btn) {
 }
 
 function quickEscalate(id, btn) {
+ if (!confirm('Escalate this report to LGU?')) return;
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
  var fd = new FormData();

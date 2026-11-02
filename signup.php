@@ -159,13 +159,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Register | SenTri Community Portal</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="assets/vendor/sentri-ui.css">
 <style>
 :root{--navy:#0a3d62;--navy-dark:#062444;--gold:#f39c12;--green:#166534;--red:#b91c1c;--purple:#5b21b6;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
-.gov-bar{background:#fff;border-bottom:4px solid var(--gold);padding:0 28px;height:62px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 10px rgba(0,0,0,0.1);}
+.gov-bar{background:#fff;border-bottom:4px solid var(--gold);padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 10px rgba(0,0,0,0.1);}
 .gov-brand{display:flex;align-items:center;gap:12px;text-decoration:none;}
 .gov-seal{width:42px;height:42px;background:linear-gradient(135deg,var(--navy),#1a5276);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--gold);border:2px solid var(--gold);}
 .gov-text h1{font-size:1.1rem;font-weight:800;color:var(--navy);}
@@ -186,7 +188,7 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
 .form-group input:focus{border-color:#93c5fd;background:#fff;box-shadow:0 0 0 3px rgba(59,130,246,0.08);}
 .pw-wrap{position:relative;}
 .pw-wrap button{position:absolute;right:11px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.75rem;font-weight:700;color:var(--muted);font-family:'Inter',sans-serif;}
-.btn-register{width:100%;padding:12px;border:none;border-radius:11px;font-size:0.95rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;transition:all 0.2s;background:linear-gradient(135deg,#3b82f6,#2563eb);display:flex;align-items:center;justify-content:center;gap:8px;margin-top:6px;}
+.btn-register{width:100%;padding:12px;border:none;border-radius:10px;font-size:0.95rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;transition:all 0.2s;background:var(--sentri-primary);display:flex;align-items:center;justify-content:center;gap:8px;margin-top:6px;}
 .btn-register:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 22px rgba(37,99,235,0.35);}
 .btn-register:disabled{opacity:0.6;cursor:not-allowed;}
 .msg{padding:10px 14px;border-radius:9px;font-size:0.83rem;font-weight:500;margin-bottom:14px;display:none;text-align:center;}
@@ -240,7 +242,7 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
  </div>
 
  <div style="margin-top:20px;">
- <button type="submit" class="btn-register" id="regBtn"><i class="fas fa-user-plus"></i> <span id="regBtnLabel">Create Community Account</span></button>
+ <button type="submit" class="btn-register sentri-btn-primary" id="regBtn"><i class="fas fa-user-plus"></i> <span id="regBtnLabel">Create Community Account</span></button>
  </div>
  </form>
 
