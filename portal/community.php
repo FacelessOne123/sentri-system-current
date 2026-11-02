@@ -496,6 +496,10 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 <body>
 <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
 <div id="toastContainer"></div>
+<script>
+/* Generic action toast — reuses the nearby-alert toast component styles */
+function actionToast(message,type){const clsMap={success:'safe',error:'dangerous',info:'caution'};const iconMap={safe:'fa-circle-check',dangerous:'fa-circle-xmark',caution:'fa-triangle-exclamation'};const cls=clsMap[type]||'caution';const t=document.createElement('div');t.className=`toast ${cls}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${iconMap[cls]}"></i></div><div><div class="toast-title">${esc(message)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
+</script>
 
 <!-- ═══ SIDEBAR ═══ -->
 <aside class="sidebar" id="sidebar">
@@ -518,7 +522,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  <div class="stat-label-s">Community Overview</div>
  <div class="stat-box"><div class="num"><?= $total_reports ?></div><div class="lbl">Active Reports</div></div>
  <div class="stat-box danger-box"><div class="num"><?= $danger_count ?></div><div class="lbl">Dangerous Areas</div></div>
- <div class="stat-box caution-box"><div class="num"><?= $safe_count ?></div><div class="lbl">Caution Areas</div></div>
+ <div class="stat-box caution-box"><div class="num"><?= $safe_count ?></div><div class="lbl">Safe Areas</div></div>
  </div>
  <div class="sidebar-footer">
  <div class="dm-row" onclick="toggleDark()">
@@ -1034,15 +1038,20 @@ function resetFilters(){['searchInput','statusFilter','categoryFilter'].forEach(
 function quickFilterStatus(status){const sf=document.getElementById('statusFilter');if(sf){sf.value=status;renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}}
 
 async function crowdVerify(id){
+ const fd=new FormData();fd.append('action','vote');fd.append('report_id',id);fd.append('vote','up');
+ try{
+ const res=await fetch('../api/reports.php',{method:'POST',body:fd});
+ const d=await res.json();
+ if(d.status==='success'){
  const r=allReports.find(x=>x.id==id);
- if(r){
- r.upvotes=(r.upvotes||0)+1;
+ if(r){r.upvotes=d.upvotes;r.downvotes=d.downvotes;r.user_vote=d.user_vote;}
  renderFeed(CURRENT_VIEW==='my_reports');
- showToast('Incident verified! Community trust score updated.', 'success');
- }
+ actionToast('Incident verified! Community trust score updated.','success');
+ }else actionToast(d.message||'Could not verify this incident.','error');
+ }catch{actionToast('Network error — could not verify this incident.','error');}
 }
 async function vote(id,vt){const fd=new FormData();fd.append('action','vote');fd.append('report_id',id);fd.append('vote',vt);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){const r=allReports.find(x=>x.id==id);if(r){r.upvotes=d.upvotes;r.downvotes=d.downvotes;r.user_vote=d.user_vote;}renderFeed(CURRENT_VIEW==='my_reports');}}catch{}}
-async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');}}catch{}}
+async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');actionToast('Report deleted.','success');}else actionToast(d.message||'Could not delete this report.','error');}catch{actionToast('Network error — could not delete this report.','error');}}
 
 /* View toggle (overview only) */
 function switchView(v){curView=v;const feedEl=document.getElementById('feed'),mapEl=document.getElementById('inlineMapWrap');if(!feedEl||!mapEl)return;if(v==='map'){feedEl.style.display='none';mapEl.style.display='block';document.getElementById('btnFeed').classList.remove('active');document.getElementById('btnMap').classList.add('active');setTimeout(()=>{initInlineMap();if(inlineMap)inlineMap.invalidateSize();},200);}else{feedEl.style.display='';mapEl.style.display='none';document.getElementById('btnMap').classList.remove('active');document.getElementById('btnFeed').classList.add('active');}}
@@ -1254,6 +1263,17 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  let loc=document.getElementById('r_location').value.trim();
  if(!loc){const la=document.getElementById('r_latitude').value,ln=document.getElementById('r_longitude').value;loc=la&&ln?`Near ${parseFloat(la).toFixed(5)}, ${parseFloat(ln).toFixed(5)}`:city;}
 
+ /* Client-side photo validation — the backend silently drops invalid files,
+ so reject them here so users are told instead of lied to. */
+ const _phCheck=document.getElementById('r_photos');
+ if(_phCheck&&_phCheck.files.length){
+ const problems=[];
+ Array.from(_phCheck.files).slice(0,3).forEach(f=>{
+ if(f.size>5*1024*1024)problems.push('"'+f.name+'" is '+Math.round(f.size/1048576)+' MB (max 5 MB)');
+ else if(!['image/png','image/jpeg','image/webp'].includes(f.type))problems.push('"'+f.name+'" is not a JPG, PNG, or WEBP image');
+ });
+ if(problems.length){showMsg(msgEl,'error','Invalid photo: '+problems.join('; ')+'. Remove or replace it and resubmit.');return;}
+ }
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
@@ -1269,7 +1289,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
   const data=await res.json();
   if(data.status==='success'){
    showMsg(msgEl,'success','Report posted!');
-   if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);fetch('../api/contacts.php',{method:'POST',body:nfd}).catch(()=>{});}
+   if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);const NOTIFY_FAIL='Emergency contacts could not be auto-notified — please call the hotline directly.';fetch('../api/contacts.php',{method:'POST',body:nfd}).then(async rc=>{try{const rd=await rc.json();if(rd.status!=='success')actionToast(NOTIFY_FAIL,'info');}catch{actionToast(NOTIFY_FAIL,'info');}}).catch(()=>actionToast(NOTIFY_FAIL,'info'));}
    setTimeout(()=>{closeModal();fetchReports();},1000);
   }else showMsg(msgEl,'error',data.message||'Failed to submit.');
  }catch{showMsg(msgEl,'error','Network error.');}
