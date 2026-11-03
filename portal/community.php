@@ -25,10 +25,10 @@ if($gpsRes&&$gpsRes->num_rows>0){$gs=$conn->prepare("SELECT gps_lat,gps_lng FROM
 
 /* ── Stats ────────────────────────────────────────────────────── */
 function cq($conn,$sql,$t='',$p=[]){$s=$conn->prepare($sql);if($t&&$p){$refs=[];foreach($p as &$v)$refs[]=&$v;array_unshift($refs,$t);call_user_func_array([$s,'bind_param'],$refs);}$s->execute();$s->bind_result($n);$s->fetch();$s->close();return(int)$n;}
-$total_reports=cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+$total_reports=cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0 AND status!='safe'");
 $danger_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
 $safe_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
-$my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=? AND is_archived=0",'i',[$uid]);
+$my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=? AND is_archived=0 AND status!='safe'",'i',[$uid]);
 
 /* ── Per-view data ────────────────────────────────────────────── */
 $contacts = [];

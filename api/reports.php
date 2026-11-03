@@ -69,7 +69,7 @@ switch ($action) {
  FROM reports r
  INNER JOIN users u ON r.user_id = u.id
  LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
- WHERE r.is_archived = 0 $search_sql
+ WHERE r.is_archived = 0 AND r.status != 'safe' $search_sql
  ORDER BY r.created_at DESC LIMIT ? OFFSET ?";
  $stmt = $conn->prepare($sql);
  if (!$stmt) { echo json_encode(['status'=>'error','message'=>'DB error: '.$conn->error]); exit; }
