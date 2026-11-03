@@ -1,6 +1,7 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) { require_once __DIR__ . '/config/auth.php'; redirect_to_portal(); }
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
+if (sentri_identity() !== null) { require_once __DIR__ . '/config/auth.php'; redirect_to_portal(); }
 require __DIR__ . '/config/db.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

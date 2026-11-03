@@ -19,11 +19,12 @@ if (file_exists($lockFile)) {
  . '<p><a href="admin.php">Go to Admin Panel</a> &middot; <a href="login.php">Community Login</a></p></body></html>');
 }
 
-// ── Connection Settings ──────────────────────────────────────────────────────
-define('DB_HOST', 'localhost');
-define('DB_USER', 'root');
-define('DB_PASS', '');
-define('DB_NAME', 'sentri');
+// ── Connection Settings (env-overridable: DB_HOST / DB_USER / DB_PASS / DB_NAME in .env) ──
+if (!defined('APP_URL')) require_once __DIR__ . '/config/email.php';
+define('DB_HOST', function_exists('get_env_var') ? (get_env_var('DB_HOST', 'localhost') ?: 'localhost') : 'localhost');
+define('DB_USER', function_exists('get_env_var') ? (get_env_var('DB_USER', 'root') ?: 'root') : 'root');
+define('DB_PASS', function_exists('get_env_var') ? get_env_var('DB_PASS', '') : '');
+define('DB_NAME', function_exists('get_env_var') ? (get_env_var('DB_NAME', 'sentri') ?: 'sentri') : 'sentri');
 
 $steps = [];
 $success = true;

@@ -1,12 +1,14 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+sentri_boot_realm('gov');
 require_once __DIR__ . '/../config/auth.php';
 require_role(['barangay']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 
-$uid = (int)$_SESSION['user_id'];
-$fname = $_SESSION['first_name'];
+$ident = sentri_identity() ?? [];
+$uid = (int)($ident['user_id'] ?? 0);
+$fname = $ident['first_name'] ?? '';
 $view = $_GET['view'] ?? 'overview';
 
 $stmt = $conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
@@ -369,7 +371,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-avatar"><?= strtoupper(substr($fname,0,1)) ?></div>
  <div style="min-width:0;"><div class="sb-uname"><?= htmlspecialchars($fname) ?></div><div class="sb-upos"><?= htmlspecialchars($pos) ?></div></div>
  </div>
- <a href="../logout.php" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
+ <a href="../logout.php?realm=gov" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
  </div>
 </aside>
 
@@ -477,6 +479,7 @@ tr:hover td{background:#fafafa;}
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
+ <script src="../assets/js/sentri-geo.js"></script>
  <?php
  $mapped = count($map_reports);
  $unmapped = $map_total_all - $mapped;
@@ -515,6 +518,7 @@ tr:hover td{background:#fafafa;}
  <div class="legend-row"><div class="legend-dot" style="background:#d97706;"></div>Caution</div>
  <div class="legend-row"><div class="legend-dot" style="background:#16a34a;"></div>Safe</div>
  <div class="legend-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #e2e8f0;font-size:0.7rem;color:#64748b;"><i class="fas fa-circle-dot" style="color:#dc2626;margin-right:4px;"></i>Buffer: 250m / 150m</div>
+ <div class="legend-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #e2e8f0;font-size:0.7rem;color:#2563eb;"><i class="fas fa-vector-square" style="color:#2563eb;margin-right:4px;"></i>Brgy boundary (official perimeter)</div>
  </div>
  </div>
  </div>
@@ -559,7 +563,49 @@ tr:hover td{background:#fafafa;}
  allMapMarkers.push(m);
  });
  if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
- else{lmap.setView([14.5995,120.9842],12);}
+ else{lmap.setView([14.4240,120.9215],12);}
+
+ // ── Official barangay perimeters (Imus City GeoJSON) ──
+ // All 95 outlines are drawn; this barangay official's own village is highlighted
+ // (filled) by the shared library via onlyName. Cross-barangay drill-down is NOT
+ // offered: clicking another polygon only shows a scoping notice.
+ var BRGY_OWN = <?= json_encode($brgy ?: '', JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>;
+ function brgyKey(v){
+  v = String(v||'').toLowerCase();
+  v = v.replace(/ñ/g,'n').replace(/[áéíóú]/g,function(c){return {'á':'a','é':'e','í':'i','ó':'o','ú':'u'}[c]||c;});
+  return v.replace(/barangay|brgy/g,'').replace(/[^a-z0-9]/g,'');
+ }
+ var OWN_KEY = brgyKey(BRGY_OWN);
+ function onEachOwnBrgy(feature, layer){
+  var nm = (feature.properties && (feature.properties.name || feature.properties.ref)) || '';
+  if(OWN_KEY && brgyKey(nm) === OWN_KEY){
+  window.__ownBrgyLayer = layer;
+  layer.bindTooltip('<div style="font-weight:700;font-size:0.78rem;">'+nm+'<br><span style="font-weight:400;font-size:0.7rem;color:#6b7280;">Brgy boundary (official perimeter)</span></div>',{sticky:true});
+  } else {
+  layer.bindPopup('<div style="min-width:180px;font-family:Inter,sans-serif;"><div style="font-weight:700;font-size:0.82rem;margin-bottom:4px;">'+nm+'</div><div style="font-size:0.76rem;color:#6b7280;">View this barangay? Official access is scoped to your barangay.</div></div>',{maxWidth:240});
+  }
+ }
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.addBarangayOverlay){
+  var resolveOwnName = (BRGY_OWN && SentriGeo.loadBarangays)
+  ? SentriGeo.loadBarangays().then(function(gj){
+  var feats = (gj && gj.features) || [];
+  for(var i=0;i<feats.length;i++){
+  var p = feats[i].properties || {};
+  if(brgyKey(p.name) === OWN_KEY || brgyKey(p.ref) === OWN_KEY) return p.name;
+  }
+  return BRGY_OWN; // fallback: let the library attempt its own match
+  }).catch(function(){ return BRGY_OWN; })
+  : Promise.resolve(BRGY_OWN || undefined);
+  resolveOwnName.then(function(ownName){
+  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy }).then(function(gjLayer){
+  // Frame the official barangay perimeter as the map's subject
+  var ownL = window.__ownBrgyLayer;
+  var fitLayer = (ownL && ownL.getBounds && ownL.getBounds().isValid()) ? ownL : (gjLayer && gjLayer.getBounds && gjLayer.getBounds().isValid() ? gjLayer : null);
+  if(fitLayer){ lmap.fitBounds(fitLayer.getBounds(), { padding: [40, 40], maxZoom: 16 }); }
+  return gjLayer;
+  });
+  }).catch(function(){ /* boundary data unavailable — pins still render */ });
+ }
 
  function clearHazardCircles() {
  hazardCircles.forEach(function(c){ lmap.removeLayer(c); });

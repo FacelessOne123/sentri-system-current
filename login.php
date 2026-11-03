@@ -1,8 +1,9 @@
 <?php
 ini_set('display_errors', 0);
 ob_start();
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) {
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
+if (sentri_identity() !== null) {
  require_once __DIR__ . '/config/auth.php';
  redirect_to_portal();
 }
@@ -69,6 +70,17 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .btn-login:hover:not(:disabled){filter:brightness(1.05);box-shadow:0 4px 14px rgba(0,0,0,0.2);}
 .btn-login:active:not(:disabled){transform:scale(0.99);}
 .btn-login:disabled{opacity:0.6;cursor:not-allowed;background:#9ca3af!important;background-image:none!important;}
+.tutorial-row{margin-top:12px;text-align:center;}
+.btn-tutorial{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border:1px solid #cbd5e1;background:#fff;border-radius:10px;font-size:0.84rem;font-weight:700;font-family:'Inter',sans-serif;color:#1a1a2e;cursor:pointer;transition:border-color .15s,background .15s;}
+.btn-tutorial:hover{border-color:#2563eb;background:#eff6ff;}
+.video-modal{display:none;position:fixed;inset:0;z-index:1200;background:rgba(10,12,26,0.72);align-items:center;justify-content:center;padding:20px;}
+.video-modal.open{display:flex;}
+.video-card{background:#0f1220;border-radius:16px;padding:14px 14px 10px;max-width:720px;width:100%;box-shadow:0 18px 60px rgba(0,0,0,0.55);}
+.video-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.video-title{color:#fff;font-size:0.95rem;font-weight:800;display:flex;align-items:center;gap:8px;}
+.video-close{background:none;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;padding:6px;}
+.video-close:hover{color:#fff;}
+.video-card video{width:100%;border-radius:10px;display:block;max-height:70vh;}
 .msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:11px;display:none;text-align:center;}
 .msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
 .msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
@@ -165,6 +177,9 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <div class="forgot-row"><a href="forgot_password.php">Forgot Password?</a></div>
  <button type="submit" class="btn-login sentri-btn-primary" id="loginBtn"><i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Sign In to Community Portal</span></button>
  </form>
+ <div class="tutorial-row">
+ <button type="button" class="btn-tutorial" onclick="openTutorial()"><i class="fas fa-circle-play"></i> Watch: How SenTri Works</button>
+ </div>
  <div id="otpSection" style="display:none;">
  <form id="otpForm" novalidate>
  <input type="hidden" name="action" value="verify_otp">
@@ -348,6 +363,19 @@ async function resend(){
  catch{btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Resend';}
 }
 function showMsg(type,text){const el=document.getElementById('loginMsg');el.className='msg '+type;el.textContent=text;el.style.display='block';}
+function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
+function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
+document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTutorial();});
 </script>
+<div class="video-modal" id="tutorialModal" role="dialog" aria-modal="true">
+ <div class="video-card">
+ <div class="video-head">
+ <div class="video-title"><i class="fas fa-circle-play"></i> SenTri — How It Works (Community)</div>
+ <button type="button" class="video-close" onclick="closeTutorial()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+ </div>
+ <video id="tutorialVideo" src="assets/media/community-tutorial.mp4" controls preload="none" playsinline></video>
+ </div>
+</div>
 </body>
 </html>

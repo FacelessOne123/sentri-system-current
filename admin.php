@@ -1,6 +1,10 @@
 <?php
 ini_set('display_errors', 0);
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/config/session.php';
+// The admin panel owns its own session cookie ('sentri-admin'). Boot it for
+// every request (including the anonymous pre-auth page below) so the sign-in
+// handler below stores its identity in the admin realm.
+sentri_boot_realm('admin');
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
 require_once __DIR__ . '/config/csrf.php';
@@ -11,7 +15,8 @@ require_once __DIR__ . '/config/csrf.php';
 $SENTRI_PORTALS = ['admin' => ['admin']];
 require __DIR__ . '/core/login_handler.php';
 
-if (!isset($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'admin') {
+$sentri_admin_ident = sentri_identity();
+if (!$sentri_admin_ident || ($sentri_admin_ident['role'] ?? '') !== 'admin') {
  ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -101,7 +106,7 @@ $total_reports = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=0"
 $total_archived = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=1")->fetch_row()[0];
 $danger_count = $conn->query("SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0")->fetch_row()[0];
 $pending_count = $conn->query("SELECT COUNT(*) FROM users WHERE is_approved=0 AND role NOT IN('community','user','admin')")->fetch_row()[0];
-$first_name = $_SESSION['first_name'];
+$first_name = $sentri_admin_ident['first_name'] ?? 'Admin';
 
 // 30-day report trend (for the Overview chart): reports per day, oldest first.
 $sentri_trend = array_fill(0, 30, 0);
@@ -125,6 +130,10 @@ if ($sentri_res = $conn->query("SELECT DATEDIFF(CURDATE(), DATE(created_at)) AS 
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
 <script src="assets/vendor/leaflet/leaflet.js"></script>
+<<<<<<< HEAD
+=======
+<script src="assets/js/sentri-geo.js"></script>
+>>>>>>> c1a115abe9175f34360c210a176195134f778f08
 <style>
 :root{
  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
@@ -411,7 +420,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="name"><?= htmlspecialchars($first_name) ?></div>
  <div class="role"><i class="fas fa-circle" style="font-size:0.5rem;color:#a78bfa;margin-right:4px;"></i>Administrator</div>
  </div>
- <a href="logout.php" class="logout-btn" title="Log Out"><i class="fas fa-right-from-bracket"></i></a>
+ <a href="logout.php?realm=admin" class="logout-btn" title="Log Out"><i class="fas fa-right-from-bracket"></i></a>
  </div>
  </div>
 </aside>
@@ -1074,7 +1083,11 @@ async function loadOverview(){
 }
 
 // ── CITY-WIDE INCIDENT MAP (Leaflet) ─────────────────────────
+<<<<<<< HEAD
 let incidentMap=null, incidentMapLayer=null;
+=======
+let incidentMap=null, incidentMapLayer=null, incidentBrgyLayer=null, incidentBrgyAdding=false;
+>>>>>>> c1a115abe9175f34360c210a176195134f778f08
 function renderIncidentMap(){
  const mapEl=document.getElementById('incidentMap');
  if(!mapEl || !window.L) return;
@@ -1096,6 +1109,33 @@ function renderIncidentMap(){
  if(pts.length){
  incidentMap.fitBounds(L.featureGroup(incidentMapLayer.getLayers()).getBounds().pad(0.25));
  }
+<<<<<<< HEAD
+=======
+ // Official barangay perimeters: admin gets city-wide context around the plotted reports.
+ if(window.SentriGeo && !incidentBrgyLayer && !incidentBrgyAdding){
+ incidentBrgyAdding=true;
+ const normName=s=>String(s||'').toLowerCase().replace(/^(brgy\.?|barangay)\s*/,'').replace(/[^a-z0-9]/g,'');
+ const counts={};
+ allReports.forEach(r=>{
+ if(r.is_archived) return;
+ const n=normName(r.barangay);
+ if(n) counts[n]=(counts[n]||0)+1;
+ });
+ SentriGeo.addBarangayOverlay(incidentMap, {
+ onEach: function(feature, layer){
+ const props=(feature&&feature.properties)||{};
+ const name=props.name||props.NAME||props.Barangay||'Barangay';
+ const c=counts[normName(name)]||0;
+ layer.bindPopup(`<strong>${esc(name)}</strong><br><span style="color:#555;">${c} report${c===1?'':'s'} tagged to this barangay</span>`);
+ }
+ }).then(l=>{
+ incidentBrgyLayer=(l||true);
+ incidentBrgyAdding=false;
+ }).catch(()=>{
+ incidentBrgyAdding=false;
+ });
+ }
+>>>>>>> c1a115abe9175f34360c210a176195134f778f08
 }
 
 // ── 30-DAY REPORT TREND (inline CSS bar chart) ───────────────

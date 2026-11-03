@@ -1,82 +1,110 @@
 <?php
-// config/auth.php - Role guard and portal redirect helper
-require_once __DIR__ . '/csrf.php';
+/**
+ * config/auth.php - Identity access, role guards and portal URLs
+ *
+ * ALL guards operate on the CURRENT realm's session (config/session.php).
+ * Identity lives at $_SESSION['identity'] inside the realm's own cookie
+ * (sentri-comm / sentri-gov / sentri-admin), so several realms can hold a
+ * login at once and these functions only ever touch the session the calling
+ * page booted - never another realm's.
+ *
+ * This file must be required before any output (its require chain emits
+ * security headers and the guards may redirect/destroy sessions, all of
+ * which send headers).
+ */
+require_once __DIR__ . '/session.php'; // realm boot/destroy fns + session machinery (cycle-safe)
+require_once __DIR__ . '/csrf.php';   // CSRF helpers (unchanged behavior)
 
+/**
+ * The signed-in account of the CURRENT realm session, or null when
+ * anonymous. Shape: ['user_id','first_name','last_name','role',
+ * 'is_approved','email_verified'].
+ */
+function sentri_identity(): ?array {
+  $identity = $_SESSION['identity'] ?? null;
+  return is_array($identity) ? $identity : null;
+}
+
+// Each role signs in on its own page:
+// community -> login.php, gov roles -> gov/login.php, admin -> admin.php
 function login_url_for_role($role) {
- // Each role signs in on its own page:
- // community -> login.php, officials -> gov/login.php, admin -> admin.php
- switch($role) {
- case 'barangay':
- case 'lgu':
- case 'first_responder': return '/gov/login.php';
- case 'admin': return '/admin.php';
- case 'community':
- case 'user':
- default: return '/login.php';
- }
+  switch($role) {
+  case 'barangay':
+  case 'lgu':
+  case 'first_responder': return '/gov/login.php';
+  case 'admin': return '/admin.php';
+  case 'community':
+  case 'user':
+  default: return '/login.php';
+  }
 }
 
 function require_login() {
- if (!isset($_SESSION['user_id'])) {
- header('Location: ' . login_url_for_role($_SESSION['role'] ?? 'community')); exit;
- }
+  $identity = sentri_identity();
+  if ($identity === null) {
+    header('Location: ' . login_url_for_role('community')); exit;
+  }
 }
 
 function require_role($allowed) {
- require_login();
- $role = $_SESSION['role'] ?? '';
- if (!in_array($role, $allowed, true)) {
- header('Location: ' . portal_url($role)); exit;
- }
+  require_login();
+  $role = sentri_identity()['role'] ?? '';
+  if (!in_array($role, (array)$allowed, true)) {
+    header('Location: ' . portal_url($role)); exit;
+  }
 }
 
 function require_approved() {
- require_login();
- if (!($_SESSION['is_approved'] ?? false)) {
- $role = $_SESSION['role'] ?? 'community';
- session_destroy();
- header('Location: ' . login_url_for_role($role) . '?pending=1'); exit;
- }
+  require_login();
+  $identity = sentri_identity();
+  if (!($identity['is_approved'] ?? false)) {
+    $role = $identity['role'] ?? 'community';
+    // Unapproved accounts must not keep a pending realm session: drop it
+    // (only the current realm's cookie/session - others are separate).
+    sentri_destroy_current_realm();
+    header('Location: ' . login_url_for_role($role) . '?pending=1'); exit;
+  }
 }
 
 function portal_url($role) {
- switch($role) {
- case 'barangay': return '/portal/barangay.php';
- case 'lgu': return '/portal/lgu.php';
- case 'first_responder': return '/portal/responder.php';
- case 'admin': return '/admin.php';
- case 'community':
- case 'user': return '/portal/community.php';
- default: return '/portal/community.php';
- }
+  switch($role) {
+  case 'barangay': return '/portal/barangay.php';
+  case 'lgu': return '/portal/lgu.php';
+  case 'first_responder': return '/portal/responder.php';
+  case 'admin': return '/admin.php';
+  case 'community':
+  case 'user': return '/portal/community.php';
+  default: return '/portal/community.php';
+  }
 }
 
 function redirect_to_portal() {
- header('Location: ' . portal_url($_SESSION['role'] ?? 'community')); exit;
+  $identity = sentri_identity();
+  header('Location: ' . portal_url($identity['role'] ?? 'community')); exit;
 }
 
 function gov_login_url() {
- return '/gov/login.php';
+  return '/gov/login.php';
 }
 
 function role_label($role) {
- switch($role) {
- case 'community': return 'Community Member';
- case 'barangay': return 'Barangay Official';
- case 'lgu': return 'LGU Official';
- case 'first_responder': return 'First Responder';
- case 'admin': return 'System Administrator';
- default: return 'User';
- }
+  switch($role) {
+  case 'community': return 'Community Member';
+  case 'barangay': return 'Barangay Official';
+  case 'lgu': return 'LGU Official';
+  case 'first_responder': return 'First Responder';
+  case 'admin': return 'System Administrator';
+  default: return 'User';
+  }
 }
 
 function role_badge_color($role) {
- switch($role) {
- case 'community': return '#2563eb';
- case 'barangay': return '#166534';
- case 'lgu': return '#0a3d62';
- case 'first_responder': return '#b91c1c';
- case 'admin': return '#6d28d9';
- default: return '#555';
- }
+  switch($role) {
+  case 'community': return '#2563eb';
+  case 'barangay': return '#166534';
+  case 'lgu': return '#0a3d62';
+  case 'first_responder': return '#b91c1c';
+  case 'admin': return '#6d28d9';
+  default: return '#555';
+  }
 }

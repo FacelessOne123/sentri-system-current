@@ -1,8 +1,10 @@
 <?php
+require_once __DIR__ . '/../config/session.php';
+sentri_boot_realm('gov');
 ini_set('display_errors', 0);
 ob_start();
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) {
+$ident = sentri_identity() ?? [];
+if ($ident['user_id'] ?? null) {
  require_once __DIR__ . '/../config/auth.php';
  redirect_to_portal();
 }

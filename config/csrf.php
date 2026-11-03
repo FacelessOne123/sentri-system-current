@@ -2,8 +2,12 @@
 /**
  * config/csrf.php - CSRF Token Generation & Validation
  *
- * Include after session_start(). Provides csrf_token(), csrf_meta_tag(),
- * csrf_script(), and csrf_validate() helpers.
+ * INCLUDE AFTER the page has booted its realm session (config/session.php:
+ * sentri_boot_realm() / sentri_boot_auto_realm()). Sessions are realm-scoped,
+ * so a token lives ONLY inside the session its page booted; there is
+ * deliberately no session_start() here.
+ * Provides csrf_token(), csrf_meta_tag(), csrf_script(), and csrf_validate()
+ * helpers.
  *
  * Usage in HTML pages:
  * <?= csrf_meta_tag() ?> <!-- in <head> -->
@@ -15,7 +19,9 @@
  */
 
 /**
- * Get or generate the session CSRF token.
+ * Get or generate the session CSRF token. Requires an active realm session
+ * (booted by the page via config/session.php); the token is scoped to that
+ * session, and functions never call session_start() themselves.
  */
 function csrf_token(): string {
  if (empty($_SESSION['csrf_token'])) {

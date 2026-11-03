@@ -116,6 +116,26 @@ class SenTriMailer
  */
  public function send(string $toEmail, string $toName, string $subject, string $htmlBody): bool
  {
+ // Offline development outbox: APP_DEBUG=1 (or MAIL_OUTBOX=1) in .env diverts
+ // every transactional email to logs/mail/*.eml — signup, verification and
+ // password reset all work with no internet. debug.php lists the outbox with
+ // clickable verification/reset links.
+ if (defined('MAIL_DEBUG_OUTBOX') && MAIL_DEBUG_OUTBOX && defined('MAIL_DEBUG_DIR')) {
+ if (!is_dir(MAIL_DEBUG_DIR)) { @mkdir(MAIL_DEBUG_DIR, 0777, true); }
+ $boundary = 'sentri_' . bin2hex(random_bytes(8));
+ $eml = "From: SenTri <" . MAIL_FROM . ">\r\n"
+ . "To: {$toEmail}\r\n"
+ . "Subject: {$subject}\r\n"
+ . "Date: " . date('r') . "\r\n"
+ . "MIME-Version: 1.0\r\n"
+ . "Content-Type: text/html; charset=UTF-8\r\n"
+ . "\r\n"
+ . $htmlBody;
+ $safe = preg_replace('/[^a-z0-9_.-]+/i', '_', $toEmail);
+ $file = MAIL_DEBUG_DIR . '/' . date('Ymd-His') . '_' . $safe . '_' . substr($boundary, -6) . '.eml';
+ @file_put_contents($file, $eml);
+ return true;
+ }
  $this->connect();
  $this->ehlo();
  $this->startTLS();

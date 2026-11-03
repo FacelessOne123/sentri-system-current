@@ -1,5 +1,6 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
 require __DIR__ . '/config/db.php';
 
 $token = trim($_GET['token'] ?? '');

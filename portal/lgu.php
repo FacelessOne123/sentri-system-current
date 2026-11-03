@@ -1,12 +1,14 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+sentri_boot_realm('gov');
 require_once __DIR__ . '/../config/auth.php';
 require_role(['lgu']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 
-$uid = (int)$_SESSION['user_id'];
-$fname = $_SESSION['first_name'];
+$ident = sentri_identity() ?? [];
+$uid = (int)($ident['user_id'] ?? 0);
+$fname = $ident['first_name'] ?? '';
 $view = $_GET['view'] ?? 'overview';
 $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
 $has_esc_col = sentri_table_has_column($conn, 'reports', 'escalated_to_lgu');
@@ -131,8 +133,7 @@ if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['
  $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
  }
  $su->execute(); $su->close();
- $_SESSION['first_name'] = htmlspecialchars($p_fname,ENT_QUOTES,'UTF-8');
- $fname=$_SESSION['first_name']; $org=$p_org?:$org; $city=$p_muni?:$city; $pos=$p_pos?:$pos;
+ $fname = htmlspecialchars($p_fname,ENT_QUOTES,'UTF-8'); $org=$p_org?:$org; $city=$p_muni?:$city; $pos=$p_pos?:$pos;
  $stmt2=$conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
  $stmt2->bind_param("i",$uid); $stmt2->execute();
  $prof=$stmt2->get_result()->fetch_assoc(); $stmt2->close();
@@ -221,8 +222,7 @@ if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['
  $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
  }
  $su->execute(); $su->close();
- $_SESSION['first_name'] = htmlspecialchars($p_fname, ENT_QUOTES, 'UTF-8');
- $fname = $_SESSION['first_name'];
+ $fname = htmlspecialchars($p_fname, ENT_QUOTES, 'UTF-8');
  $org = $p_org ?: $org;
  $city = $p_muni ?: $city;
  $pos = $p_pos ?: $pos;
@@ -627,7 +627,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-upos"><?= htmlspecialchars($pos) ?></div>
  </div>
  </div>
- <a href="../logout.php" class="sb-logout">
+ <a href="../logout.php?realm=gov" class="sb-logout">
  <i class="fas fa-right-from-bracket"></i> Sign Out
  </a>
  </div>
@@ -913,10 +913,20 @@ tr:hover td{background:#fafafa;}
  </div>
 
  <?php elseif($view === 'barangays'): ?>
- <!-- ── BARANGAY SUMMARIES ── -->
+ <!-- ── BARANGAY SUMMARIES ──
+ Normalization cross-check: the official perimeters in assets/geo/imus-barangays.geojson use
+ designated names (e.g. "Anabu I-A", "Bayan Luma I", "Mariano Espeleta I"). Community reports
+ historically store legacy/free-text barangay labels in r.barangay. The drill-down query
+ (?view=all_reports&barangay=…) matches r.barangay EXACTLY (case-sensitive, no normalization),
+ so summary labels are echoed verbatim from the DB — counts and drill-down stay consistent.
+ Any GeoJSON/DB name mismatches (e.g. missing "Brgy." prefix, differing numbering) are surfaced
+ on the Incident Map by official perimeter name in tooltips/filter, not rewritten here. -->
  <div class="card">
  <div class="card-header">
  <h3><i class="fas fa-house-flag" style="color:#166534;margin-right:6px;"></i>Barangay Incident Summary</h3>
+ </div>
+ <div style="padding:10px 18px;border-bottom:1px solid var(--border);font-size:0.74rem;color:var(--muted);display:flex;align-items:center;gap:7px;">
+ <i class="fas fa-circle-info" style="color:#2563eb;"></i> Labels are shown exactly as reported in the database (legacy names preserved). Official Imus perimeter maps are on the Incident Map tab.
  </div>
  <?php if(empty($brgy_stats)): ?>
  <div class="empty"><i class="fas fa-chart-bar"></i><p>No reports match your view yet.</p></div>
@@ -940,6 +950,7 @@ tr:hover td{background:#fafafa;}
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
+ <script src="../assets/js/sentri-geo.js"></script>
  <style>
  .map-wrap{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.1);border:1px solid var(--border);}
  #incidentMap{height:520px;width:100%;background:#e8f0f8;}
@@ -999,6 +1010,7 @@ tr:hover td{background:#fafafa;}
  <div class="legend-row"><div class="legend-dot" style="background:#d97706;"></div>Caution</div>
  <div class="legend-row"><div class="legend-dot" style="background:#16a34a;"></div>Safe</div>
  <div class="legend-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #e2e8f0;font-size:0.7rem;color:#64748b;"><i class="fas fa-circle-dot" style="color:#dc2626;margin-right:4px;"></i>Buffer: 250m / 150m</div>
+ <div class="legend-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #e2e8f0;font-size:0.7rem;color:#2563eb;"><i class="fas fa-vector-square" style="color:#2563eb;margin-right:4px;"></i>Brgy boundary (official perimeter)</div>
  </div>
  </div>
  </div>
@@ -1047,7 +1059,33 @@ tr:hover td{background:#fafafa;}
  var group = L.featureGroup(allMarkers);
  map.fitBounds(group.getBounds().pad(0.15));
  } else {
- map.setView([14.5995,120.9842],12);
+ map.setView([14.4240,120.9215],12);
+ }
+
+ // ── Official barangay perimeters (Imus City GeoJSON, 95 villages) ──
+ // Thin outlines under the pins; hover raises highlight; clicking a polygon
+ // filters All Incident Reports to that barangay via the existing drill-down
+ // GET param ?view=all_reports&barangay=<official name>.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.addBarangayOverlay){
+ SentriGeo.addBarangayOverlay(map, {
+ onEach: function(feature, layer){
+ var nm = (feature.properties && (feature.properties.name || feature.properties.ref)) || 'Barangay';
+ layer.bindTooltip('<div style="font-weight:700;font-size:0.78rem;">'+nm+'<br><span style="font-weight:400;font-size:0.7rem;color:#6b7280;">Brgy boundary (official perimeter) &middot; click to filter reports</span></div>',{sticky:true});
+ layer.on('mouseover', function(){
+ layer.setStyle({weight:3, color:'#1d4ed8', fillOpacity:0.15});
+ if(layer.bringToFront) layer.bringToFront();
+ });
+ layer.on('mouseout', function(){
+ layer.setStyle({weight:2, color:'#2563eb', fillOpacity:0.05});
+ });
+ layer.on('click', function(){
+ showToast('Filtering: '+nm, 'info');
+ setTimeout(function(){ window.location = 'lgu.php?view=all_reports&barangay=' + encodeURIComponent(nm); }, 550);
+ });
+ }
+ }).then(function(brgyLayer){
+ if(brgyLayer){ try{ map.fitBounds(brgyLayer.getBounds()); }catch(e){} }
+ }).catch(function(){ /* boundary data unavailable — pins still render */ });
  }
 
  function clearLguHazardCircles() {

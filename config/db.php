@@ -2,15 +2,35 @@
 // Bootstrap security headers before any output or redirect.
 require_once __DIR__ . '/headers.php';
 
-$servername = "localhost";
-$db_user = "root";
-$db_pass = "";
-$dbname = "sentri";
+// .env-aware credentials: default remains root@socket / sentri; override via
+// .env keys DB_HOST / DB_USER / DB_PASS / DB_NAME (used on Linux Mint dev
+// setups where MySQL root carries a password, e.g. XAMPP/LAMP).
+if (!defined('APP_URL') && !function_exists('get_env_var')) {
+ require_once __DIR__ . '/email.php';
+}
+if (function_exists('get_env_var')) {
+ $db_host = get_env_var('DB_HOST', 'localhost') ?: 'localhost';
+ $db_user = get_env_var('DB_USER', 'root') ?: 'root';
+ $db_pass = get_env_var('DB_PASS', '');
+ $dbname  = get_env_var('DB_NAME', 'sentri') ?: 'sentri';
+} else {
+ $db_host = 'localhost';
+ $db_user = 'root';
+ $db_pass = '';
+ $dbname  = 'sentri';
+}
+$servername = $db_host;
 
-// Try Unix socket first, fallback to TCP
-$conn = @new mysqli(null, $db_user, $db_pass, $dbname, 3306, '/var/run/mysqld/mysqld.sock');
-if ($conn->connect_error) {
- $conn = new mysqli($servername, $db_user, $db_pass, $dbname);
+// Try Unix socket first, fallback to TCP. (mysqli throws since PHP 8.1; the
+// socket attempt must be caught so the TCP fallback can run on hosts without
+// a Unix socket file, e.g. Android tmpfs.)
+try {
+ $conn = @new mysqli(null, $db_user, $db_pass, $dbname, 3306, '/var/run/mysqld/mysqld.sock');
+ if ($conn->connect_error) {
+  throw new mysqli_sql_exception($conn->connect_error);
+ }
+} catch (mysqli_sql_exception $e) {
+ $conn = new mysqli('127.0.0.1', $db_user, $db_pass, $dbname, 3306);
 }
 if ($conn->connect_error) {
  error_log("SenTri DB Error: " . $conn->connect_error);
