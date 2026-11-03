@@ -1,5 +1,6 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
 require __DIR__ . '/config/db.php';
 
 $token = trim($_GET['token'] ?? '');
@@ -66,13 +67,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'resen
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Email Verification - SenTri</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="assets/vendor/sentri-ui.css">
 <style>
-:root{--blue:#1c57b2;--blue-light:#3a8dff;--green:#38a169;--amber:#f59e0b;--red:#c62828;}
-*{box-sizing:border-box;margin:0;padding:0;font-family:'Poppins',sans-serif;}
+:root{--blue:#2563eb;--blue-light:#3b82f6;--green:#166534;--amber:#b45309;--red:#b91c1c;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 body{background:#0a0f1e;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
 .bg-canvas{position:fixed;inset:0;z-index:0;overflow:hidden;}
 .bg-canvas::before{content:'';position:absolute;width:600px;height:600px;background:radial-gradient(circle,rgba(58,141,255,0.12) 0%,transparent 70%);top:-200px;left:-100px;animation:drift1 9s ease-in-out infinite alternate;}
@@ -85,9 +88,9 @@ body{background:#0a0f1e;min-height:100vh;display:flex;align-items:center;justify
 @keyframes pop{0%{transform:scale(0.7);opacity:0;}70%{transform:scale(1.1);}100%{transform:scale(1);opacity:1;}}
 .card{background:#fff;border-radius:20px;padding:48px 44px;max-width:480px;width:100%;text-align:center;position:relative;z-index:1;animation:fadeInUp 0.55s cubic-bezier(0.22,1,0.36,1) both;box-shadow:0 20px 60px rgba(0,0,0,0.35);}
 .icon-wrap{width:80px;height:80px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:2.2rem;animation:pop 0.5s cubic-bezier(0.22,1,0.36,1) 0.2s both;}
-.icon-wrap.success{background:#e8f5e9;color:var(--green);}
-.icon-wrap.expired{background:#fff8e1;color:var(--amber);}
-.icon-wrap.invalid{background:#ffebee;color:var(--red);}
+.icon-wrap.success{background:#e8f5e9;color:var(--sentri-safe);}
+.icon-wrap.expired{background:#fff8e1;color:var(--sentri-caution);}
+.icon-wrap.invalid{background:#ffebee;color:var(--sentri-danger);}
 .icon-wrap.already{background:#e3f2fd;color:var(--blue);}
 .brand{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:32px;text-decoration:none;}
 .brand-icon{width:38px;height:38px;background:linear-gradient(135deg,var(--blue-light),var(--blue));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:#fff;}
@@ -95,18 +98,18 @@ body{background:#0a0f1e;min-height:100vh;display:flex;align-items:center;justify
 h1{font-size:1.5rem;font-weight:800;color:#1a1a2e;margin-bottom:10px;letter-spacing:-0.4px;}
 p{font-size:0.92rem;color:#555;line-height:1.7;margin-bottom:24px;}
 p strong{color:#1a1a2e;}
-.btn{display:inline-block;padding:12px 28px;border-radius:10px;font-size:0.93rem;font-weight:700;text-decoration:none;cursor:pointer;border:none;font-family:'Poppins',sans-serif;transition:all 0.25s;}
-.btn-primary{background:linear-gradient(135deg,var(--blue-light),var(--blue));color:#fff;width:100%;margin-bottom:10px;display:block;}
+.btn{display:inline-block;padding:12px 28px;border-radius:10px;font-size:0.93rem;font-weight:700;text-decoration:none;cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all 0.25s;}
+.btn-primary{background:var(--sentri-primary);color:#fff;width:100%;margin-bottom:10px;display:block;}
 .btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(28,87,178,0.4);}
 .btn-primary:disabled{opacity:0.6;cursor:not-allowed;transform:none;}
-.btn-ghost{color:var(--blue);font-size:0.85rem;font-weight:600;background:none;border:none;cursor:pointer;font-family:'Poppins',sans-serif;text-decoration:underline;}
+.btn-ghost{color:var(--blue);font-size:0.85rem;font-weight:600;background:none;border:none;cursor:pointer;font-family:'Inter',sans-serif;text-decoration:underline;}
 .form-group{margin-bottom:14px;text-align:left;}
 .form-group label{display:block;font-size:0.81rem;font-weight:600;color:#444;margin-bottom:5px;}
-.form-group input{width:100%;padding:11px 15px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:0.92rem;outline:none;font-family:'Poppins',sans-serif;background:#fafafa;transition:all 0.2s;}
+.form-group input{width:100%;padding:11px 15px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:0.92rem;outline:none;font-family:'Inter',sans-serif;background:#fafafa;transition:all 0.2s;}
 .form-group input:focus{border-color:var(--blue-light);background:#fff;box-shadow:0 0 0 4px rgba(58,141,255,0.1);}
 .feedback{padding:11px 16px;border-radius:9px;font-size:0.85rem;margin-bottom:14px;display:none;font-weight:500;}
-.feedback.success{background:#e8f5e9;color:#2e7d32;}
-.feedback.error{background:#ffebee;color:#c62828;}
+.feedback.success{background:#e8f5e9;color:var(--sentri-safe);}
+.feedback.error{background:#ffebee;color:var(--sentri-danger);}
 .divider{border:none;border-top:1px solid #eee;margin:20px 0;}
 </style>
 </head>
@@ -122,13 +125,13 @@ p strong{color:#1a1a2e;}
  <div class="icon-wrap success"><i class="fas fa-circle-check"></i></div>
  <h1>Email Verified!</h1>
  <p>Welcome to SenTri, <strong><?= $firstname ?></strong>! Your account is now active. You can sign in and start contributing to your community's safety.</p>
- <a href="login.php" class="btn btn-primary"><i class="fas fa-right-to-bracket"></i> Sign In Now</a>
+ <a href="login.php" class="btn btn-primary sentri-btn-primary"><i class="fas fa-right-to-bracket"></i> Sign In Now</a>
 
  <?php elseif ($status === 'already'): ?>
  <div class="icon-wrap already"><i class="fas fa-envelope-open-text"></i></div>
  <h1>Already Verified</h1>
  <p>This email address has already been verified. You can sign in to your account.</p>
- <a href="login.php" class="btn btn-primary"><i class="fas fa-right-to-bracket"></i> Go to Sign In</a>
+ <a href="login.php" class="btn btn-primary sentri-btn-primary"><i class="fas fa-right-to-bracket"></i> Go to Sign In</a>
 
  <?php elseif ($status === 'expired'): ?>
  <div class="icon-wrap expired"><i class="fas fa-clock"></i></div>
@@ -136,7 +139,7 @@ p strong{color:#1a1a2e;}
  <p>Your verification link has expired (links are valid for 24 hours). Enter your email below and we'll send a fresh one.</p>
  <div id="resendFeedback" class="feedback"></div>
  <div class="form-group"><label>Email Address</label><input type="email" id="resendEmail" placeholder="you@example.com"></div>
- <button class="btn btn-primary" id="resendBtn" onclick="resend()"><i class="fas fa-paper-plane"></i> Resend Verification Email</button>
+ <button class="btn btn-primary sentri-btn-primary" id="resendBtn" onclick="resend()"><i class="fas fa-paper-plane"></i> Resend Verification Email</button>
  <hr class="divider">
  <a href="login.php" class="btn-ghost">Back to Sign In</a>
 
@@ -146,7 +149,7 @@ p strong{color:#1a1a2e;}
  <p>This verification link is not valid or has already been used. If you need a new link, enter your email below.</p>
  <div id="resendFeedback" class="feedback"></div>
  <div class="form-group"><label>Email Address</label><input type="email" id="resendEmail" placeholder="you@example.com"></div>
- <button class="btn btn-primary" id="resendBtn" onclick="resend()"><i class="fas fa-paper-plane"></i> Request New Verification Email</button>
+ <button class="btn btn-primary sentri-btn-primary" id="resendBtn" onclick="resend()"><i class="fas fa-paper-plane"></i> Request New Verification Email</button>
  <hr class="divider">
  <a href="login.php" class="btn-ghost">Back to Sign In</a>
  <?php endif; ?>

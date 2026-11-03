@@ -1,8 +1,10 @@
 <?php
+require_once __DIR__ . '/../config/session.php';
+sentri_boot_realm('gov');
 ini_set('display_errors', 0);
 ob_start();
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) {
+$ident = sentri_identity() ?? [];
+if ($ident['user_id'] ?? null) {
  require_once __DIR__ . '/../config/auth.php';
  redirect_to_portal();
 }
@@ -27,8 +29,10 @@ require __DIR__ . '/../core/login_handler.php';
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Government Portal Sign In - SenTri</title>
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/sentri-ui.css">
 <style>
 :root{--navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;--gold:#f39c12;--gold-dark:#d68910;--green:#166534;--green-light:#16a34a;--red:#b91c1c;--text:#1a1a2e;--muted:#6b7280;--border:#e5e7eb;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
@@ -81,7 +85,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .pw-wrap .toggle-pw{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#6b7280;font-size:0.75rem;font-weight:700;font-family:'Inter',sans-serif;}
 .forgot-row{display:flex;justify-content:flex-end;margin-top:-4px;margin-bottom:12px;}
 .forgot-row a{font-size:0.75rem;color:#2563eb;text-decoration:none;font-weight:600;}
-.btn-login{width:100%;min-height:42px;padding:10px 14px;border:none;border-radius:9px;font-size:0.9rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;background:#0a3d62;background-image:linear-gradient(135deg,#1a5276,#0a3d62);display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:filter 0.15s ease,box-shadow 0.15s ease;}
+.btn-login{width:100%;min-height:42px;padding:10px 14px;border:none;border-radius:10px;font-size:0.9rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;background:#0a3d62;background-image:linear-gradient(135deg,#1a5276,#0a3d62);display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:filter 0.15s ease,box-shadow 0.15s ease;}
 .btn-login:hover:not(:disabled){filter:brightness(1.05);box-shadow:0 4px 14px rgba(0,0,0,0.2);}
 .btn-login:active:not(:disabled){transform:scale(0.99);}
 .btn-login:disabled{opacity:0.6;cursor:not-allowed;background:#9ca3af!important;background-image:none!important;}

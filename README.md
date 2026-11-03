@@ -275,3 +275,20 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 - [ ] SMS notification support (Semaphore / Vonage PH) - requires paid API
 - [ ] Auto-call integration for Dangerous reports (Twilio) - requires paid API
 - [ ] Mobile app wrapper
+
+---
+
+## Local development (Linux Mint / Debian / XAMPP)
+
+```
+sudo bash scripts/setup-linux-mint.sh     # packages + DB + .env + seed + serve :8080
+BASE=http://localhost:8080 bash scripts/smoke-test.sh   # 32-check full-stack battery
+php scripts/seed-demo.php                 # re-seed demo users + [SMOKE] incidents
+```
+
+- **Offline emails**: `APP_DEBUG=1` in `.env` diverts all mail to `logs/mail/*.eml` —
+  signup + verification work with NO internet; open `debug.php` (standalone dev
+  console, invisible in production) for one-click verification links, the realm-
+  session inspector, data snapshots and geo-asset integrity checks.
+- Demo accounts: `community@ / barangay@ / responder@ / lgu@demo.ph` → `Demo@1234`,
+  `admin@sentri.ph` → `Admin@1234` (seeded by `scripts/seed-demo.php`).

@@ -1,12 +1,14 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+sentri_boot_realm('gov');
 require_once __DIR__ . '/../config/auth.php';
 require_role(['barangay']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 
-$uid = (int)$_SESSION['user_id'];
-$fname = $_SESSION['first_name'];
+$ident = sentri_identity() ?? [];
+$uid = (int)($ident['user_id'] ?? 0);
+$fname = $ident['first_name'] ?? '';
 $view = $_GET['view'] ?? 'overview';
 
 $stmt = $conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
@@ -148,7 +150,7 @@ $page_titles = [
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <style>
-:root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;}
+:root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;--sentri-danger:#b91c1c;--sentri-caution:#b45309;--sentri-safe:#166534;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 html,body{height:100%;}
 body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overflow-x:hidden;}
@@ -211,9 +213,9 @@ tr:last-child td{border-bottom:none;}
 tr:hover td{background:#fafafa;}
 /* PILLS */
 .pill{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:0.7rem;font-weight:700;white-space:nowrap;}
-.pill-dangerous{background:#fef2f2;color:#991b1b;}
-.pill-caution{background:#fffbeb;color:#92400e;}
-.pill-safe{background:#f0fdf4;color:#166534;}
+.pill-dangerous{background:#fef2f2;color:var(--sentri-danger);}
+.pill-caution{background:#fffbeb;color:var(--sentri-caution);}
+.pill-safe{background:#f0fdf4;color:var(--sentri-safe);}
 .cat-chip{display:inline-flex;align-items:center;gap:5px;font-size:0.72rem;font-weight:600;color:var(--navy);background:#eff6ff;padding:3px 8px;border-radius:6px;white-space:nowrap;}
 /* ACTION BTNS */
 .btn-icon{width:30px;height:30px;border:none;border-radius:7px;cursor:pointer;font-size:0.8rem;display:inline-flex;align-items:center;justify-content:center;transition:all 0.15s;}
@@ -284,7 +286,7 @@ tr:hover td{background:#fafafa;}
 .rpt-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
 @media(max-width:700px){.map-stats,.rpt-stats{grid-template-columns:1fr 1fr;}#incidentMap{height:340px;}}
 /* REPORT DETAIL MODAL */
-.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center;padding:20px;}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1200;align-items:center;justify-content:center;padding:20px;}
 .modal-bg.show{display:flex;}
 .modal{background:#fff;border-radius:16px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
 .modal-header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
@@ -369,7 +371,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-avatar"><?= strtoupper(substr($fname,0,1)) ?></div>
  <div style="min-width:0;"><div class="sb-uname"><?= htmlspecialchars($fname) ?></div><div class="sb-upos"><?= htmlspecialchars($pos) ?></div></div>
  </div>
- <a href="../logout.php" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
+ <a href="../logout.php?realm=gov" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
  </div>
 </aside>
 
@@ -405,7 +407,7 @@ tr:hover td{background:#fafafa;}
  </div>
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta"><?= count($reports) ?> records</span></div>
- <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports found.</p></div>
+ <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
@@ -429,7 +431,7 @@ tr:hover td{background:#fafafa;}
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
  <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
  </div>
- <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports found.</p></div>
+ <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
@@ -477,6 +479,7 @@ tr:hover td{background:#fafafa;}
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
+ <script src="../assets/js/sentri-geo.js"></script>
  <?php
  $mapped = count($map_reports);
  $unmapped = $map_total_all - $mapped;
@@ -515,6 +518,7 @@ tr:hover td{background:#fafafa;}
  <div class="legend-row"><div class="legend-dot" style="background:#d97706;"></div>Caution</div>
  <div class="legend-row"><div class="legend-dot" style="background:#16a34a;"></div>Safe</div>
  <div class="legend-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #e2e8f0;font-size:0.7rem;color:#64748b;"><i class="fas fa-circle-dot" style="color:#dc2626;margin-right:4px;"></i>Buffer: 250m / 150m</div>
+ <div class="legend-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #e2e8f0;font-size:0.7rem;color:#2563eb;"><i class="fas fa-vector-square" style="color:#2563eb;margin-right:4px;"></i>Brgy boundary (official perimeter)</div>
  </div>
  </div>
  </div>
@@ -547,7 +551,7 @@ tr:hover td{background:#fafafa;}
  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'#991b1b':r.status==='caution'?'#92400e':'#166534')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
+ '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
  '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
@@ -559,7 +563,49 @@ tr:hover td{background:#fafafa;}
  allMapMarkers.push(m);
  });
  if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
- else{lmap.setView([14.5995,120.9842],12);}
+ else{lmap.setView([14.4240,120.9215],12);}
+
+ // ── Official barangay perimeters (Imus City GeoJSON) ──
+ // All 95 outlines are drawn; this barangay official's own village is highlighted
+ // (filled) by the shared library via onlyName. Cross-barangay drill-down is NOT
+ // offered: clicking another polygon only shows a scoping notice.
+ var BRGY_OWN = <?= json_encode($brgy ?: '', JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>;
+ function brgyKey(v){
+  v = String(v||'').toLowerCase();
+  v = v.replace(/ñ/g,'n').replace(/[áéíóú]/g,function(c){return {'á':'a','é':'e','í':'i','ó':'o','ú':'u'}[c]||c;});
+  return v.replace(/barangay|brgy/g,'').replace(/[^a-z0-9]/g,'');
+ }
+ var OWN_KEY = brgyKey(BRGY_OWN);
+ function onEachOwnBrgy(feature, layer){
+  var nm = (feature.properties && (feature.properties.name || feature.properties.ref)) || '';
+  if(OWN_KEY && brgyKey(nm) === OWN_KEY){
+  window.__ownBrgyLayer = layer;
+  layer.bindTooltip('<div style="font-weight:700;font-size:0.78rem;">'+nm+'<br><span style="font-weight:400;font-size:0.7rem;color:#6b7280;">Brgy boundary (official perimeter)</span></div>',{sticky:true});
+  } else {
+  layer.bindPopup('<div style="min-width:180px;font-family:Inter,sans-serif;"><div style="font-weight:700;font-size:0.82rem;margin-bottom:4px;">'+nm+'</div><div style="font-size:0.76rem;color:#6b7280;">View this barangay? Official access is scoped to your barangay.</div></div>',{maxWidth:240});
+  }
+ }
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.addBarangayOverlay){
+  var resolveOwnName = (BRGY_OWN && SentriGeo.loadBarangays)
+  ? SentriGeo.loadBarangays().then(function(gj){
+  var feats = (gj && gj.features) || [];
+  for(var i=0;i<feats.length;i++){
+  var p = feats[i].properties || {};
+  if(brgyKey(p.name) === OWN_KEY || brgyKey(p.ref) === OWN_KEY) return p.name;
+  }
+  return BRGY_OWN; // fallback: let the library attempt its own match
+  }).catch(function(){ return BRGY_OWN; })
+  : Promise.resolve(BRGY_OWN || undefined);
+  resolveOwnName.then(function(ownName){
+  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy }).then(function(gjLayer){
+  // Frame the official barangay perimeter as the map's subject
+  var ownL = window.__ownBrgyLayer;
+  var fitLayer = (ownL && ownL.getBounds && ownL.getBounds().isValid()) ? ownL : (gjLayer && gjLayer.getBounds && gjLayer.getBounds().isValid() ? gjLayer : null);
+  if(fitLayer){ lmap.fitBounds(fitLayer.getBounds(), { padding: [40, 40], maxZoom: 16 }); }
+  return gjLayer;
+  });
+  }).catch(function(){ /* boundary data unavailable — pins still render */ });
+ }
 
  function clearHazardCircles() {
  hazardCircles.forEach(function(c){ lmap.removeLayer(c); });
@@ -730,7 +776,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  document.getElementById('modalTitle').textContent = title;
 
  // Status colour
- var statusColors = { dangerous: ['#fef2f2','#991b1b'], caution: ['#fffbeb','#92400e'], safe: ['#f0fdf4','#166534'] };
+ var statusColors = { dangerous: ['#fef2f2','var(--sentri-danger)'], caution: ['#fffbeb','var(--sentri-caution)'], safe: ['#f0fdf4','var(--sentri-safe)'] };
  var sc = statusColors[status] || ['#f3f4f6','#374151'];
  var isResolved = (status === 'safe');
 
@@ -935,6 +981,7 @@ async function changeStatus(newStatus) {
 
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
+ if (!confirm('Mark this report as resolved?')) return;
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
  var fd = new FormData();
@@ -960,6 +1007,7 @@ function quickResolve(id, btn) {
 }
 
 function quickEscalate(id, btn) {
+ if (!confirm('Escalate this report to LGU?')) return;
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
  var fd = new FormData();

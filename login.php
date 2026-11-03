@@ -1,8 +1,9 @@
 <?php
 ini_set('display_errors', 0);
 ob_start();
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) {
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
+if (sentri_identity() !== null) {
  require_once __DIR__ . '/config/auth.php';
  redirect_to_portal();
 }
@@ -22,8 +23,10 @@ require __DIR__ . '/core/login_handler.php';
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Sign In - SenTri Community Portal</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="assets/vendor/sentri-ui.css">
 <style>
 :root{--navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;--gold:#f39c12;--gold-dark:#d68910;--green:#166534;--green-light:#16a34a;--red:#b91c1c;--purple:#5b21b6;--text:#1a1a2e;--muted:#6b7280;--border:#e5e7eb;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
@@ -63,10 +66,21 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .pw-wrap .toggle-pw{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#6b7280;font-size:0.75rem;font-weight:700;font-family:'Inter',sans-serif;}
 .forgot-row{display:flex;justify-content:flex-end;margin-top:-4px;margin-bottom:12px;}
 .forgot-row a{font-size:0.75rem;color:#2563eb;text-decoration:none;font-weight:600;}
-.btn-login{width:100%;min-height:42px;padding:10px 14px;border:none;border-radius:9px;font-size:0.9rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;background:#2563eb;background-image:linear-gradient(135deg,#3b82f6,#2563eb);display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:filter 0.15s ease,box-shadow 0.15s ease;}
+.btn-login{width:100%;min-height:42px;padding:10px 14px;border:none;border-radius:10px;font-size:0.9rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;background:var(--sentri-primary);display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:filter 0.15s ease,box-shadow 0.15s ease;}
 .btn-login:hover:not(:disabled){filter:brightness(1.05);box-shadow:0 4px 14px rgba(0,0,0,0.2);}
 .btn-login:active:not(:disabled){transform:scale(0.99);}
 .btn-login:disabled{opacity:0.6;cursor:not-allowed;background:#9ca3af!important;background-image:none!important;}
+.tutorial-row{margin-top:12px;text-align:center;}
+.btn-tutorial{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border:1px solid #cbd5e1;background:#fff;border-radius:10px;font-size:0.84rem;font-weight:700;font-family:'Inter',sans-serif;color:#1a1a2e;cursor:pointer;transition:border-color .15s,background .15s;}
+.btn-tutorial:hover{border-color:#2563eb;background:#eff6ff;}
+.video-modal{display:none;position:fixed;inset:0;z-index:1200;background:rgba(10,12,26,0.72);align-items:center;justify-content:center;padding:20px;}
+.video-modal.open{display:flex;}
+.video-card{background:#0f1220;border-radius:16px;padding:14px 14px 10px;max-width:720px;width:100%;box-shadow:0 18px 60px rgba(0,0,0,0.55);}
+.video-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.video-title{color:#fff;font-size:0.95rem;font-weight:800;display:flex;align-items:center;gap:8px;}
+.video-close{background:none;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;padding:6px;}
+.video-close:hover{color:#fff;}
+.video-card video{width:100%;border-radius:10px;display:block;max-height:70vh;}
 .msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:11px;display:none;text-align:center;}
 .msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
 .msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
@@ -143,15 +157,18 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <div class="form-group"><label>Email Address</label><input type="email" name="email" id="emailField" placeholder="you@example.com" required autocomplete="email"></div>
  <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pwField" placeholder="••••••••" required><button type="button" class="toggle-pw" onclick="togglePw()">SHOW</button></div></div>
  <div class="forgot-row"><a href="forgot_password.php">Forgot Password?</a></div>
- <button type="submit" class="btn-login" id="loginBtn"><i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Sign In to Community Portal</span></button>
+ <button type="submit" class="btn-login sentri-btn-primary" id="loginBtn"><i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Sign In to Community Portal</span></button>
  </form>
+ <div class="tutorial-row">
+ <button type="button" class="btn-tutorial" onclick="openTutorial()"><i class="fas fa-circle-play"></i> Watch: How SenTri Works</button>
+ </div>
  <div id="otpSection" style="display:none;">
  <form id="otpForm" novalidate>
  <input type="hidden" name="action" value="verify_otp">
  <input type="hidden" name="email" id="otpEmail" value="">
  <input type="hidden" name="portal" value="community">
  <div class="form-group"><label>One-Time Code</label><input type="text" name="otp" id="otpField" placeholder="123456" maxlength="6" pattern="[0-9]*" inputmode="numeric" required></div>
- <button type="submit" class="btn-login" id="otpSubmitBtn"><i class="fas fa-key"></i> Verify OTP</button>
+ <button type="submit" class="btn-login sentri-btn-primary" id="otpSubmitBtn"><i class="fas fa-key"></i> Verify OTP</button>
  <button type="button" class="btn-login" id="otpBackBtn" style="background:#f3f4f6;color:#1f2937;margin-top:10px;"><i class="fas fa-arrow-left"></i> Back to Password</button>
  </form>
  </div>
@@ -272,6 +289,19 @@ async function resend(){
  catch{btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Resend';}
 }
 function showMsg(type,text){const el=document.getElementById('loginMsg');el.className='msg '+type;el.textContent=text;el.style.display='block';}
+function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
+function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
+document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTutorial();});
 </script>
+<div class="video-modal" id="tutorialModal" role="dialog" aria-modal="true">
+ <div class="video-card">
+ <div class="video-head">
+ <div class="video-title"><i class="fas fa-circle-play"></i> SenTri — How It Works (Community)</div>
+ <button type="button" class="video-close" onclick="closeTutorial()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+ </div>
+ <video id="tutorialVideo" src="assets/media/community-tutorial.mp4" controls preload="none" playsinline></video>
+ </div>
+</div>
 </body>
 </html>

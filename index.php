@@ -1,6 +1,7 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) {
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
+if (sentri_identity() !== null) {
  require_once __DIR__ . '/config/auth.php';
  redirect_to_portal();
 }
@@ -11,8 +12,10 @@ if (isset($_SESSION['user_id'])) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SenTri - Community Safety Incident Reporting System</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="assets/vendor/sentri-ui.css">
 <style>
 :root{--navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;--gold:#f39c12;--gold-light:#f5b942;--green:#166534;--text:#111827;--muted:#6b7280;--border:#e5e7eb;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
@@ -20,7 +23,7 @@ html{scroll-behavior:smooth;}
 body{background:#fff;min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden;}
 
 /* NAV */
-nav{background:#fff;border-bottom:3px solid var(--gold);padding:0 36px;height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,0.08);}
+nav{background:#fff;border-bottom:4px solid var(--gold);padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,0.08);}
 .nav-brand{display:flex;align-items:center;gap:12px;text-decoration:none;}
 .nav-seal{width:42px;height:42px;background:linear-gradient(135deg,var(--navy),var(--navy-light));border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--gold);border:2px solid var(--gold);}
 .nav-brand-text h1{font-family:'Poppins',sans-serif;font-size:1.1rem;font-weight:800;color:var(--navy);}
@@ -43,9 +46,9 @@ nav{background:#fff;border-bottom:3px solid var(--gold);padding:0 36px;height:64
 .hero h1 span{color:var(--gold);}
 .hero p{font-size:1rem;color:rgba(255,255,255,0.72);line-height:1.8;max-width:560px;margin:0 auto 36px;}
 .hero-ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;}
-.cta-primary{background:var(--gold);color:var(--navy-dark);padding:14px 32px;border-radius:11px;text-decoration:none;font-weight:800;font-size:0.96rem;transition:all 0.22s;box-shadow:0 6px 24px rgba(243,156,18,0.4);display:inline-flex;align-items:center;gap:9px;}
+.cta-primary{background:var(--sentri-gold,#f39c12);color:var(--navy-dark);padding:10px 18px;border-radius:10px;font-size:.9rem;font-weight:800;text-decoration:none;transition:all 0.22s;box-shadow:0 6px 24px rgba(243,156,18,0.4);display:inline-flex;align-items:center;gap:9px;}
 .cta-primary:hover{background:var(--gold-light);transform:translateY(-2px);box-shadow:0 10px 32px rgba(243,156,18,0.5);}
-.cta-secondary{background:rgba(255,255,255,0.1);color:#fff;padding:14px 32px;border-radius:11px;text-decoration:none;font-weight:700;font-size:0.96rem;transition:all 0.22s;border:1.5px solid rgba(255,255,255,0.25);display:inline-flex;align-items:center;gap:9px;}
+.cta-secondary{background:rgba(255,255,255,0.1);color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:700;font-size:.9rem;transition:all 0.22s;border:1.5px solid rgba(255,255,255,0.25);display:inline-flex;align-items:center;gap:9px;}
 .cta-secondary:hover{background:rgba(255,255,255,0.18);transform:translateY(-2px);}
 .hero-stats{display:flex;justify-content:center;gap:40px;margin-top:52px;padding-top:36px;border-top:1px solid rgba(255,255,255,0.1);}
 .stat-num{font-family:'Poppins',sans-serif;font-size:1.9rem;font-weight:800;color:var(--gold);}
@@ -97,7 +100,7 @@ footer{background:var(--navy-dark);color:rgba(255,255,255,0.45);padding:28px 40p
 .footer-brand span{color:#fff;font-weight:700;font-size:0.95rem;}
 
 /* MOBILE NAV */
-.mobile-nav{display:none;flex-direction:column;gap:10px;position:absolute;top:64px;left:0;right:0;background:#fff;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,0.1);z-index:200;border-top:2px solid var(--gold);}
+.mobile-nav{display:none;flex-direction:column;gap:10px;position:absolute;top:60px;left:0;right:0;background:#fff;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,0.1);z-index:200;border-top:2px solid var(--gold);}
 .mobile-nav.open{display:flex;}
 .mobile-nav a{text-decoration:none;padding:11px 16px;border-radius:9px;font-weight:600;color:var(--navy);font-size:0.92rem;border:1.5px solid var(--border);text-align:center;}
 .mobile-nav a.solid{background:var(--navy);color:#fff;border-color:var(--navy);}

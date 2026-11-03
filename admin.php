@@ -1,6 +1,10 @@
 <?php
 ini_set('display_errors', 0);
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/config/session.php';
+// The admin panel owns its own session cookie ('sentri-admin'). Boot it for
+// every request (including the anonymous pre-auth page below) so the sign-in
+// handler below stores its identity in the admin realm.
+sentri_boot_realm('admin');
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
 require_once __DIR__ . '/config/csrf.php';
@@ -11,13 +15,15 @@ require_once __DIR__ . '/config/csrf.php';
 $SENTRI_PORTALS = ['admin' => ['admin']];
 require __DIR__ . '/core/login_handler.php';
 
-if (!isset($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'admin') {
+$sentri_admin_ident = sentri_identity();
+if (!$sentri_admin_ident || ($sentri_admin_ident['role'] ?? '') !== 'admin') {
  ?><!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Restricted</title>
+<title>SenTri Admin — Restricted</title>
+<link rel="icon" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
 <style>
@@ -100,17 +106,31 @@ $total_reports = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=0"
 $total_archived = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=1")->fetch_row()[0];
 $danger_count = $conn->query("SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0")->fetch_row()[0];
 $pending_count = $conn->query("SELECT COUNT(*) FROM users WHERE is_approved=0 AND role NOT IN('community','user','admin')")->fetch_row()[0];
-$first_name = $_SESSION['first_name'];
+$first_name = $sentri_admin_ident['first_name'] ?? 'Admin';
+
+// 30-day report trend (for the Overview chart): reports per day, oldest first.
+$sentri_trend = array_fill(0, 30, 0);
+if ($sentri_res = $conn->query("SELECT DATEDIFF(CURDATE(), DATE(created_at)) AS days_ago, COUNT(*) AS c FROM reports WHERE created_at >= (CURDATE() - INTERVAL 29 DAY) GROUP BY days_ago")) {
+	while ($sentri_row = $sentri_res->fetch_assoc()) {
+		$sentri_ago = (int)$sentri_row['days_ago'];
+		if ($sentri_ago >= 0 && $sentri_ago <= 29) $sentri_trend[29 - $sentri_ago] = (int)$sentri_row['c'];
+	}
+	$sentri_res->close();
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Dashboard - SenTri</title>
+<title>SenTri Admin</title>
 <?= csrf_meta_tag() ?>
+<link rel="icon" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
+<script src="assets/vendor/leaflet/leaflet.js"></script>
+<script src="assets/js/sentri-geo.js"></script>
 <style>
 :root{
  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
@@ -120,7 +140,7 @@ $first_name = $_SESSION['first_name'];
  --bg:#f0f2f7;--card:#fff;
  --sidebar-w:260px;
 }
-*{box-sizing:border-box;margin:0;padding:0;font-family:'Poppins',sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);}
 
 /* ── ANIMATIONS ── */
@@ -153,7 +173,7 @@ body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);}
 
 .nav-section{padding:12px 12px 0;font-size:0.68rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px;}
 .menu{padding:0 10px;display:flex;flex-direction:column;gap:2px;}
-.menu-item{display:flex;align-items:center;gap:11px;padding:11px 13px;text-decoration:none;color:rgba(255,255,255,0.7);font-size:0.875rem;font-weight:500;border-radius:10px;transition:all 0.2s;cursor:pointer;border:none;background:transparent;width:100%;text-align:left;font-family:'Poppins',sans-serif;}
+.menu-item{display:flex;align-items:center;gap:11px;padding:11px 13px;text-decoration:none;color:rgba(255,255,255,0.7);font-size:0.875rem;font-weight:500;border-radius:10px;transition:all 0.2s;cursor:pointer;border:none;background:transparent;width:100%;text-align:left;font-family:'Inter',sans-serif;}
 .menu-item:hover{background:rgba(255,255,255,0.08);color:#fff;}
 .menu-item.active{background:linear-gradient(135deg,rgba(58,141,255,0.25),rgba(28,87,178,0.2));color:#fff;border-left:3px solid var(--blue-light);}
 .menu-item.admin-active{background:linear-gradient(135deg,rgba(124,58,237,0.25),rgba(91,33,182,0.2));border-left-color:var(--admin-light);}
@@ -216,7 +236,7 @@ body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);}
 
 /* ── TAB SYSTEM ── */
 .tab-nav{display:flex;gap:0;background:#f0f2f7;border-radius:12px;padding:4px;margin-bottom:24px;}
-.tab-nav-btn{flex:1;padding:10px 18px;border:none;background:transparent;border-radius:9px;font-size:0.87rem;font-weight:600;cursor:pointer;transition:all 0.25s;color:var(--muted);font-family:'Poppins',sans-serif;display:flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap;}
+.tab-nav-btn{flex:1;padding:10px 18px;border:none;background:transparent;border-radius:9px;font-size:0.87rem;font-weight:600;cursor:pointer;transition:all 0.25s;color:var(--muted);font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap;}
 .tab-nav-btn.active{background:#fff;color:var(--blue);box-shadow:0 2px 8px rgba(0,0,0,0.1);}
 .tab-nav-btn i{font-size:0.85rem;}
 .tab-panel{display:none;animation:fadeInForm 0.3s ease both;}
@@ -225,7 +245,7 @@ body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);}
 
 /* ── FILTERS ── */
 .filter-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;align-items:center;}
-.filter-bar input,.filter-bar select{padding:9px 13px;border:1.5px solid #e0e0e0;border-radius:9px;font-size:0.85rem;outline:none;font-family:'Poppins',sans-serif;transition:0.2s;background:#fafafa;}
+.filter-bar input,.filter-bar select{padding:9px 13px;border:1.5px solid #e0e0e0;border-radius:9px;font-size:0.85rem;outline:none;font-family:'Inter',sans-serif;transition:0.2s;background:#fafafa;}
 .filter-bar input:focus,.filter-bar select:focus{border-color:var(--blue-light);background:#fff;}
 .filter-bar input{flex:1;min-width:180px;}
 .filter-bar select{min-width:140px;}
@@ -249,7 +269,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
 .badge.active{background:#f0fff4;color:var(--green);}
 
 /* ── ACTION BUTTONS ── */
-.act-btn{border:none;border-radius:7px;padding:5px 12px;font-size:0.77rem;cursor:pointer;font-weight:600;transition:all 0.2s;font-family:'Poppins',sans-serif;display:inline-flex;align-items:center;gap:5px;}
+.act-btn{border:none;border-radius:7px;padding:5px 12px;font-size:0.77rem;cursor:pointer;font-weight:600;transition:all 0.2s;font-family:'Inter',sans-serif;display:inline-flex;align-items:center;gap:5px;}
 .act-btn.del{background:#fff0f0;color:var(--red);}
 .act-btn.del:hover{background:var(--red);color:#fff;transform:scale(1.03);}
 .act-btn.restore{background:#f0fff4;color:var(--green);}
@@ -306,6 +326,14 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  .panel{padding:14px;}
  .tab-nav{overflow-x:auto;}
 }
+/* ── TOASTS (solid-fill, consistent with barangay portal) ── */
+.toast-container{position:fixed;bottom:24px;right:24px;z-index:20000;display:flex;flex-direction:column;gap:10px;pointer-events:none;}
+.toast{display:flex;align-items:center;gap:10px;padding:13px 18px;border-radius:12px;font-size:0.84rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,0.18);pointer-events:all;animation:toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1);min-width:260px;max-width:380px;}
+.toast-success{background:#166534;color:#fff;}
+.toast-error{background:#991b1b;color:#fff;}
+.toast-info{background:#1e40af;color:#fff;}
+.toast i{font-size:1rem;flex-shrink:0;}
+@keyframes toastIn{from{opacity:0;transform:translateY(16px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);}}
 .vuln-row{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:16px;margin-top:18px;}
 .vuln-card{background:#f8fbff;border:1px solid #e6effc;border-radius:16px;padding:18px;min-height:120px;display:flex;flex-direction:column;gap:10px;box-shadow:0 3px 18px rgba(15,23,42,0.05);}
 .vuln-card strong{font-size:0.95rem;color:var(--text);}
@@ -380,12 +408,6 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <i class="fas fa-shield-exclamation"></i> Vulnerability Assessment
  </button>
  </nav>
- <div class="nav-section" style="margin-top:16px;">Quick Links</div>
- <nav class="menu">
- <a href="dashboard.php" class="menu-item">
- <i class="fas fa-house"></i> Community Feed
- </a>
- </nav>
  </div>
 
  <div class="sidebar-user">
@@ -395,7 +417,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="name"><?= htmlspecialchars($first_name) ?></div>
  <div class="role"><i class="fas fa-circle" style="font-size:0.5rem;color:#a78bfa;margin-right:4px;"></i>Administrator</div>
  </div>
- <a href="logout.php" class="logout-btn" title="Log Out"><i class="fas fa-right-from-bracket"></i></a>
+ <a href="logout.php?realm=admin" class="logout-btn" title="Log Out"><i class="fas fa-right-from-bracket"></i></a>
  </div>
  </div>
 </aside>
@@ -503,6 +525,28 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <button type="button" onclick="openBackupModal()" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;padding:6px 14px;border-radius:8px;font-size:0.76rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.18s;"><i class="fas fa-database"></i> Backup & DR Snapshots</button>
  <button type="button" onclick="optimizeDatabaseTables(this)" style="background:#f5f3ff;border:1px solid #ddd6fe;color:var(--admin);padding:6px 14px;border-radius:8px;font-size:0.76rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.18s;"><i class="fas fa-wrench"></i> Optimize Tables</button>
  <button type="button" onclick="runAdminDiagnostics(this)" style="background:var(--admin);color:#fff;border:none;padding:6px 14px;border-radius:8px;font-size:0.76rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.18s;"><i class="fas fa-stethoscope"></i> Run System Diagnostics</button>
+ </div>
+ </div>
+ </div>
+ <div class="panel">
+ <div class="panel-header">
+ <div class="panel-title"><i class="fas fa-chart-line"></i> Reports &mdash; Last 30 Days</div>
+ <span style="font-size:0.8rem;color:var(--muted);">Daily report volume</span>
+ </div>
+ <div id="trendChart" style="display:flex;align-items:flex-end;gap:3px;height:140px;"></div>
+ <div id="trendAxis" style="display:flex;gap:3px;font-size:0.68rem;color:var(--muted);border-top:1px solid var(--border);margin-top:4px;padding-top:4px;"></div>
+ </div>
+ <div class="panel">
+ <div class="panel-header">
+ <div class="panel-title"><i class="fas fa-map-location-dot"></i> Incident Map</div>
+ <span style="font-size:0.8rem;color:var(--muted);">City-wide geotagged reports</span>
+ </div>
+ <div style="position:relative;height:360px;border:1px solid var(--border);border-radius:10px;overflow:hidden;z-index:1;">
+ <div id="incidentMap" style="height:100%;width:100%;"></div>
+ <div id="mapEmpty" style="display:none;position:absolute;inset:0;background:rgba(255,255,255,0.92);z-index:500;align-items:center;justify-content:center;flex-direction:column;text-align:center;color:#999;">
+ <i class="fas fa-map-pin" style="font-size:2.2rem;margin-bottom:10px;opacity:0.6;"></i>
+ <p style="font-size:0.88rem;">No geotagged incidents to display.</p>
+ <p style="font-size:0.76rem;">Reports plotted here include GPS coordinates (latitude/longitude).</p>
  </div>
  </div>
  </div>
@@ -721,8 +765,8 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <button class="btn-action approve" onclick="openContactModal()"><i class="fas fa-plus"></i> Add Contact</button>
  </div>
  <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;">
- <input type="text" id="contactSearch" placeholder="Search by name, city..." onkeyup="renderContacts()" style="padding:9px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.87rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;flex:1;min-width:180px;outline:none;">
- <select id="contactTypeFilter" onchange="renderContacts()" style="padding:9px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.87rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;">
+ <input type="text" id="contactSearch" placeholder="Search by name, city..." onkeyup="renderContacts()" style="padding:9px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.87rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;flex:1;min-width:180px;outline:none;">
+ <select id="contactTypeFilter" onchange="renderContacts()" style="padding:9px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.87rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;">
  <option value="">All Types</option>
  <option value="lgu">LGU</option>
  <option value="hospital">Hospital</option>
@@ -809,11 +853,11 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
  <div style="grid-column:1/-1;">
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">Office / Agency Name *</label>
- <input id="c_name" type="text" placeholder="e.g. Imus City Health Office" maxlength="255" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;outline:none;">
+ <input id="c_name" type="text" placeholder="e.g. Imus City Health Office" maxlength="255" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;outline:none;">
  </div>
  <div>
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">Type *</label>
- <select id="c_type" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;">
+ <select id="c_type" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;">
  <option value="lgu">LGU</option>
  <option value="hospital">Hospital</option>
  <option value="traffic">Traffic Mgt.</option>
@@ -825,23 +869,23 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  <div>
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">Barangay <span style="font-weight:400;color:var(--muted);">(blank = city-wide)</span></label>
- <input id="c_barangay" type="text" placeholder="Optional" maxlength="150" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;outline:none;">
+ <input id="c_barangay" type="text" placeholder="Optional" maxlength="150" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;outline:none;">
  </div>
  <div>
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">City / Municipality *</label>
- <input id="c_city" type="text" placeholder="e.g. Imus" maxlength="150" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;outline:none;">
+ <input id="c_city" type="text" placeholder="e.g. Imus" maxlength="150" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;outline:none;">
  </div>
  <div>
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">Province</label>
- <input id="c_province" type="text" placeholder="e.g. Cavite" maxlength="150" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;outline:none;">
+ <input id="c_province" type="text" placeholder="e.g. Cavite" maxlength="150" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;outline:none;">
  </div>
  <div>
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">Contact Number</label>
- <input id="c_phone" type="text" placeholder="e.g. (046) 471-0100" maxlength="50" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;outline:none;">
+ <input id="c_phone" type="text" placeholder="e.g. (046) 471-0100" maxlength="50" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;outline:none;">
  </div>
  <div style="grid-column:1/-1;">
  <label style="font-size:0.8rem;font-weight:600;display:block;margin-bottom:5px;">Contact Email</label>
- <input id="c_email" type="email" placeholder="office@example.gov.ph" maxlength="191" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Poppins',sans-serif;outline:none;">
+ <input id="c_email" type="email" placeholder="office@example.gov.ph" maxlength="191" style="width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.88rem;background:var(--card);color:var(--text);font-family:'Inter',sans-serif;outline:none;">
  </div>
  <div style="grid-column:1/-1;display:flex;align-items:center;gap:10px;">
  <input type="checkbox" id="c_active" checked style="width:16px;height:16px;accent-color:var(--blue);">
@@ -849,8 +893,8 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  </div>
  <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
- <button onclick="closeContactModal()" style="padding:11px 22px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.9rem;cursor:pointer;font-family:'Poppins',sans-serif;font-weight:500;color:var(--text);">Cancel</button>
- <button onclick="saveContact()" id="contactSaveBtn" style="padding:11px 22px;background:linear-gradient(135deg,var(--blue-light,#3a8dff),var(--blue,#1c57b2));color:#fff;border:none;border-radius:10px;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;"><i class="fas fa-floppy-disk"></i> Save</button>
+ <button onclick="closeContactModal()" style="padding:11px 22px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.9rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:500;color:var(--text);">Cancel</button>
+ <button onclick="saveContact()" id="contactSaveBtn" style="padding:11px 22px;background:linear-gradient(135deg,var(--blue-light,#3a8dff),var(--blue,#1c57b2));color:#fff;border:none;border-radius:10px;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-floppy-disk"></i> Save</button>
  </div>
  </div>
  </div>
@@ -864,8 +908,8 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  <div id="deleteModalMessage" style="margin-bottom:18px;color:var(--text);line-height:1.6;">Are you sure you want to delete this flagged account? This action cannot be undone.</div>
  <div style="display:flex;gap:10px;justify-content:flex-end;">
- <button onclick="closeDeleteModal()" style="padding:11px 22px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.9rem;cursor:pointer;font-family:'Poppins',sans-serif;font-weight:500;color:var(--text);">Cancel</button>
- <button onclick="confirmDeleteFlag()" id="confirmDeleteBtn" style="padding:11px 22px;background:#dc2626;color:#fff;border:none;border-radius:10px;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;">Delete</button>
+ <button onclick="closeDeleteModal()" style="padding:11px 22px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.9rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:500;color:var(--text);">Cancel</button>
+ <button onclick="confirmDeleteFlag()" id="confirmDeleteBtn" style="padding:11px 22px;background:#dc2626;color:#fff;border:none;border-radius:10px;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;">Delete</button>
  </div>
  </div>
  </div>
@@ -928,11 +972,33 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div><!-- /content -->
 </div><!-- /main -->
 
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>window.SENTRI_TREND_30D=<?= $sentri_trend_json ?>;</script>
+
 <script>
 let allReports=[], allUsers=[], allLogs=[], allContacts=[], allSecurityScans=[];
 let currentTab='overview';
 let currentLogsPage = 1;
 const logsItemsPerPage = 10;
+
+// ── Toast notifications (replaces alert(); solid-fill style) ─────
+function showToast(message, type){
+ type=type||'info';
+ var icons={success:'fa-circle-check',error:'fa-circle-xmark',info:'fa-circle-info'};
+ var tc=document.getElementById('toastContainer');
+ if(!tc) return;
+ var t=document.createElement('div');
+ t.className='toast toast-'+type;
+ t.innerHTML='<i class="fas '+(icons[type]||'fa-circle-info')+'"></i><span>'+String(message).replace(/\n/g,'<br>')+'</span>';
+ tc.appendChild(t);
+ setTimeout(function(){
+ t.style.animation='none';t.style.opacity='0';t.style.transform='translateY(8px) scale(0.96)';
+ t.style.transition='all 0.25s ease';
+ setTimeout(function(){if(t.parentNode)tc.removeChild(t);},280);
+ },3600);
+}
 
 // ── Sidebar ──────────────────────────────────────────────────
 function openSidebar(){
@@ -958,6 +1024,8 @@ const tabTitles = {
  contacts:'<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
 };
 let pendingLoaded = false;
+// Valid deep-linkable tabs (hash routing: #tab=users, #tab=audit, ...)
+const SENTRI_VALID_TABS = ['overview','users','pending','posts','audit','logs','security','contacts'];
 function showTab(name){
  currentTab=name;
  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
@@ -965,6 +1033,13 @@ function showTab(name){
  document.getElementById('tab-'+name).classList.add('active');
  document.getElementById('nav'+name.charAt(0).toUpperCase()+name.slice(1))?.classList.add('active');
  document.getElementById('pageTitle').innerHTML=tabTitles[name];
+ // Deep-linkable tab state (book-markable / shareable / reload-safe)
+ try{history.replaceState(null,'','#tab='+name);}catch(e){}
+ // Re-measure and re-fit the Leaflet map if it was initialized while hidden
+ if(name==='overview'&&incidentMap) setTimeout(()=>{
+ incidentMap.invalidateSize();
+ if(incidentMapLayer&&incidentMapLayer.getLayers().length) incidentMap.fitBounds(L.featureGroup(incidentMapLayer.getLayers()).getBounds().pad(0.25));
+ },60);
  
  // Lazy load
  if(name==='users' && allUsers.length===0) loadUsers();
@@ -973,12 +1048,8 @@ function showTab(name){
  if(name==='audit') loadAuditLogs();
  if(name==='logs' && allLogs.length===0) loadLogs();
  if(name==='security') loadSecurityMonitor();
- if(name==='vulnerabilities') loadVulnerabilities();
  if(name==='contacts' && allContacts.length===0) loadContacts();
  
- // ←←← ADD THIS LINE FOR SECURITY MONITOR
- if(name==='security') loadSecurityMonitor();
-
  if(window.innerWidth<=900) closeSidebar();
 }
 
@@ -1004,7 +1075,80 @@ async function loadOverview(){
  }).join('');
  document.getElementById('overviewLoading').style.display='none';
  document.getElementById('overviewTable').style.display='table';
+ renderIncidentMap();
  }
+}
+
+// ── CITY-WIDE INCIDENT MAP (Leaflet) ─────────────────────────
+let incidentMap=null, incidentMapLayer=null, incidentBrgyLayer=null, incidentBrgyAdding=false;
+function renderIncidentMap(){
+ const mapEl=document.getElementById('incidentMap');
+ if(!mapEl || !window.L) return;
+ // Lazily create the map once.
+ if(!incidentMap){
+ incidentMap=L.map('incidentMap').setView([14.4,120.9],11);
+ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap contributors'}).addTo(incidentMap);
+ incidentMapLayer=L.layerGroup().addTo(incidentMap);
+ }
+ incidentMapLayer.clearLayers();
+ const emptyEl=document.getElementById('mapEmpty');
+ const pts=allReports.filter(r=>r.latitude!=null&&r.longitude!=null);
+ if(emptyEl) emptyEl.style.display=pts.length?'none':'flex';
+ pts.forEach(r=>{
+ const place=[r.barangay||r.location_name||'', r.city].filter(Boolean).join(', ');
+ L.marker([r.latitude,r.longitude]).addTo(incidentMapLayer)
+ .bindPopup(`<strong>${esc(r.title)}</strong><br>Status: <span class="badge ${r.status}">${r.status}</span><br><span style="color:#555;">${esc(place)}</span>`);
+ });
+ if(pts.length){
+ incidentMap.fitBounds(L.featureGroup(incidentMapLayer.getLayers()).getBounds().pad(0.25));
+ }
+ // Official barangay perimeters: admin gets city-wide context around the plotted reports.
+ if(window.SentriGeo && !incidentBrgyLayer && !incidentBrgyAdding){
+ incidentBrgyAdding=true;
+ const normName=s=>String(s||'').toLowerCase().replace(/^(brgy\.?|barangay)\s*/,'').replace(/[^a-z0-9]/g,'');
+ const counts={};
+ allReports.forEach(r=>{
+ if(r.is_archived) return;
+ const n=normName(r.barangay);
+ if(n) counts[n]=(counts[n]||0)+1;
+ });
+ SentriGeo.addBarangayOverlay(incidentMap, {
+ onEach: function(feature, layer){
+ const props=(feature&&feature.properties)||{};
+ const name=props.name||props.NAME||props.Barangay||'Barangay';
+ const c=counts[normName(name)]||0;
+ layer.bindPopup(`<strong>${esc(name)}</strong><br><span style="color:#555;">${c} report${c===1?'':'s'} tagged to this barangay</span>`);
+ }
+ }).then(l=>{
+ incidentBrgyLayer=(l||true);
+ incidentBrgyAdding=false;
+ }).catch(()=>{
+ incidentBrgyAdding=false;
+ });
+ }
+}
+
+// ── 30-DAY REPORT TREND (inline CSS bar chart) ───────────────
+function renderTrendChart(){
+ const wrap=document.getElementById('trendChart'); if(!wrap) return;
+ const axis=document.getElementById('trendAxis');
+ let counts=(window.SENTRI_TREND_30D && window.SENTRI_TREND_30D.length===30) ? window.SENTRI_TREND_30D : Array.from({length:30},()=>0);
+ const max=Math.max(1,...counts);
+ const fmt=d=>d.toLocaleDateString('en-PH',{month:'short',day:'numeric'});
+ let bars='',cells='';
+ for(let i=0;i<30;i++){
+ const d=new Date(); d.setDate(d.getDate()-(29-i));
+ const v=counts[i]||0;
+ const h=Math.max(2,Math.round(v/max*100));
+ bars+=`<div style="flex:1;display:flex;align-items:flex-end;height:100%;" title="${fmt(d)} — ${v} report${v===1?'':'s'}">`+
+ `<div style="width:100%;height:${h}%;background:${v>0?'var(--blue)':'#e3e8f2'};border-radius:2px 2px 0 0;${v>0&&i>=23?'opacity:0.85;':''}"></div></div>`;
+ cells+=`<div style="flex:1;text-align:center;white-space:nowrap;overflow:visible;">`+
+ (i===0?'<span style="min-width:0;text-align:left;display:block;">4 wks</span>':
+ i===7?'3 wks':i===14?'2 wks':i===21?'1 wk':i===29?'<span style="color:var(--blue);font-weight:700;">Today</span>':'')+
+ `</div>`;
+ }
+ wrap.innerHTML=bars;
+ if(axis) axis.innerHTML=cells;
 }
 
 // ── USERS ─────────────────────────────────────────────────────
@@ -1060,7 +1204,7 @@ async function approveUser(uid){
  const res=await fetch('api/reports.php',{method:'POST',body:fd});
  const data=await res.json();
  if(data.status==='success'){ const u=allUsers.find(x=>x.id==uid); if(u){u.is_approved=1;} renderUsers(); }
- else alert(data.message||'Failed.');
+ else showToast(data.message||'Failed.','error');
 }
 async function rejectUser(uid, name){
  if(!confirm(`Reject and remove account for "${name}"? This cannot be undone.`)) return;
@@ -1068,7 +1212,7 @@ async function rejectUser(uid, name){
  const res=await fetch('api/reports.php',{method:'POST',body:fd});
  const data=await res.json();
  if(data.status==='success'){ allUsers=allUsers.filter(u=>u.id!=uid); renderUsers(); }
- else alert(data.message||'Failed.');
+ else showToast(data.message||'Failed.','error');
 }
 
 // ── CREATE OFFICIAL ACCOUNT ──────────────────────────────────
@@ -1139,7 +1283,7 @@ async function deleteUser(uid, name){
  allUsers=allUsers.filter(u=>u.id!=uid);
  renderUsers();
  document.querySelector('.stat-num').textContent=allUsers.length;
- } else alert(data.message||'Failed to delete user.');
+ } else showToast(data.message||'Failed to delete user.','error');
 }
 document.getElementById('userSearch').addEventListener('input',renderUsers);
 document.getElementById('userRoleFilter').addEventListener('change',renderUsers);
@@ -1197,7 +1341,7 @@ async function approvePending(uid){
  if(remaining===0){ document.getElementById('pendingTable').style.display='none'; document.getElementById('pendingEmpty').style.display='block'; }
  // refresh user list if loaded
  if(allUsers.length>0){ const u=allUsers.find(x=>x.id==uid); if(u) u.is_approved=1; renderUsers(); }
- } else alert(data.message||'Failed.');
+ } else showToast(data.message||'Failed.','error');
 }
 async function rejectPending(uid,name){
  if(!confirm('Reject and permanently delete the account for "'+name+'"?')) return;
@@ -1210,7 +1354,7 @@ async function rejectPending(uid,name){
  const badge=document.getElementById('pendingNavBadge'); if(badge){ if(remaining>0) badge.textContent=remaining; else badge.style.display='none'; }
  if(remaining===0){ document.getElementById('pendingTable').style.display='none'; document.getElementById('pendingEmpty').style.display='block'; }
  allUsers=allUsers.filter(u=>u.id!=uid); renderUsers();
- } else alert(data.message||'Failed.');
+ } else showToast(data.message||'Failed.','error');
 }
 
 // ── POSTS ─────────────────────────────────────────────────────
@@ -1290,7 +1434,7 @@ async function postAction(id, type){
  const r=allReports.find(x=>x.id==id);
  if(r) r.is_archived=type==='delete'?1:0;
  renderPosts();
- } else alert(data.message||'Action failed.');
+ } else showToast(data.message||'Action failed.','error');
 }
 document.getElementById('postSearch').addEventListener('input',renderPosts);
 document.getElementById('postStatus').addEventListener('change',renderPosts);
@@ -1404,7 +1548,7 @@ function goToLogsPage(page){
  if(table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function esc(s){if(!s)return'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 // ══════════════════════════════════════════════════════════════
 // EMERGENCY CONTACTS
@@ -1527,11 +1671,11 @@ async function confirmDeleteFlag() {
  closeDeleteModal();
  await loadSecurityMonitor();
  } else {
- alert(data.message || 'Failed to delete the entry.');
+ showToast(data.message || 'Failed to delete the entry.','error');
  }
  } catch (e) {
  console.error(e);
- alert('Unable to delete entry. Please try again.');
+ showToast('Unable to delete entry. Please try again.','error');
  } finally {
  button.disabled = false;
  button.textContent = 'Delete';
@@ -1593,7 +1737,7 @@ async function deleteContact(id, name){
  const res = await fetch('api/contacts.php',{method:'POST',body:fd});
  const data = await res.json();
  if(data.status==='success'){ allContacts=[]; loadContacts(); }
- else alert(data.message||'Could not delete.');
+ else showToast(data.message||'Could not delete.','error');
 }
 
 // Close contacts modal when clicking outside
@@ -1606,8 +1750,14 @@ document.getElementById('deleteModalOverlay').addEventListener('click', function
 });
 
 // ── INIT ─────────────────────────────────────────────────────
+renderTrendChart();
 loadOverview();
 loadPending();
+// Deep-link restore: activate the hash tab if valid, else default Overview.
+(function(){
+ var hashTab=(location.hash.match(/^#tab=([a-z]+)/)||[])[1];
+ if(hashTab && SENTRI_VALID_TABS.includes(hashTab) && hashTab!=='overview') showTab(hashTab);
+})();
 
 // ── AUDIT LOG ─────────────────────────────────────────────────────────────
 let allAuditLogs = [];
@@ -1869,11 +2019,11 @@ async function sendDeleteFlags(flagIds) {
  selectedSecurityFlags.clear();
  await loadSecurityMonitor();
  } else {
- alert(data.message || 'Failed to delete flagged entries.');
+ showToast(data.message || 'Failed to delete flagged entries.','error');
  }
  } catch (e) {
  console.error(e);
- alert('Unable to delete flagged entries. Please try again.');
+ showToast('Unable to delete flagged entries. Please try again.','error');
  } finally {
  if (button) { button.disabled = false; button.innerHTML = '<i class="fas fa-trash"></i> Delete Selected'; }
  }
@@ -2026,11 +2176,11 @@ async function runVulnerabilityAssessment() {
  allSecurityScans.unshift(normalized);
  renderVulnerabilities();
  } else {
- alert(data.message || 'Assessment failed.');
+ showToast(data.message || 'Assessment failed.','error');
  }
  } catch (error) {
  console.error('Vulnerability assessment failed:', error);
- alert('Unable to run the assessment. Check console for details.');
+ showToast('Unable to run the assessment. Check console for details.','error');
  }
  if (button) { button.disabled = false; button.innerHTML = '<i class="fas fa-play"></i> Run Assessment'; }
 }
@@ -2044,7 +2194,7 @@ async function runAdminDiagnostics(btn) {
  btn.disabled = false;
  btn.innerHTML = '<i class="fas fa-check"></i> Diagnostics Complete';
  setTimeout(() => { btn.innerHTML = orig; }, 3000);
- alert('System Diagnostic Report:\n• MariaDB InnoDB status: HEALTHY (Latency: 1.2ms)\n• Table fragmentation: 0.00% (Optimized)\n• PHP OPCache: ACTIVE (Hit Rate: 99.4%)\n• /uploads directory permissions: 0755 READ/WRITE OK\n• CSRF Token Guard & Rate Limiting: ACTIVE');
+ showToast('System Diagnostic Report:\n• MariaDB InnoDB status: HEALTHY (Latency: 1.2ms)\n• Table fragmentation: 0.00% (Optimized)\n• PHP OPCache: ACTIVE (Hit Rate: 99.4%)\n• /uploads directory permissions: 0755 READ/WRITE OK\n• CSRF Token Guard & Rate Limiting: ACTIVE','success');
 }
 
 async function optimizeDatabaseTables(btn) {
@@ -2056,7 +2206,7 @@ async function optimizeDatabaseTables(btn) {
  btn.disabled = false;
  btn.innerHTML = '<i class="fas fa-check"></i> Tables Defragmented';
  setTimeout(() => { btn.innerHTML = orig; }, 3000);
- alert('Database Maintenance Success:\n• Analyzed tables: users, reports, emergency_contacts, report_votes, report_comments\n• Overhead reclaimed: 14.8 MB\n• Index buffer pool refreshed & defragmented successfully.');
+ showToast('Database Maintenance Success:\n• Analyzed tables: users, reports, emergency_contacts, report_votes, report_comments\n• Overhead reclaimed: 14.8 MB\n• Index buffer pool refreshed & defragmented successfully.','success');
 }
 
 function openBackupModal(){
@@ -2093,7 +2243,7 @@ async function createInstantSnapshot(btn){
  };
  snapshotList.unshift(newSnap);
  renderSnapshotTable();
- alert(`Database snapshot generated successfully:\nFile: ${newSnap.name}\nSize: 14.5 MB\nIntegrity: SHA-256 Verified.`);
+ showToast(`Database snapshot generated successfully:\nFile: ${newSnap.name}\nSize: 14.5 MB\nIntegrity: SHA-256 Verified.`,'success');
 }
 
 function renderSnapshotTable(){
@@ -2106,8 +2256,8 @@ function renderSnapshotTable(){
  <td><code style="font-size:0.72rem;background:#f8fafc;padding:2px 5px;border:1px solid #e2e8f0;border-radius:4px;">${s.sha}</code></td>
  <td style="font-size:0.76rem;color:var(--muted);">${s.date}</td>
  <td>
- <button type="button" onclick="alert('Downloading SQL dump archive: ${s.name}');" style="padding:4px 8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-download"></i></button>
- <button type="button" onclick="alert('Snapshot Integrity Verified: Checksum matches MariaDB InnoDB binary log.');" style="padding:4px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-check"></i></button>
+ <button type="button" onclick="showToast('Downloading SQL dump archive: ${s.name}','info')" style="padding:4px 8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-download"></i></button>
+ <button type="button" onclick="showToast('Snapshot Integrity Verified: Checksum matches MariaDB InnoDB binary log.','info')" style="padding:4px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-check"></i></button>
  </td>
  </tr>
  `).join('');
@@ -2129,7 +2279,7 @@ function flushRateLimits(btn){
  setTimeout(()=>{
  btn.disabled = false;
  btn.innerHTML = orig;
- alert('Security Cache Flushed: All temporary rate-limit counters and edge token buckets reset.');
+ showToast('Security Cache Flushed: All temporary rate-limit counters and edge token buckets reset.','success');
  }, 700);
 }
 
@@ -2138,7 +2288,7 @@ function unbanIP(ip, btn){
  btn.style.background = '#f1f5f9';
  btn.style.color = '#94a3b8';
  btn.innerHTML = '<i class="fas fa-check"></i> Whitelisted';
- alert(`Security Policy Updated: IP ${ip} removed from blacklist and added to trusted monitoring list.`);
+ showToast(`Security Policy Updated: IP ${ip} removed from blacklist and added to trusted monitoring list.`,'success');
 }
 </script>
 
@@ -2175,8 +2325,8 @@ function unbanIP(ip, btn){
  <td style="padding:10px 12px;"><code style="font-size:0.72rem;background:#f8fafc;padding:2px 5px;border:1px solid #e2e8f0;border-radius:4px;">8f3a9e...b210</code></td>
  <td style="font-size:0.76rem;color:var(--muted);white-space:nowrap;padding:10px 12px;">Aug 25, 2026 00:00</td>
  <td style="white-space:nowrap;padding:10px 12px;">
- <button type="button" onclick="alert('Downloading SQL dump archive: sentri_db_auto_2026-08-25_0000.sql.gz');" style="padding:4px 8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-download"></i></button>
- <button type="button" onclick="alert('Snapshot Integrity Verified: Checksum matches MariaDB InnoDB binary log.');" style="padding:4px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-check"></i></button>
+ <button type="button" onclick="showToast('Downloading SQL dump archive: sentri_db_auto_2026-08-25_0000.sql.gz','info')" style="padding:4px 8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-download"></i></button>
+ <button type="button" onclick="showToast('Snapshot Integrity Verified: Checksum matches MariaDB InnoDB binary log.','info')" style="padding:4px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-check"></i></button>
  </td>
  </tr>
  <tr>
@@ -2185,8 +2335,8 @@ function unbanIP(ip, btn){
  <td style="padding:10px 12px;"><code style="font-size:0.72rem;background:#f8fafc;padding:2px 5px;border:1px solid #e2e8f0;border-radius:4px;">4c7d1a...f902</code></td>
  <td style="font-size:0.76rem;color:var(--muted);white-space:nowrap;padding:10px 12px;">Aug 24, 2026 18:30</td>
  <td style="white-space:nowrap;padding:10px 12px;">
- <button type="button" onclick="alert('Downloading SQL dump archive: sentri_db_pre_deploy_2026-08-24_1830.sql.gz');" style="padding:4px 8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-download"></i></button>
- <button type="button" onclick="alert('Snapshot Integrity Verified: Checksum matches MariaDB InnoDB binary log.');" style="padding:4px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-check"></i></button>
+ <button type="button" onclick="showToast('Downloading SQL dump archive: sentri_db_pre_deploy_2026-08-24_1830.sql.gz','info')" style="padding:4px 8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-download"></i></button>
+ <button type="button" onclick="showToast('Snapshot Integrity Verified: Checksum matches MariaDB InnoDB binary log.','info')" style="padding:4px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;"><i class="fas fa-check"></i></button>
  </td>
  </tr>
  </tbody>

@@ -1,12 +1,17 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+// Realm-scoped sessions: Security Monitor is admin's surface. Prefer the admin
+// realm explicitly — including 'lgu' here would mis-resolve to a gov session
+// when an admin is simultaneously signed into the government portal.
+sentri_boot_auto_realm(['admin']);
 require __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/csrf.php';
 csrf_validate();
 
 header('Content-Type: application/json');
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+$ident = sentri_identity();
+if (!$ident || ($ident['role'] ?? '') !== 'admin') {
  echo json_encode(['status' => 'error', 'message' => 'Unauthorized']);
  exit;
 }

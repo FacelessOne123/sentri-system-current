@@ -3,10 +3,14 @@
  * SenTri - Nominatim Reverse Geocode Proxy
  * Routes Nominatim requests server-side to bypass browser CORS restrictions.
  */
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+// Community realm is the safe default for this proxy: it only needs a signed-in
+// identity as a rate-limiting gate for the shared Nominatim quota. Should gov
+// portals ever need it, switch to sentri_boot_auto_realm(null) instead.
+sentri_boot_realm('community');
 header('Content-Type: application/json');
 
-if (!isset($_SESSION['user_id'])) {
+if (!sentri_identity()) {
  echo json_encode(['address' => []]); exit;
 }
 

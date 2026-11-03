@@ -1,6 +1,7 @@
 <?php
 ob_start();
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
@@ -10,7 +11,7 @@ require_once __DIR__ . '/config/auth.php';
 $isPost = ($_SERVER['REQUEST_METHOD'] === 'POST');
 
 // Only redirect logged-in users on normal page loads, never on the AJAX POST
-if (!$isPost && isset($_SESSION['user_id'])) {
+if (!$isPost && sentri_identity() !== null) {
     redirect_to_portal();
     exit;
 }
@@ -79,13 +80,15 @@ if ($isPost) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Reset Password - SenTri</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="assets/vendor/sentri-ui.css">
 <style>
-:root{--blue:#1c57b2;--blue-light:#3a8dff;--text:#1a1a2e;--muted:#666;}
-*{box-sizing:border-box;margin:0;padding:0;font-family:'Poppins',sans-serif;}
+:root{--blue:#2563eb;--blue-light:#3b82f6;--text:#1a1a2e;--muted:#666;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
 body{background:#0a0f1e;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
 .bg-canvas{position:fixed;inset:0;z-index:0;overflow:hidden;}
 .bg-canvas::before{content:'';position:absolute;width:600px;height:600px;background:radial-gradient(circle,rgba(58,141,255,0.12) 0%,transparent 70%);top:-200px;left:-100px;animation:drift1 9s ease-in-out infinite alternate;}
@@ -100,23 +103,23 @@ body{background:#0a0f1e;min-height:100vh;display:flex;align-items:center;justify
 .brand-icon{width:38px;height:38px;background:linear-gradient(135deg,var(--blue-light),var(--blue));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:#fff;}
 .brand-name{font-size:1.3rem;font-weight:800;color:var(--text);}
 .icon-wrap{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.8rem;margin-bottom:20px;}
-.icon-wrap.ok{background:#e8f5e9;color:#38a169;}
-.icon-wrap.err{background:#ffebee;color:#c62828;}
+.icon-wrap.ok{background:#e8f5e9;color:var(--sentri-safe);}
+.icon-wrap.err{background:#ffebee;color:var(--sentri-danger);}
 h1{font-size:1.45rem;font-weight:800;color:var(--text);margin-bottom:8px;letter-spacing:-0.4px;}
 p.sub{font-size:0.9rem;color:var(--muted);line-height:1.7;margin-bottom:24px;}
 .form-group{margin-bottom:16px;position:relative;}
 .form-group label{display:block;font-size:0.82rem;font-weight:600;color:#444;margin-bottom:6px;}
-.form-group input{width:100%;padding:12px 15px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:0.93rem;outline:none;font-family:'Poppins',sans-serif;background:#fafafa;transition:all 0.2s;}
+.form-group input{width:100%;padding:12px 15px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:0.93rem;outline:none;font-family:'Inter',sans-serif;background:#fafafa;transition:all 0.2s;}
 .form-group input:focus{border-color:var(--blue-light);background:#fff;box-shadow:0 0 0 4px rgba(58,141,255,0.1);}
 .show-btn{position:absolute;right:13px;bottom:12px;font-size:0.72rem;color:var(--blue);cursor:pointer;font-weight:700;user-select:none;}
-.btn-primary{width:100%;background:linear-gradient(135deg,var(--blue-light),var(--blue));color:#fff;border:none;padding:13px;border-radius:10px;font-size:0.96rem;font-weight:700;cursor:pointer;transition:all 0.25s;font-family:'Poppins',sans-serif;}
+.btn-primary{width:100%;background:var(--sentri-primary);color:#fff;border:none;padding:13px;border-radius:10px;font-size:0.96rem;font-weight:700;cursor:pointer;transition:all 0.25s;font-family:'Inter',sans-serif;}
 .btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(28,87,178,0.4);}
 .btn-primary:disabled{opacity:0.6;cursor:not-allowed;transform:none;}
 .btn-ghost-link{display:block;text-align:center;margin-top:16px;font-size:0.85rem;color:var(--blue);font-weight:600;text-decoration:none;}
 .btn-ghost-link:hover{text-decoration:underline;}
 .msg{padding:12px 16px;border-radius:9px;font-size:0.85rem;margin-bottom:16px;display:none;text-align:center;font-weight:500;}
-.msg.success{background:#e8f5e9;color:#2e7d32;}
-.msg.error{background:#ffebee;color:#c62828;}
+.msg.success{background:#e8f5e9;color:var(--sentri-safe);}
+.msg.error{background:#ffebee;color:var(--sentri-danger);}
 .pw-strength{height:4px;border-radius:4px;margin-top:6px;background:#eee;overflow:hidden;}
 .pw-strength-bar{height:100%;border-radius:4px;transition:all 0.3s;}
 .pw-rules{font-size:0.76rem;color:#aaa;margin-top:4px;}
@@ -149,14 +152,14 @@ p.sub{font-size:0.9rem;color:var(--muted);line-height:1.7;margin-bottom:24px;}
  <input type="password" id="confirm_password" name="confirm_password" placeholder="Repeat your password" required>
  <span class="show-btn" onclick="togglePw('confirm_password',this)">SHOW</span>
  </div>
- <button class="btn-primary" type="submit" id="submitBtn"><i class="fas fa-key"></i> Reset Password</button>
+ <button class="btn-primary sentri-btn-primary" type="submit" id="submitBtn"><i class="fas fa-key"></i> Reset Password</button>
  </form>
 
  <?php else: ?>
  <div class="icon-wrap err"><i class="fas fa-triangle-exclamation"></i></div>
  <h1>Link Expired or Invalid</h1>
  <p class="sub">This password reset link is no longer valid. Links expire after 1 hour. Please request a new one.</p>
- <a href="forgot_password.php" class="btn-primary" style="display:block;text-align:center;text-decoration:none;padding:13px;border-radius:10px;color:#fff;">
+ <a href="forgot_password.php" class="btn-primary sentri-btn-primary" style="display:block;text-align:center;padding:13px;">
  <i class="fas fa-paper-plane"></i> Request New Reset Link
  </a>
  <?php endif; ?>
