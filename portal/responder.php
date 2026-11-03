@@ -1,12 +1,14 @@
 <?php
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+sentri_boot_realm('gov');
 require_once __DIR__ . '/../config/auth.php';
 require_role(['first_responder']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 
-$uid = (int)$_SESSION['user_id'];
-$fname = $_SESSION['first_name'];
+$ident = sentri_identity() ?? [];
+$uid = (int)($ident['user_id'] ?? 0);
+$fname = $ident['first_name'] ?? '';
 $view = $_GET['view'] ?? 'queue';
 $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
 $has_accepted_at = sentri_table_has_column($conn, 'reports', 'accepted_at');
@@ -140,8 +142,7 @@ if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['
  $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
  }
  $su->execute(); $su->close();
- $_SESSION['first_name'] = htmlspecialchars($p_fname, ENT_QUOTES,'UTF-8');
- $fname=$_SESSION['first_name']; $unit=$p_org?:$unit; $area=$p_muni?:$area; $pos=$p_pos?:$pos;
+ $fname = htmlspecialchars($p_fname, ENT_QUOTES,'UTF-8'); $unit=$p_org?:$unit; $area=$p_muni?:$area; $pos=$p_pos?:$pos;
  $profile_msg = 'success:Profile updated successfully.';
  }
  // Refresh profile vars
@@ -327,9 +328,15 @@ tr:hover td{background:#fafafa;}
 .toast-error{background:#991b1b;color:#fff;}
 .toast-info{background:#1e40af;color:#fff;}
 .toast i{font-size:1rem;flex-shrink:0;}
+/* GPS accuracy chips + assignment geo badges */
+.acc-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:0.7rem;font-weight:800;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;white-space:nowrap;}
+.acc-chip.poor{background:#fef2f2;color:#b91c1c;border-color:#fecaca;}
+.brgy-badge{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:0.66rem;font-weight:700;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;}
+.dist-badge{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:10px;background:#f8fafc;color:#374151;border:1px solid var(--border);font-size:0.66rem;font-weight:700;white-space:nowrap;}
 </style>
 <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
 <script src="../assets/vendor/leaflet/leaflet.js"></script>
+<script src="../assets/js/sentri-geo.js"></script>
 </head>
 <body>
 <div class="toast-container" id="toastContainer"></div>
@@ -364,7 +371,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-avatar"><?= strtoupper(substr($fname,0,1)) ?></div>
  <div style="min-width:0;"><div class="sb-uname"><?= htmlspecialchars($fname) ?></div><div class="sb-upos"><?= htmlspecialchars($pos) ?></div></div>
  </div>
- <a href="../logout.php" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
+ <a href="../logout.php?realm=gov" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
  </div>
 </aside>
 
@@ -418,6 +425,7 @@ tr:hover td{background:#fafafa;}
  <div class="card-header">
  <h3><i class="fas fa-location-crosshairs" style="color:var(--red-light);margin-right:6px;"></i>My GPS Location</h3>
  <span class="card-meta" id="gpsStatus"><?= $saved_gps_lat !== null && $saved_gps_lng !== null ? 'Saved on profile' : 'Not saved yet' ?></span>
+ <span class="acc-chip" id="gpsAccChip" style="display:none;" title="GPS accuracy (higher precision &le; 50m)"></span>
  </div>
  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
  <div style="min-width:0;">
@@ -586,6 +594,9 @@ tr:hover td{background:#fafafa;}
  <?php if(!empty($r['resolved_at'])): ?><span class="pill" style="background:#f0fdf4;color:#166534;">Resolved</span><?php else: ?><span class="pill" style="background:#fef2f2;color:#991b1b;">Unresolved</span><?php endif; ?>
  <span><i class="fas fa-location-dot"></i> <?= htmlspecialchars($r['barangay'] ?? $r['city'] ?? '') ?></span>
  <span><?= date('M j, g:ia', strtotime($r['created_at'])) ?></span>
+ <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
+ <span class="geo-annot" data-lat="<?= (float)$r['latitude'] ?>" data-lng="<?= (float)$r['longitude'] ?>" title="Detected barangay &amp; distance to your saved GPS"></span>
+ <?php endif; ?>
  <?php if($r['latitude']): ?>
  <a class="map-link" href="javascript:void(0)" onclick="viewOnMap(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>, <?= htmlspecialchars(json_encode($r['title'] ?? ''), ENT_QUOTES, 'UTF-8') ?>)"><i class="fas fa-map-pin"></i> View Map</a>
  <?php endif; ?>
@@ -827,7 +838,9 @@ tr:hover td{background:#fafafa;}
  m.addTo(rmap); rMarkers.push(m);
  });
  if(rMarkers.length>0){var rg=L.featureGroup(rMarkers);rmap.fitBounds(rg.getBounds().pad(0.2));}
- else{rmap.setView([14.5995,120.9842],12);}
+ else{rmap.setView([14.4240,120.9215],12);}
+ // Official Imus barangay perimeters (thin blue outlines; city-wide context, no per-name highlight).
+ if(window.SentriGeo){ SentriGeo.addBarangayOverlay(rmap).catch(function(){}); }
  function filterRespMap(s,btn){
  document.querySelectorAll('.resp-filter-btn').forEach(function(b){b.className='resp-filter-btn';});
  btn.classList.add('active-'+s);
@@ -860,33 +873,41 @@ function setGpsText(lat, lng, saved){
  if(status){ status.textContent = saved ? 'Saved on profile' : 'Current location'; }
 }
 
+function updateAccChip(el, acc){
+ if(!el) return false;
+ if(typeof acc !== 'number' || !isFinite(acc) || acc <= 0){ el.style.display='none'; return false; }
+ el.style.display='inline-flex';
+ el.textContent = '\u00b1' + Math.max(1, Math.round(acc)) + 'm';
+ if(el.classList) el.classList.toggle('poor', acc > 50);
+ return acc <= 50;
+}
+
 async function captureMyGps(btn){
- if(!navigator.geolocation){ showRespToast('Geolocation is not supported on this device.', 'error'); return; }
  var prev = btn.innerHTML; btn.disabled = true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating';
- navigator.geolocation.getCurrentPosition(async function(pos){
- var lat = pos.coords.latitude;
- var lng = pos.coords.longitude;
- responderGps.lat = lat; responderGps.lng = lng;
- setGpsText(lat, lng, false);
  try{
- var fd = new FormData(); fd.append('action','save_gps'); fd.append('latitude', lat); fd.append('longitude', lng);
- var res = await fetch('../api/reports.php', {method:'POST', body:fd});
- var data = await res.json();
- if(data.status==='success'){
- responderGps.lat = data.lat; responderGps.lng = data.lng;
- setGpsText(data.lat, data.lng, true);
- showRespToast('GPS location saved.', 'success');
- } else {
- showRespToast(data.message || 'Could not save GPS location.', 'error');
- }
+  var pos = await SentriGeo.getUserLocation({});
+  var lat = pos.lat, lng = pos.lng, acc = pos.accuracy;
+  responderGps.lat = lat; responderGps.lng = lng; responderGps.acc = acc;
+  setGpsText(lat, lng, false);
+  updateAccChip(document.getElementById('gpsAccChip'), acc);
+  try{
+  var fd = new FormData(); fd.append('action','save_gps'); fd.append('latitude', lat); fd.append('longitude', lng);
+  var res = await fetch('../api/reports.php', {method:'POST', body:fd});
+  var data = await res.json();
+  if(data.status==='success'){
+  responderGps.lat = data.lat; responderGps.lng = data.lng;
+  setGpsText(data.lat, data.lng, true);
+  showRespToast('GPS location saved.', 'success');
+  } else {
+  showRespToast(data.message || 'Could not save GPS location.', 'error');
+  }
+  } catch(e){
+  showRespToast('Could not save GPS location.', 'error');
+  }
  } catch(e){
- showRespToast('Could not save GPS location.', 'error');
+  showRespToast((e && e.message) ? e.message : 'Location access was denied.', 'error');
  }
  btn.disabled = false; btn.innerHTML = prev;
- }, function(){
- btn.disabled = false; btn.innerHTML = prev;
- showRespToast('Location access was denied.', 'error');
- }, {enableHighAccuracy:true, timeout:12000, maximumAge:0});
 }
 
 var navMap=null, navLayer=null, navWatchId=null, navHeading=0, navOrigMarker=null, navArrived=false, navDest=null, navReportId=null;
@@ -900,13 +921,16 @@ function ensureNavMap(){
  document.getElementById('navMapInner').style.transform='translate(-50%,-50%) rotate(0deg)';
 }
 function haversine(lat1,lon1,lat2,lon2){
- var R=6371000, toRad=function(d){return d*Math.PI/180;};
- var dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
- var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
- return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+ return SentriGeo.haversine(lat1,lon1,lat2,lon2);
+}
+// Normalize a SentriGeo fix ({lat,lng,accuracy}) or a raw Position into one shape.
+function fixParts(fix){
+ if(!fix) return null;
+ if(fix.coords) return {lat:fix.coords.latitude, lng:fix.coords.longitude, accuracy:fix.coords.accuracy, heading:(typeof fix.coords.heading==='number'&&!isNaN(fix.coords.heading))?fix.coords.heading:null};
+ return {lat:fix.lat, lng:fix.lng, accuracy:fix.accuracy, heading:(typeof fix.heading==='number'&&!isNaN(fix.heading))?fix.heading:null};
 }
 function stopNavTracking(){
- if(navWatchId!==null){ navigator.geolocation.clearWatch(navWatchId); navWatchId=null; }
+ if(navWatchId!==null){ var wid=navWatchId; navWatchId=null; try{ Promise.resolve(SentriGeo.clearWatch(wid)).catch(function(){}); }catch(e){} }
  window.removeEventListener('deviceorientationabsolute',onNavOrientation);
  window.removeEventListener('deviceorientation',onNavOrientation);
  if(navOrigMarker && navMap){ navMap.removeLayer(navOrigMarker); }
@@ -988,11 +1012,13 @@ function drawNavRoute(group){
  document.getElementById('navModalInfo').innerHTML = '<span>Route unavailable.</span>';
  });
 }
-function onNavPosition(pos){
- var lat=pos.coords.latitude, lng=pos.coords.longitude;
- responderGps.lat=lat; responderGps.lng=lng;
- if(pos.coords.heading!==null && !isNaN(pos.coords.heading)){
- navHeading = pos.coords.heading;
+function onNavPosition(fix){
+ var d = fixParts(fix); if(!d || d.lat===null || d.lng===null) return;
+ var lat=d.lat, lng=d.lng;
+ responderGps.lat=lat; responderGps.lng=lng; responderGps.acc=d.accuracy;
+ updateAccChip(document.getElementById('navAccChip'), d.accuracy);
+ if(d.heading!==null){
+ navHeading = d.heading;
  applyNavRotation();
  }
  var arrowIcon = L.divIcon({className:'',html:'<div class="nav-arrow-icon" style="transform:rotate('+navHeading+'deg);"></div>',iconSize:[18,22],iconAnchor:[9,16]});
@@ -1048,8 +1074,8 @@ function openNavigation(lat, lng, reportId){
  window.addEventListener('deviceorientationabsolute', onNavOrientation, true);
  window.addEventListener('deviceorientation', onNavOrientation, true);
  }
- navWatchId = navigator.geolocation.watchPosition(function(pos){
- onNavPosition(pos);
+ navWatchId = SentriGeo.watchUserLocation(function(fix){
+ onNavPosition(fix);
  if(navOrigMarker) navOrigMarker._destRef = destMarker;
  }, function(){
  document.getElementById('navModalInfo').innerHTML = '<span>Location access denied \u2014 showing static route.</span>';
@@ -1058,12 +1084,27 @@ function openNavigation(lat, lng, reportId){
  var origMarker = L.marker([responderGps.lat,responderGps.lng],{icon:origIcon}).addTo(navMap).bindPopup('Your Location');
  drawNavRoute([destMarker, origMarker]);
  }
- }, {enableHighAccuracy:true, timeout:15000, maximumAge:5000});
+ });
  },50);
 }
 
 async function acceptAssignment(id,btn){
  btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i>';
+ // Location chip context for the responder at accept time (never blocks the accept POST).
+ if(window.SentriGeo){
+ SentriGeo.getUserLocation({}).then(function(fix){
+ var d=fixParts(fix); if(!d) return;
+ responderGps.lat=d.lat; responderGps.lng=d.lng; responderGps.acc=d.accuracy;
+ setGpsText(d.lat,d.lng,false);
+ var chip=document.getElementById('gpsAccChip');
+ if(chip){ updateAccChip(chip, d.accuracy); }
+ else{
+ // Fallback chip: show fix accuracy on the assignment card being accepted.
+ var row=btn.closest('.incident-row'); var ann=row?row.querySelector('.geo-annot'):null;
+ if(ann && !ann.innerHTML) ann.innerHTML='<span class="acc-chip'+(d.accuracy>50?' poor':'')+'">\u00b1'+Math.max(1,Math.round(d.accuracy))+'m</span>';
+ }
+ }).catch(function(){});
+ }
  try{
  var fd=new FormData(); fd.append('action','accept_assignment'); fd.append('report_id',id);
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
@@ -1124,6 +1165,47 @@ function searchRespIncidents(query){
  applyRespFilters();
 }
 
+// ── Assignment geo enrichment: barangay badge + distance to saved GPS ──
+// DOM-only: badges annotate cards and rows are re-sorted by distance; server ordering intact.
+function annotateAssignments(){
+ var anchors = document.querySelectorAll('.geo-annot');
+ if(!anchors.length || !window.SentriGeo) return;
+ var pending = [];
+ anchors.forEach(function(sp){
+ var lat=parseFloat(sp.getAttribute('data-lat')), lng=parseFloat(sp.getAttribute('data-lng'));
+ if(isNaN(lat)||isNaN(lng)) return;
+ pending.push(new Promise(function(resolve){
+ var hasGps = (responderGps.lat!==null && responderGps.lng!==null);
+ var dist = hasGps ? SentriGeo.haversine(responderGps.lat, responderGps.lng, lat, lng) : null;
+ if(dist!==null){ sp.setAttribute('data-dist', String(dist)); }
+ SentriGeo.findBarangay(lat,lng).then(function(b){
+ var parts=[];
+ if(b && b.name) parts.push('<span class="brgy-badge"><i class="fas fa-map-marker-alt"></i> Brgy '+b.name+'</span>');
+ if(dist!==null) parts.push('<span class="dist-badge">'+(dist<1000?Math.round(dist)+' m':(dist/1000).toFixed(1)+' km')+'</span>');
+ sp.innerHTML = parts.join(' ');
+ resolve(true);
+ }).catch(function(){ resolve(dist!==null); });
+ }));
+ });
+ Promise.allSettled(pending).then(function(){ sortAssignmentRows(); });
+}
+
+function sortAssignmentRows(){
+ var first = document.querySelector('.geo-annot');
+ if(!first) return;
+ var card = first.closest('.card');
+ if(!card) return;
+ var rows = Array.prototype.slice.call(card.querySelectorAll(':scope > .incident-row'));
+ if(rows.length < 2) return;
+ var keyed = rows.map(function(row){
+ var a=row.querySelector('.geo-annot');
+ var d=(a && a.getAttribute('data-dist')!==null) ? parseFloat(a.getAttribute('data-dist')) : Infinity;
+ return {row:row, d:isNaN(d)?Infinity:d};
+ });
+ keyed.sort(function(x,y){ return x.d - y.d; }); // stable: ties keep original order
+ keyed.forEach(function(k){ card.appendChild(k.row); });
+}
+
 function changeDutyStatus(val){
  localStorage.setItem('sentri_resp_duty_status', val);
  updateDutyStatusUI(val);
@@ -1152,6 +1234,7 @@ function updateDutyStatusUI(val){
 document.addEventListener('DOMContentLoaded', function(){
  var saved = localStorage.getItem('sentri_resp_duty_status') || 'available';
  updateDutyStatusUI(saved);
+ annotateAssignments(); // no-ops unless My Assignments cards are present
 });
 
 function playDispatchTone(){
@@ -1419,7 +1502,7 @@ setTimeout(function(){location.reload();}, 90000);
  <button class="nav-modal-close" onclick="closeNavModal()"><i class="fas fa-times"></i></button>
  </div>
  <div id="navModalMap"><div id="navMapInner"></div></div>
- <div class="nav-modal-info" id="navModalInfo"></div>
+ <div class="nav-modal-info"><span class="acc-chip" id="navAccChip" style="display:none;" title="GPS accuracy (higher precision &le; 50m)"></span><div id="navModalInfo" style="display:contents;"></div></div>
  </div>
 </div>
 <?= csrf_script() ?>

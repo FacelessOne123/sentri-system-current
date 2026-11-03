@@ -1,7 +1,56 @@
 <?php
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+
+// Realm-scoped sessions: community / gov / admin each use their own cookie, so
+// resolve which realm may perform the requested action BEFORE reading session
+// data. Preferred roles are mapped per action, shared actions allow any realm.
+$PREFERRED_ACTION_ROLES = [
+ // Admin panel only -> admin realm
+ 'admin_get_reports'    => ['admin'],
+ 'admin_get_users'      => ['admin'],
+ 'admin_approve_user'   => ['admin'],
+ 'admin_create_official'=> ['admin'],
+ 'admin_reject_user'    => ['admin'],
+ 'admin_delete_user'    => ['admin'],
+ 'admin_get_logs'       => ['admin'],
+ 'admin_get_audit_logs' => ['admin'],
+ 'restore_report'       => ['admin'],
+ // Government officials + admin
+ 'lgu_dispatch'         => ['lgu','admin'],
+ 'update_report_status' => ['barangay','lgu','admin'],
+ 'escalate_report'      => ['barangay','lgu','admin'],
+ 'resolve_report'       => ['first_responder','barangay','lgu','admin'],
+ 'accept_assignment'    => ['first_responder','admin'],
+ 'assign_report'        => ['first_responder','admin'],
+ 'report_responded'     => ['first_responder','admin'],
+ 'export'               => ['admin','lgu','barangay'],
+ // Community portal
+ 'post_report'          => ['community','user'],
+ 'delete_report'        => ['community','user','admin'],
+ 'save_gps'             => ['community','user'],
+ 'update_profile'       => ['community','user'],
+ // Shared across portals -> any signed-in realm
+ 'get_reports'          => null,
+ 'vote'                 => null,
+ 'get_report_images'    => null,
+ 'get_timeline'         => null,
+ 'get_lifecycle'        => null,
+];
+// Realm probe order matters when a user is signed in to BOTH portals:
+// the matching order must hit the realm whose CSRF token the CALLING page
+// actually holds (community JS calls vote; gov portal JS calls timelines).
+$ACTION_REALM_ORDER = [
+ 'vote'                 => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
+ 'get_reports'          => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
+ 'get_report_images'    => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
+ 'get_timeline'         => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['admin']],
+ 'get_lifecycle'        => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['admin']],
+];
+$action = trim($_REQUEST['action'] ?? '');
+sentri_boot_auto_realm($PREFERRED_ACTION_ROLES[$action] ?? null, $ACTION_REALM_ORDER[$action] ?? null);
+
 header('Content-Type: application/json');
 
 // Global safety net: if anything dies unexpectedly, always return valid JSON
@@ -18,7 +67,8 @@ register_shutdown_function(function() {
  }
 });
 
-if (!isset($_SESSION['user_id'])) {
+$ident = sentri_identity();
+if (!$ident) {
  echo json_encode(['status'=>'error','message'=>'Unauthorized. Please log in.']); exit;
 }
 
@@ -26,10 +76,195 @@ require __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/csrf.php';
 csrf_validate();
 
-$user_id = (int)($_SESSION['user_id'] ?? 0);
-$role = $_SESSION['role'] ?? 'user';
-$action = trim($_REQUEST['action'] ?? '');
+$user_id = (int)($ident['user_id'] ?? 0);
+$role = $ident['role'] ?? 'user';
 $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
+
+// ── GEO-BLOCK-START: authoritative barangay geography (Imus OSM perimeters) ─
+// The GeoJSON at ../assets/geo/imus-barangays.geojson (95 features with real
+// name/ref properties, Polygon/MultiPolygon in [ [ [lon,lat],... ] ]) is the
+// trusted source of barangay membership. It is parsed at most ONCE per request
+// (static cache) and only when detection is actually needed. Point-in-polygon
+// is exact PIP (even-odd ray casting); feature 'center' is used only to order
+// the linear scan, never to decide membership.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function sentri_geo_load(): ?array {
+ static $cache = null; // null = not loaded yet, false = load failed, array = ok
+ if ($cache !== null) {
+ return is_array($cache) ? $cache : null;
+ }
+ $cache = false;
+ $raw = @file_get_contents(__DIR__ . '/../assets/geo/imus-barangays.geojson');
+ if ($raw === false || strlen($raw) < 10) return null;
+ $j = json_decode($raw, true);
+ if (!is_array($j)
+ || ($j['type'] ?? '') !== 'FeatureCollection'
+ || !is_array($j['features'] ?? null)
+ || count($j['features']) === 0) {
+ return null;
+ }
+ $cache = $j['features'];
+ return $cache;
+}
+
+// Even-odd ray casting against a single coordinate ring [[lon,lat],...].
+function sentri_geo_pip(array $ring, float $lng, float $lat): bool {
+ $n = count($ring);
+ if ($n < 3) return false;
+ $inside = false;
+ for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
+ $xi = (float)$ring[$i][0]; $yi = (float)$ring[$i][1];
+ $xj = (float)$ring[$j][0]; $yj = (float)$ring[$j][1];
+ if (($yi > $lat) !== ($yj > $lat)
+ && $lng < ($xj - $xi) * ($lat - $yi) / ($yj - $yi) + $xi) {
+ $inside = !$inside;
+ }
+ }
+ return $inside;
+}
+
+// Polygon: outer ring + holes (even-odd). MultiPolygon: all parts flattened.
+function sentri_geo_FeatureTest(array $feature, float $lng, float $lat): bool {
+ $geom = $feature['geometry'] ?? null;
+ if (!is_array($geom)) return false;
+ $type = $geom['type'] ?? '';
+ $coords = $geom['coordinates'] ?? null;
+ if (!is_array($coords)) return false;
+ $rings = [];
+ if ($type === 'Polygon') {
+ $rings = $coords;
+ } elseif ($type === 'MultiPolygon') {
+ foreach ($coords as $part) {
+ if (is_array($part)) {
+ foreach ($part as $ring) { if (is_array($ring)) $rings[] = $ring; }
+ }
+ }
+ } else {
+ return false;
+ }
+ $hits = 0;
+ foreach ($rings as $ring) {
+ if (is_array($ring) && sentri_geo_pip($ring, $lng, $lat)) $hits++;
+ }
+ // 1 containing ring = inside; 2 (outer + hole) = outside, and so on.
+ return ($hits % 2) === 1;
+}
+
+// Walks a geometry's coordinate tree, growing [minLng,minLat,maxLng,maxLat].
+function sentri_geo_points_bbox(array $geo, array &$bbox): void {
+ $coords = $geo['coordinates'] ?? null;
+ if (!is_array($coords)) return;
+ $scan = function($c) use (&$scan, &$bbox) {
+ if (!is_array($c)) return;
+ if (isset($c[0]) && is_numeric($c[0]) && isset($c[1]) && is_numeric($c[1])) {
+ $lng = (float)$c[0]; $lat = (float)$c[1];
+ if ($lng < $bbox[0]) $bbox[0] = $lng;
+ if ($lat < $bbox[1]) $bbox[1] = $lat;
+ if ($lng > $bbox[2]) $bbox[2] = $lng;
+ if ($lat > $bbox[3]) $bbox[3] = $lat;
+ return;
+ }
+ foreach ($c as $sub) {
+ if (is_array($sub)) $scan($sub);
+ }
+ };
+ $scan($coords);
+}
+
+// Exact barangay name at a point, or null. Bounds short-circuit, then per-
+// feature PIP scanning nearest-'center'-first (still exact PIP for the verdict).
+function sentri_geo_detect(float $lat, float $lng): ?string {
+ static $prep = null; // null = unbuilt, false = unavailable, array = ready
+ if ($prep === null) {
+ $prep = false;
+ $features = sentri_geo_load();
+ if (is_array($features) && $features) {
+ $bbox = [INF, INF, -INF, -INF];
+ foreach ($features as $f) {
+ sentri_geo_points_bbox((array)($f['geometry'] ?? []), $bbox);
+ }
+ $prep = ['bbox' => $bbox, 'features' => $features];
+ }
+ }
+ if ($prep === false) return null;
+
+ [$minLng, $minLat, $maxLng, $maxLat] = $prep['bbox'];
+ if ($lng < $minLng || $lng > $maxLng || $lat < $minLat || $lat > $maxLat) {
+ return null;
+ }
+
+ $features = $prep['features'];
+ usort($features, function($a, $b) use ($lat, $lng) {
+ $ca = $a['properties']['center'] ?? null;
+ $cb = $b['properties']['center'] ?? null;
+ $da = is_array($ca) ? (($ca[0] - $lng) ** 2 + ($ca[1] - $lat) ** 2) : 0.0;
+ $db = is_array($cb) ? (($cb[0] - $lng) ** 2 + ($cb[1] - $lat) ** 2) : 0.0;
+ return $da <=> $db;
+ });
+ foreach ($features as $f) {
+ if (sentri_geo_FeatureTest($f, $lng, $lat)) {
+ $name = trim((string)($f['properties']['name'] ?? ''));
+ if ($name !== '') return $name;
+ }
+ }
+ return null;
+}
+
+// Normalizes a barangay label for comparison: trim, lowercase, strip accents,
+// the 'barangay'/'brgy' prefix, punctuation and whitespace. Never renames data.
+function sentri_geo_norm_brgy(string $name): string {
+ $s = trim(mb_strtolower($name, 'UTF-8'));
+ $s = strtr($s, ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
+ $s = str_replace(['barangay','brgy'], '', $s);
+ return preg_replace('/[^a-z0-9]/', '', $s);
+}
+
+// Mirrors sentri_geo_norm_brgy() as a nested SQL REPLACE expression so MySQL
+// matches stored values against OSM names without rewriting any data. The
+// extended chain also strips parentheses, slashes, quotes and extra accents
+// that the original 8-layer version left behind.
+function sentri_geo_brgy_sql_expr(string $col): string {
+ $expr = "LOWER(TRIM(COALESCE($col,'')))";
+ $maps = [
+ 'ñ' => 'n', 'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u',
+ 'barangay' => '', 'brgy' => '',
+ '.' => '', ',' => '', '-' => '', '_' => '', ' ' => '',
+ '(' => '', ')' => '', '/' => '', '&' => '', "'" => '', '"' => '',
+ ];
+ foreach ($maps as $from => $to) {
+ $from_sql = str_replace("'", "''", $from);
+ $to_sql = str_replace("'", "''", $to);
+ $expr = "REPLACE($expr, '$from_sql', '$to_sql')";
+ }
+ return $expr;
+}
+
+// True when a submitted barangay label matches a real OSM name in the
+// perimeter set (case/punctuation-insensitive).
+function sentri_geo_is_osm_name(string $name): bool {
+ $features = sentri_geo_load();
+ if (!is_array($features)) return false;
+ $want = sentri_geo_norm_brgy($name);
+ if ($want === '') return false;
+ foreach ($features as $f) {
+ if (sentri_geo_norm_brgy((string)($f['properties']['name'] ?? '')) === $want) {
+ return true;
+ }
+ }
+ return false;
+}
+
+// Shared WHERE fragment (uses reports r / users u aliases): matches either the
+// report's barangay or the poster's home barangay against a barangay filter.
+function sentri_geo_brgy_where(mysqli $conn, string $filter): string {
+ $key = sentri_geo_norm_brgy($filter);
+ if ($key === '') return '';
+ $val = "'" . $conn->real_escape_string($key) . "'";
+ return "(".sentri_geo_brgy_sql_expr('r.barangay')." = $val OR "
+ .sentri_geo_brgy_sql_expr('u.barangay_name')." = $val)";
+}
+// ── GEO-BLOCK-END ────────────────────────────────────────────────────────────
 
 // ── Ensure geo columns exist (compatible with all MySQL versions) ─────────
 // Uses INFORMATION_SCHEMA instead of "IF NOT EXISTS" which requires MySQL 8+
@@ -60,6 +295,10 @@ switch ($action) {
  $offset = ($page - 1) * $limit;
  $search = $_GET['search'] ?? '';
  $search_sql = $search ? " AND (r.title LIKE '%" . $conn->real_escape_string($search) . "%' OR r.description LIKE '%" . $conn->real_escape_string($search) . "%') " : "";
+ // Optional barangay drill-down: matched against OSM barangay names
+ // (case/punctuation-insensitive) on either r.barangay or u.barangay_name.
+ $brgy_sql = sentri_geo_brgy_where($conn, (string)($_GET['barangay'] ?? ''));
+ $brgy_sql = $brgy_sql !== '' ? " AND $brgy_sql " : "";
  $sql = "
  SELECT r.id, r.user_id, r.title, r.description, r.location_name, r.barangay,
  r.city, r.province, r.latitude, r.longitude, r.radius_m,
@@ -69,7 +308,7 @@ switch ($action) {
  FROM reports r
  INNER JOIN users u ON r.user_id = u.id
  LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
- WHERE r.is_archived = 0 $search_sql
+ WHERE r.is_archived = 0 AND r.status != 'safe' $search_sql $brgy_sql
  ORDER BY r.created_at DESC LIMIT ? OFFSET ?";
  $stmt = $conn->prepare($sql);
  if (!$stmt) { echo json_encode(['status'=>'error','message'=>'DB error: '.$conn->error]); exit; }
@@ -141,6 +380,23 @@ switch ($action) {
  }
  if (!in_array($status_val,$allowed_s)) { echo json_encode(['status'=>'error','message'=>'Invalid status.']); exit; }
  if (!in_array($category,$allowed_c)) { echo json_encode(['status'=>'error','message'=>'Invalid category.']); exit; }
+
+ // ── Trusted barangay tagging: authoritative detection from real perimeters ─
+ // For Imus reports with GPS, the OSM perimeter set decides the barangay —
+ // a citizen-submitted value can't fake membership. If detection fails, the
+ // submitted value is left untouched (defensive fallback).
+ if (strcasecmp($city, 'Imus') === 0 && $lat !== null && $lng !== null) {
+ $detected = sentri_geo_detect((float)$lat, (float)$lng);
+ if ($detected !== null && $detected !== '') {
+ // Keep the submission only when it IS a real OSM name matching the
+ // detected perimeter; a real-OSM-but-wrong (or fabricated) label is
+ // overridden because trusted geometry wins.
+ if ($barangay === '' || !sentri_geo_is_osm_name($barangay)
+ || sentri_geo_norm_brgy($barangay) !== sentri_geo_norm_brgy($detected)) {
+ $barangay = $detected;
+ }
+ }
+ }
 
  $rate = $conn->prepare("SELECT COUNT(*) FROM reports WHERE user_id=? AND created_at>DATE_SUB(NOW(),INTERVAL 1 HOUR)");
  $rate->bind_param("i",$user_id); $rate->execute(); $rate->bind_result($cnt); $rate->fetch(); $rate->close();
@@ -262,8 +518,8 @@ switch ($action) {
  $_r_stmt->close();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $_r_row['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'archived';
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();
@@ -285,8 +541,8 @@ switch ($action) {
  $_r_stmt->close();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $_r_row['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'restored';
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();
@@ -482,6 +738,36 @@ switch ($action) {
  if ($upd->execute()) {
  $_SESSION['gps_lat'] = $lat;
  $_SESSION['gps_lng'] = $lng;
+
+ // ── Trusted barangay tagging for report GPS context (NO schema change) ──
+ // When the caller supplies report_id context, refresh that report's
+ // barangay from authoritative geometry — only for reports already scoped
+ // to Imus, and only when detection on the saved coordinates succeeded.
+ $gps_report_id = isset($_POST['report_id']) ? (int)$_POST['report_id'] : 0;
+ if ($gps_report_id) {
+ $rep_stmt = $conn->prepare("SELECT city FROM reports WHERE id=? LIMIT 1");
+ if ($rep_stmt) {
+ $rep_stmt->bind_param("i", $gps_report_id);
+ $rep_stmt->execute();
+ $rep_city = '';
+ if ($rep_row = $rep_stmt->get_result()->fetch_assoc()) {
+ $rep_city = (string)($rep_row['city'] ?? '');
+ }
+ $rep_stmt->close();
+ if (strcasecmp($rep_city, 'Imus') === 0) {
+ $detected = sentri_geo_detect($lat, $lng);
+ if ($detected !== null && $detected !== '') {
+ $b_upd = $conn->prepare("UPDATE reports SET barangay=? WHERE id=? AND city='Imus'");
+ if ($b_upd) {
+ $b_upd->bind_param("si", $detected, $gps_report_id);
+ $b_upd->execute();
+ $b_upd->close();
+ }
+ }
+ }
+ }
+ }
+
  echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng]);
  } else {
  echo json_encode(['status'=>'error','message'=>'Failed to save GPS: '.$upd->error]);
@@ -590,8 +876,8 @@ switch ($action) {
  $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $r_res['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'accepted';
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();
@@ -625,8 +911,8 @@ switch ($action) {
  $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $r_res['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'responded';
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();
@@ -655,8 +941,8 @@ switch ($action) {
  $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $r_res['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'resolved';
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();
@@ -699,8 +985,8 @@ switch ($action) {
  $r_info = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $r_info['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'escalated_to_lgu';
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();
@@ -753,12 +1039,20 @@ switch ($action) {
  $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0");
  $s_upd->bind_param("si", $new_status, $report_id);
  $s_upd->execute();
- if ($s_upd->affected_rows > 0) {
+ // NOTE: changed status → affected_rows>0; SAME status → affected_rows=0 with an
+ // existing row. Distinguish a real miss from a no-op update (a former
+ // 'Report not found' bug surfaced by scripts/smoke-test.sh).
+ $exists = null;
+ if ($s_upd->affected_rows === 0) {
+ $ex = $conn->query("SELECT title FROM reports WHERE id=$report_id AND is_archived=0 LIMIT 1");
+ $exists = $ex ? $ex->fetch_assoc() : null; if ($ex) $ex->free();
+ }
+ if ($s_upd->affected_rows > 0 || $exists !== null) {
  $r_info2 = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
  $_audit = $conn->prepare("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES (?,?,?,?,?)");
  $_audit_title = $r_info2['title'] ?? 'Unknown';
- $_audit_by = (int)$_SESSION['user_id'];
- $_audit_name = ($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '');
+ $_audit_by = $user_id;
+ $_audit_name = trim(($ident['first_name'] ?? '') . ' ' . ($ident['last_name'] ?? ''));
  $_audit_action = 'status_changed_to_' . $new_status;
  $_audit->bind_param('issss', $report_id, $_audit_title, $_audit_action, $_audit_by, $_audit_name);
  $_audit->execute();

@@ -1,6 +1,7 @@
 <?php
 ob_start();
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
@@ -10,7 +11,7 @@ require_once __DIR__ . '/config/auth.php';
 $isPost = ($_SERVER['REQUEST_METHOD'] === 'POST');
 
 // Only redirect logged-in users on normal page loads, never on the AJAX POST
-if (!$isPost && isset($_SESSION['user_id'])) {
+if (!$isPost && sentri_identity() !== null) {
     redirect_to_portal();
     exit;
 }

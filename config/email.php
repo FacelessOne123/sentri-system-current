@@ -55,3 +55,13 @@ define('MAIL_FROM_NAME', get_env_var('MAIL_FROM_NAME', 'SenTri'));
 
 // ─── Application URL (no trailing slash) ─────────────────────────────────────
 define('APP_URL', get_env_var('APP_URL', 'http://localhost'));
+
+// ─── Development / offline mode ──────────────────────────────────────────────
+// When APP_DEBUG is truthy (1/true/on) — or MAIL_OUTBOX is set explicitly —
+// every transactional email (verification, password reset, notifications) is
+// written to logs/mail/*.eml instead of attempting SMTP. This lets you sign up,
+// verify accounts, and reset passwords FULLY OFFLINE on localhost: open
+// debug.php, click the verification link, done. Never enable in production.
+define('MAIL_DEBUG_OUTBOX', in_array(strtolower(get_env_var('APP_DEBUG', '')), ['1','true','on','yes'], true)
+ || in_array(strtolower(get_env_var('MAIL_OUTBOX', '')), ['1','true','on','yes'], true));
+define('MAIL_DEBUG_DIR', dirname(__DIR__) . '/logs/mail');

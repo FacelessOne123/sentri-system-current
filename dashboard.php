@@ -10,13 +10,10 @@
  * has been moved to portal/community.php during the portal refactor.
  */
 
-session_start([
- 'cookie_httponly' => true,
- 'cookie_samesite' => 'Lax',
- 'cookie_secure' => !empty($_SERVER['HTTPS']),
-]);
+require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
 
-if (!isset($_SESSION['user_id'])) {
+if (sentri_identity() === null) {
  header('Location: login.php');
  exit;
 }

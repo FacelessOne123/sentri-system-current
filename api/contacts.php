@@ -5,10 +5,38 @@
 
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
-session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
+require_once __DIR__ . '/../config/session.php';
+
+// Realm-scoped sessions: resolve the realm allowed for the action BEFORE
+// reading session data.
+$PREFERRED_ACTION_ROLES = [
+ // Admin panel only -> admin realm
+ 'admin_list'       => ['admin'],
+ 'notify_report'    => ['admin'],
+ 'get_notifications'=> ['admin'],
+ // Contact CRUD -> government officials + admin
+ 'create'           => ['lgu','barangay','admin'],
+ 'update'           => ['lgu','barangay','admin'],
+ 'delete'           => ['lgu','barangay','admin'],
+ // Public (any signed-in user) -> any realm
+ 'list'             => null,
+];
+// Dual-signed callers: order must match who POSTs the action, so CSRF validates
+// against the calling page's realm token. (gov and admin realms never coexist
+// in one browser: gov/login whitelist excludes 'admin', so order is unambiguous.)
+$ACTION_REALM_ORDER = [
+ 'create'    => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin'], SENTRI_REALM_COOKIES['community']],
+ 'update'    => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin'], SENTRI_REALM_COOKIES['community']],
+ 'delete'    => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin'], SENTRI_REALM_COOKIES['community']],
+ 'notify_report' => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
+];
+$action = trim($_REQUEST['action'] ?? '');
+sentri_boot_auto_realm($PREFERRED_ACTION_ROLES[$action] ?? null, $ACTION_REALM_ORDER[$action] ?? null);
+
 header('Content-Type: application/json');
 
-if (!isset($_SESSION['user_id'])) {
+$ident = sentri_identity();
+if (!$ident) {
  echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit;
 }
 
@@ -16,9 +44,8 @@ require __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/csrf.php';
 csrf_validate();
 
-$user_id = (int)$_SESSION['user_id'];
-$role = $_SESSION['role'] ?? 'user';
-$action = trim($_REQUEST['action'] ?? '');
+$user_id = (int)($ident['user_id'] ?? 0);
+$role = $ident['role'] ?? 'user';
 
 // ── Ensure tables exist ────────────────────────────────────────────────────
 function ensureContactsTables($conn) {

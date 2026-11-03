@@ -16,13 +16,33 @@
 // rejected, so a stale form can never authenticate against the wrong portal.
 //
 // The page must also have, before the require:
-//   - session started
+//   - the realm session booted (config/session.php: sentri_boot_realm() or
+//     sentri_boot_auto_realm() - must precede any output; this handler falls
+//     back to booting the realm inferred from $SENTRI_PORTALS only if the
+//     page left no active session)
 //   - config/db.php, config/auth.php required
+// On success the account is stored as $_SESSION['identity'] inside the
+// CURRENT realm's session (community/gov/admin each keep their own cookie),
+// so signing into two realms never overwrites the other one.
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
 
 if (empty($SENTRI_PORTALS) || !is_array($SENTRI_PORTALS)) {
  $SENTRI_PORTALS = ['community' => ['community', 'user']];
+}
+
+// ── Realm session guard (fallback boot only) ─────────────────────────────────
+// The calling page (login.php / gov/login.php / admin.php) normally boots its
+// realm session BEFORE requiring this handler, before any output, so CSRF
+// pre-checks share the session the login will land in. If a page did not,
+// boot the realm inferred from the roles THIS page is allowed to
+// authenticate: community role -> community realm, gov roles -> gov realm,
+// admin -> admin realm. Never silently overwrite login sessions below.
+if (session_status() !== PHP_SESSION_ACTIVE) {
+ $allowedRoles = [];
+ foreach ($SENTRI_PORTALS as $portalRoles) { $allowedRoles = array_merge($allowedRoles, (array)$portalRoles); }
+ require_once __DIR__ . '/../config/session.php';
+ sentri_boot_realm(sentri_realm_for_role($allowedRoles[0] ?? 'community'));
 }
 
 function getFailedAttemptsCount($conn, $email, $minutes = 30) {
@@ -150,13 +170,24 @@ if ($action === 'verify_otp') {
  $stmt->close();
 
  session_regenerate_id(true);
- $_SESSION = [
- 'user_id' => $user['id'],
- 'first_name' => $user['first_name'],
- 'last_name' => $user['last_name'],
- 'role' => $user['role'],
- 'is_approved'=> (bool)$user['is_approved'],
+ // Store the account as a nested identity inside the CURRENT realm session
+ // (never clobber the whole $_SESSION array - other realms keep their own
+ // cookie/session and stale keys must not leak into a fresh login).
+ $_SESSION['identity'] = [
+  'user_id' => (int)$user['id'],
+  'first_name' => $user['first_name'],
+  'last_name' => $user['last_name'],
+  'role' => $user['role'],
+  'is_approved'=> (bool)$user['is_approved'],
+  'email_verified' => (bool)$user['email_verified'],
  ];
+ // Legacy top-level mirrors kept in sync so pages not yet migrated to
+ // sentri_identity() keep working. Reads should prefer sentri_identity().
+ $_SESSION['user_id'] = (int)$user['id'];
+ $_SESSION['first_name'] = $user['first_name'];
+ $_SESSION['last_name'] = $user['last_name'];
+ $_SESSION['role'] = $user['role'];
+ $_SESSION['is_approved'] = (bool)$user['is_approved'];
  unset($_SESSION['otp_login']);
 
  echo json_encode(['status' => 'success', 'redirect' => portal_url($user['role']), 'message' => 'OTP verified. Signing in...']);
@@ -250,7 +281,21 @@ if ($stmt->num_rows > 0) {
  exit;
  }
  session_regenerate_id(true);
- $_SESSION = ['user_id'=>$id,'first_name'=>$fn,'last_name'=>$ln,'role'=>$role,'is_approved'=>(bool)$approved];
+ // Realm-scoped identity (see verify_otp note above): nested array, plus
+ // legacy top-level mirrors for pages not yet migrated.
+ $_SESSION['identity'] = [
+  'user_id' => (int)$id,
+  'first_name' => $fn,
+  'last_name' => $ln,
+  'role' => $role,
+  'is_approved' => (bool)$approved,
+  'email_verified' => (bool)$verified,
+ ];
+ $_SESSION['user_id'] = (int)$id;
+ $_SESSION['first_name'] = $fn;
+ $_SESSION['last_name'] = $ln;
+ $_SESSION['role'] = $role;
+ $_SESSION['is_approved'] = (bool)$approved;
  $log_status='Success'; $log_uid=$id;
  $is_successful_login = true;
  require_once __DIR__.'/../config/auth.php';
