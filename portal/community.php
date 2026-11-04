@@ -947,7 +947,7 @@ function actionToast(message,type){const clsMap={success:'safe',error:'dangerous
 </div>
 
 <script src="../assets/vendor/leaflet/leaflet.js"></script>
-<script src="../assets/js/sentri-geo.js"></script>
+<script src="../assets/js/sentri-geo.js?v=<?= filemtime(__DIR__ . '/../assets/js/sentri-geo.js') ?>"></script>
 <script>
 const MY_USER_ID = <?= $uid ?>;
 const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
@@ -982,7 +982,7 @@ window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('s
 /* GPS */
 function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent=liveGPS?'GPS Live':'GPS Saved';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
 function setGPSAccuracy(m){const el=document.getElementById('gpsAcc');if(!el)return;if(m==null||!isFinite(m)||m<=0){el.style.display='none';return;}const good=m<12,ok=m<50;el.style.display='inline';el.style.color=good?'#16a34a':ok?'#d97706':'#dc2626';el.textContent=`±${Math.round(m)}m ${good?'good':ok?'ok':'weak'}`;}
-function gpsErrorMessage(err){if(!err)return'Could not get your location.';if(typeof err.code==='number'){const t={1:'Location access denied — enable location for this site in your browser settings.',2:'Location unavailable right now. Try again.',3:'Timed out getting your location.'};return t[err.code]||'Could not get your location.';}return err.message||'Could not get your location.';}
+function gpsErrorMessage(err){if(!err)return'Could not get your location — set it on the map instead.';if(typeof err.code==='number'){const t={1:'Location access denied — allow location for this site in your browser settings, or pick your spot on the map.',2:'Location services unavailable — drag the pin on the map to set it manually.',3:'Location fix timed out (no GPS/Wi-Fi source) — drag the pin on the map to set it manually.'};return t[err.code]||'Could not get your location.';}return err.message||'Could not get your location — set it on the map instead.';}
 function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;SentriGeo.watchUserLocation(pos=>{if(pos.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){userLat=SAVED_LAT;userLng=SAVED_LNG;hasGPS=true;liveGPS=false;setGPSAccuracy(null);updateChip();checkProximity();return;}userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();},()=>{setGPSAccuracy(null);updateChip();});}
 function haversine(a,b,c,d){return SentriGeo.haversine(a,b,c,d);}
 function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now();allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const d=haversine(userLat,userLng,r.latitude,r.longitude);if(d<=(r.radius_m||200)){if(now-(alertTimes[r.id]||0)<300000)return;alertTimes[r.id]=now;showToast(r,Math.round(d));}});}
@@ -1173,7 +1173,7 @@ function useMyLocation(){
  if(!navigator.geolocation){fallback();return;}
  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating…';
  btn.disabled=true;
- SentriGeo.getUserLocation({timeout:12000}).then(pos=>{
+ SentriGeo.getUserLocation({timeout:30000,enableHighAccuracy:true}).then(pos=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
  if(pos.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){
@@ -1371,7 +1371,7 @@ function copyEmergencyCoordinates(btn){
  });
  } else if(navigator.geolocation){
  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Getting GPS…';
- SentriGeo.getUserLocation().then(pos=>{
+ SentriGeo.getUserLocation({enableHighAccuracy:true}).then(pos=>{
  userLat=pos.lat;
  userLng=pos.lng;
  hasGPS=true;
@@ -1405,7 +1405,7 @@ function buildPalette(){const pal=document.getElementById('colorPalette');if(!pa
 function pickColor(c){selColor=c;const prev=document.getElementById('avatarPreview');if(prev)prev.style.background=c;buildPalette();const fn='<?= htmlspecialchars($fname,ENT_QUOTES) ?>';const ln='<?= htmlspecialchars($lname,ENT_QUOTES) ?>';const em='<?= htmlspecialchars($user_email,ENT_QUOTES) ?>';const fd=new FormData();fd.append('action','update_profile');fd.append('avatar_color',c);fd.append('first_name',fn);fd.append('last_name',ln);fd.append('email',em);fetch('../api/reports.php',{method:'POST',body:fd}).catch(()=>{});}
 
 /* Profile: GPS */
-async function saveGPS(){if(!navigator.geolocation){alert('Geolocation not supported.');return;}const btn=document.getElementById('getGpsBtn');const disp=document.getElementById('gpsCoordsDisplay');btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Acquiring…';try{const pos=await SentriGeo.getUserLocation();const lat=pos.lat,lng=pos.lng;const acc=pos.accuracy&&isFinite(pos.accuracy)?` · ±${Math.round(pos.accuracy)}m ${pos.accuracy<12?'good':pos.accuracy<50?'ok':'weak'}`:'';const fd=new FormData();fd.append('action','save_gps');fd.append('latitude',lat);fd.append('longitude',lng);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){if(disp){disp.className='gps-coords has-gps';disp.innerHTML=`<i class="fas fa-circle-check"></i> ${lat.toFixed(6)}, ${lng.toFixed(6)}${acc}`;}const pfMsg=document.getElementById('pfMsg');if(pfMsg)showMsg(pfMsg,'success','GPS saved! Map and alerts unlocked.');userLat=lat;userLng=lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();}}catch{}btn.disabled=false;btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Get GPS Data';}catch(err){alert(gpsErrorMessage(err));btn.disabled=false;btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Get GPS Data';}}
+async function saveGPS(){if(!navigator.geolocation){alert('Geolocation not supported.');return;}const btn=document.getElementById('getGpsBtn');const disp=document.getElementById('gpsCoordsDisplay');btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Acquiring…';try{const pos=await SentriGeo.getUserLocation({enableHighAccuracy:true});const lat=pos.lat,lng=pos.lng;const acc=pos.accuracy&&isFinite(pos.accuracy)?` · ±${Math.round(pos.accuracy)}m ${pos.accuracy<12?'good':pos.accuracy<50?'ok':'weak'}`:'';const fd=new FormData();fd.append('action','save_gps');fd.append('latitude',lat);fd.append('longitude',lng);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){if(disp){disp.className='gps-coords has-gps';disp.innerHTML=`<i class="fas fa-circle-check"></i> ${lat.toFixed(6)}, ${lng.toFixed(6)}${acc}`;}const pfMsg=document.getElementById('pfMsg');if(pfMsg)showMsg(pfMsg,'success','GPS saved! Map and alerts unlocked.');userLat=lat;userLng=lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();}}catch{}btn.disabled=false;btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Get GPS Data';}catch(err){alert(gpsErrorMessage(err));btn.disabled=false;btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Get GPS Data';}}
 
 /* Safety Guide */
 const GUIDE_TABS = {

@@ -27,6 +27,7 @@ if (PHP_SAPI !== 'cli') {
  require_once __DIR__ . '/config/email.php';
 }
 require_once __DIR__ . '/config/db.php';
+require_once __DIR__ . '/config/session.php'; // realm session inspector uses sentri_boot_candidate()
 
 $ok = fn(string $s) => '<span style="color:#4ade80;font-weight:700;">PASS</span>';
 $bad = fn(string $s) => '<span style="color:#f87171;font-weight:700;">FAIL</span>' . ($s ? " — " . htmlspecialchars($s) : '');

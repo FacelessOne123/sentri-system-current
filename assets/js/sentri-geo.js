@@ -191,28 +191,45 @@
    * @returns {Promise<{lat:number,lng:number,accuracy:number,speed:number|null}>}
    *          Rejects with the GeolocationPositionError for the caller to toast.
    */
-  function getUserLocation(opts) {
-    opts = opts || {};
-    return new Promise(function (resolve, reject) {
-      if (!('geolocation' in global.navigator) || !global.navigator.geolocation) {
-        reject(new Error('Geolocation not supported on this device.'));
-        return;
-      }
-      global.navigator.geolocation.getCurrentPosition(function (pos) {
-        var c = pos.coords || {};
-        resolve({
-          lat: c.latitude,
-          lng: c.longitude,
-          accuracy: typeof c.accuracy === 'number' ? c.accuracy : LOW_ACCURACY_LIMIT,
-          speed: typeof c.speed === 'number' ? c.speed : null
-        });
-      }, reject, {
-        enableHighAccuracy: opts.enableHighAccuracy !== undefined ? opts.enableHighAccuracy : true,
-        timeout: opts.timeout !== undefined ? opts.timeout : 15000,
-        maximumAge: opts.maximumAge !== undefined ? opts.maximumAge : 0
-      });
-    });
-  }
+ function getUserLocation(opts) {
+ opts = opts || {};
+ var hiTimeout = typeof opts.timeout === 'number' ? opts.timeout : 30000;
+ return new Promise(function (resolve, reject) {
+ if (!('geolocation' in global.navigator) || !global.navigator.geolocation) {
+ reject(new Error('Geolocation not supported on this device.'));
+ return;
+ }
+ // ── Persistent high-accuracy acquisition ──────────────────────────────
+ // Stage 1: getCurrentPosition (30s). Stage 2 (on timeout/unavailable):
+ // keep WATCHING high-accuracy for up to 60s more — GPS chips frequently
+ // deliver a fix a beat after a single-call window closes. No accuracy
+ // downgrade, ever: only real fixes resolve.
+ var done = false;
+ var watchId = null, hardStop = null;
+ function settle(fn, v) { if (done) return; done = true; if (watchId !== null) global.navigator.geolocation.clearWatch(watchId); if (hardStop !== null) global.clearTimeout(hardStop); fn(v); }
+ function extract(pos) { var c = pos.coords || {};
+ return { lat: c.latitude, lng: c.longitude,
+ accuracy: typeof c.accuracy === 'number' ? c.accuracy : LOW_ACCURACY_LIMIT,
+ speed: typeof c.speed === 'number' ? c.speed : null }; }
+ function failMsg(e) {
+ var code = e && typeof e.code === 'number' ? e.code : null;
+ var msg = code === 1 ? 'Location access denied — allow location for this site, then retry, or pick the spot on the map yourself.'
+ : code === 3 ? 'No high-accuracy GPS fix yet — devices without GPS hardware cannot provide one; drag the pin on the map to set it manually.'
+ : 'Location services unavailable — drag the pin on the map to set it manually.';
+ return code === null ? new Error(msg) : { code: code, message: msg };
+ }
+ global.navigator.geolocation.getCurrentPosition(function (pos) { settle(resolve, extract(pos)); }, function (e) {
+ var code = e && typeof e.code === 'number' ? e.code : null;
+ if (code === 1) { settle(reject, failMsg(e)); return; } // denied: retrying can't help
+ // codes 2/3: transient — keep listening high-accuracy
+ watchId = global.navigator.geolocation.watchPosition(function (pos) { settle(resolve, extract(pos)); },
+ function (werr) { settle(reject, failMsg(werr)); },
+ { enableHighAccuracy: true, timeout: 60000, maximumAge: 3000 });
+ if (code === null) settle(reject, failMsg(e)); // non-standard error, don't wait
+ }, { enableHighAccuracy: true, timeout: hiTimeout, maximumAge: 3000 });
+ hardStop = global.setTimeout(function () { settle(reject, failMsg({ code: 3 })); }, hiTimeout + 46000);
+ });
+ }
 
   /**
    * Continuous high-accuracy location watch.

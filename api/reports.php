@@ -573,7 +573,7 @@ switch ($action) {
 
  case 'admin_get_users':
  if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
- $sql="SELECT u.id,u.first_name,u.last_name,u.email,u.role,u.org_name,u.position,u.barangay_name,u.municipality,u.is_approved,u.created_at,COUNT(r.id) AS report_count FROM users u LEFT JOIN reports r ON r.user_id=u.id GROUP BY u.id ORDER BY u.is_approved ASC, u.created_at DESC";
+ $sql="SELECT u.id,u.first_name,u.last_name,u.email,u.official_id,u.role,u.org_name,u.position,u.barangay_name,u.municipality,u.is_approved,u.created_at,COUNT(r.id) AS report_count FROM users u LEFT JOIN reports r ON r.user_id=u.id GROUP BY u.id ORDER BY u.is_approved ASC, u.created_at DESC";
  $res=$conn->query($sql); $users=[];
  while($row=$res->fetch_assoc()){$row['id']=(int)$row['id'];$row['report_count']=(int)$row['report_count'];$row['is_approved']=(int)$row['is_approved'];$users[]=$row;}
  echo json_encode(['status'=>'success','users'=>$users]);
@@ -595,13 +595,14 @@ switch ($action) {
  if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
 
  $new_role = trim($_POST['role'] ?? '');
- if (!in_array($new_role, ['barangay','lgu','first_responder'], true)) {
+ if (!in_array($new_role, ['barangay','lgu','first_responder','community'], true)) {
  echo json_encode(['status'=>'error','message'=>'Invalid portal role.']); exit;
  }
 
  $c_first = trim($_POST['first_name'] ?? '');
  $c_last = trim($_POST['last_name'] ?? '');
  $c_email = trim($_POST['email'] ?? '');
+ $c_official_id = trim($_POST['official_id'] ?? '');
  $c_org = trim($_POST['org_name'] ?? '') ?: null;
  $c_position = trim($_POST['position'] ?? '') ?: null;
  $c_brgy = trim($_POST['barangay_name'] ?? '') ?: null;
@@ -610,10 +611,10 @@ switch ($action) {
  $c_pw = trim($_POST['password'] ?? '');
  $c_email_creds = (($_POST['email_creds'] ?? '1') === '1');
 
- if ($c_first==='' || $c_last==='' || $c_email==='') {
- echo json_encode(['status'=>'error','message'=>'First name, last name, and email are required.']); exit;
+ if ($c_first==='' || $c_last==='') {
+ echo json_encode(['status'=>'error','message'=>'First name and last name are required.']); exit;
  }
- if (!filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
+ if ($c_email !== '' && !filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
  echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
  }
  if ($new_role==='barangay' && (!$c_brgy || !$c_muni)) {
@@ -632,6 +633,21 @@ switch ($action) {
  echo json_encode(['status'=>'error','message'=>'Initial password must be at least 8 characters.']); exit;
  }
 
+ // Official ID: name-derived 5 digits + creation year (e.g. 12345 + 2026 =
+ // 123452026). Officials then sign in with THIS instead of an email. An
+ // admin-provided value may override the generated one; uniqueness enforced.
+ if ($c_official_id !== '') {
+ if (!preg_match('/^\d{9}$/', $c_official_id)) {
+ echo json_encode(['status'=>'error','message'=>'Official ID must be exactly 9 digits.']); exit;
+ }
+ $chk = $conn->prepare("SELECT id FROM users WHERE official_id=? LIMIT 1");
+ $chk->bind_param('s', $c_official_id); $chk->execute(); $chk->store_result();
+ if ($chk->num_rows > 0) { $chk->close(); echo json_encode(['status'=>'error','message'=>'That Official ID is already taken.']); exit; }
+ $chk->close();
+ } else {
+ $c_official_id = sentri_generate_official_id($conn, $c_first, $c_last);
+ }
+ if ($c_email !== '') {
  $chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
  $chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
  if ($chk->num_rows > 0) {
@@ -639,6 +655,11 @@ switch ($action) {
  echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
  }
  $chk->close();
+ } else {
+ // No email on file: officials log in with their Official ID. A placeholder
+ // address keeps NOT-NULL constraints and outbox mail satisfied.
+ $c_email = $c_official_id . '@official.sentri';
+ }
 
  if ($c_pw === '') {
  // Auto-generate a strong, readable initial password
@@ -649,12 +670,12 @@ switch ($action) {
 
  $ins = $conn->prepare(
  "INSERT INTO users
- (first_name, last_name, email, password, role, org_name, `position`,
+ (first_name, last_name, email, official_id, password, role, org_name, `position`,
  barangay_name, municipality, responder_type, is_approved, email_verified, force_password_reset)
- VALUES (?,?,?,?,?,?,?,?,?,?,1,1,1)"
+ VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1)"
  );
  if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
- $ins->bind_param("ssssssssss", $c_first, $c_last, $c_email, $c_hash, $new_role, $c_org, $c_position, $c_brgy, $c_muni, $c_rtype);
+ $ins->bind_param("sssssssssss", $c_first, $c_last, $c_email, $c_official_id, $c_hash, $new_role, $c_org, $c_position, $c_brgy, $c_muni, $c_rtype);
  if (!$ins->execute()) {
  echo json_encode(['status'=>'error','message'=>'Create failed: '.$ins->error]); exit;
  }
@@ -665,7 +686,7 @@ switch ($action) {
  if ($c_email_creds) {
  try {
  require_once __DIR__ . '/../core/SenTriMailer.php';
- $portal_name = ['barangay'=>'Barangay Portal','lgu'=>'LGU Portal','first_responder'=>'First Responder Portal'][$new_role];
+ $portal_name = ['barangay'=>'Barangay Portal','lgu'=>'LGU Portal','first_responder'=>'First Responder Portal','community'=>'Community Portal'][$new_role];
  $login_link = sentri_app_url() . '/gov/login.php';
  $body = 'An account has been created for you on the SenTri <strong>' . htmlspecialchars($portal_name) . '</strong>.'
  . '<br><br><strong>Email:</strong> ' . htmlspecialchars($c_email)
@@ -673,16 +694,17 @@ switch ($action) {
  . '<br><br>Sign in at the Government Portal. For security, you will be required to set your own password on first sign-in.';
  $html = buildEmailTemplate('Your SenTri Official Account', 'Dear ' . htmlspecialchars($c_first) . ',', $body, $login_link, 'Open Government Portal', 'If you did not expect this account, contact your system administrator.');
  $m = new SenTriMailer();
- $email_sent = $m->send($c_email, $c_first . ' ' . $c_last, 'Your SenTri official account credentials', $html);
+ $email_sent = $m->send($c_email, $c_first . ' ' . $c_last, 'Your SenTri official account credentials', $html, 'gov');
  } catch (Throwable $e) {
  error_log('SenTri official invite error: ' . $e->getMessage());
  }
  }
 
- $portal_labels = ['barangay'=>'Barangay', 'lgu'=>'LGU', 'first_responder'=>'First Responder'];
- $msg = $portal_labels[$new_role] . ' account created for ' . $c_email . '.'
- . ($email_sent ? ' Credentials emailed.' : ($c_email_creds ? ' Warning: credential email could not be sent - share the password manually.' : ' Share the credentials securely.'));
- echo json_encode(['status'=>'success','message'=>$msg,'password'=>$c_pw,'email_sent'=>(bool)$email_sent]);
+ $portal_labels = ['barangay'=>'Barangay', 'lgu'=>'LGU', 'first_responder'=>'First Responder', 'community'=>'Community'];
+ $hasRealEmail = (strpos($c_email, '@official.sentri') === false);
+ $msg = $portal_labels[$new_role] . ' account created — Official ID: ' . $c_official_id . ' · password: ' . $c_pw . '.'
+ . ($hasRealEmail && $email_sent ? ' Credentials also emailed.' : ' Share these credentials directly — no email on file.');
+ echo json_encode(['status'=>'success','message'=>$msg,'official_id'=>$c_official_id,'password'=>$c_pw,'email_sent'=>(bool)$email_sent]);
  break;
 
  case 'admin_reject_user':

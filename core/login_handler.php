@@ -70,8 +70,8 @@ function flagHighRiskAttempt($conn, $email) {
  $failed_count = getFailedAttemptsCount($conn, $email, 30);
  if ($failed_count >= 5) {
  $user_id = 0;
- $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
- $stmt->bind_param("s", $email);
+ $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? OR official_id = ? LIMIT 1");
+ $stmt->bind_param("ss", $email, $email);
  $stmt->execute();
  $stmt->bind_result($user_id);
  $stmt->fetch();
@@ -221,8 +221,8 @@ $enumRes = $conn->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHER
 if ($enumRes) { $enumRow=$enumRes->fetch_row(); if($enumRow && strpos($enumRow[0],'first_responder')===false) $conn->query("ALTER TABLE users MODIFY COLUMN role ENUM('user','community','barangay','lgu','first_responder','admin') NOT NULL DEFAULT 'community'"); }
 
 if ($portal === 'resend') {
- $stmt = $conn->prepare("SELECT id,first_name,email_verified FROM users WHERE email=? LIMIT 1");
- $stmt->bind_param("s",$email); $stmt->execute();
+ $stmt = $conn->prepare("SELECT id, first_name, email_verified FROM users WHERE email=? OR official_id=? LIMIT 1");
+ $stmt->bind_param("ss",$email,$email); $stmt->execute();
  $user = $stmt->get_result()->fetch_assoc(); $stmt->close();
  if ($user && !$user['email_verified']) {
  $tok = bin2hex(random_bytes(32)); $exp = date('Y-m-d H:i:s', strtotime('+24 hours'));
@@ -247,8 +247,8 @@ if (isLockedOut($conn, $email)) {
  exit;
 }
 
-$stmt = $conn->prepare("SELECT id,first_name,last_name,password,role,email_verified,is_approved,force_password_reset FROM users WHERE email=? LIMIT 1");
-$stmt->bind_param("s",$email); $stmt->execute(); $stmt->store_result();
+ $stmt = $conn->prepare("SELECT id,first_name,last_name,password,role,email_verified,is_approved,force_password_reset FROM users WHERE email=? OR official_id=? LIMIT 1");
+ $stmt->bind_param("ss",$email,$email); $stmt->execute(); $stmt->store_result();
 $log_status='Failed'; $log_uid=null; $resp=['status'=>'error','message'=>'Invalid credentials.'];
 $is_successful_login = false;
 
