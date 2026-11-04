@@ -301,11 +301,31 @@
     { maxZoom: Infinity, minKm2: 0 }
   ];
 
+  /**
+   * Label appearance by zoom. The type grows as the user zooms in (a 10px
+   * name is unreadable at street level) and the chip behind it softens, so
+   * the map is still readable when 95 names are showing at once.
+   */
+  var LABEL_STYLE_BY_ZOOM = [
+    { maxZoom: 13, fontSize: 11, chip: 'rgba(255,255,255,.95)', border: 'rgba(10,61,98,.30)' },
+    { maxZoom: 14, fontSize: 12, chip: 'rgba(255,255,255,.93)', border: 'rgba(10,61,98,.26)' },
+    { maxZoom: 15, fontSize: 13, chip: 'rgba(255,255,255,.90)', border: 'rgba(10,61,98,.22)' },
+    { maxZoom: 16, fontSize: 13, chip: 'rgba(255,255,255,.87)', border: 'rgba(10,61,98,.18)' },
+    { maxZoom: Infinity, fontSize: 14, chip: 'rgba(255,255,255,.85)', border: 'rgba(10,61,98,.16)' }
+  ];
+
   function _barangayLabelThreshold(zoom) {
     for (var i = 0; i < LABEL_AREA_BY_ZOOM.length; i++) {
       if (zoom <= LABEL_AREA_BY_ZOOM[i].maxZoom) return LABEL_AREA_BY_ZOOM[i].minKm2;
     }
     return 0;
+  }
+
+  function _labelStyle(zoom) {
+    for (var i = 0; i < LABEL_STYLE_BY_ZOOM.length; i++) {
+      if (zoom <= LABEL_STYLE_BY_ZOOM[i].maxZoom) return LABEL_STYLE_BY_ZOOM[i];
+    }
+    return LABEL_STYLE_BY_ZOOM[LABEL_STYLE_BY_ZOOM.length - 1];
   }
 
   /** Rough area of a barangay polygon in km^2 (planar, at the Imus latitude). */
@@ -323,65 +343,356 @@
     return total * 111.32 * 111.32 * Math.cos(14.4 * Math.PI / 180);
   }
 
+  // ── Pole of inaccessibility (polylabel) ──────────────────────────────────
+  // The point inside a polygon that is furthest from its boundary: the
+  // "visual middle" that map labels are placed on. Unlike a plain centroid
+  // it is guaranteed to lie inside the shape, and unlike the bbox centre it
+  // does not drift onto the edge of an L-shaped or crescent barangay.
+
+  /** Squared distance from a point to a line segment. */
+  function _segDistSq(px, py, p, q) {
+    var dx = q[0] - p[0], dy = q[1] - p[1];
+    // A duplicate vertex is not a segment - ignoring it matters here,
+    // because the OSM-derived perimeter set contains 133 of them and a
+    // zero-length segment would otherwise report a distance of 0 for every
+    // point on the map.
+    if (dx === 0 && dy === 0) return Infinity;
+    var t = ((px - p[0]) * dx + (py - p[1]) * dy) / (dx * dx + dy * dy);
+    var x, y;
+    if (t <= 0) { x = p[0]; y = p[1]; }          // closest point is the start
+    else if (t >= 1) { x = q[0]; y = q[1]; }     // closest point is the end
+    else { x = p[0] + t * dx; y = p[1] + t * dy; } // perpendicular foot
+    dx = x - px; dy = y - py;
+    return dx * dx + dy * dy;
+  }
+
+  /**
+   * Signed distance from a point to the polygon boundary.
+   * Positive inside, negative outside.
+   */
+  function _pointToPolygonDist(x, y, ring) {
+    var inside = false;
+    var minDistSq = Infinity;
+    var n = ring.length;
+    for (var i = 0, j = n - 1; i < n; j = i++) {
+      var p = ring[i], q = ring[j];
+      if (((p[1] > y) !== (q[1] > y)) &&
+        (x < (q[0] - p[0]) * (y - p[1]) / (q[1] - p[1]) + p[0])) {
+        inside = !inside;
+      }
+      var d = _segDistSq(x, y, p, q);
+      if (d < minDistSq) minDistSq = d;
+    }
+    return Math.sqrt(minDistSq) * (inside ? 1 : -1);
+  }
+
+  /** Area-weighted centroid of a ring. */
+  function _ringCentroid(ring) {
+    var a = 0, x = 0, y = 0;
+    var n = ring.length;
+    for (var i = 0, j = n - 1; i < n; j = i++) {
+      var f = ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+      x += (ring[j][0] + ring[i][0]) * f;
+      y += (ring[j][1] + ring[i][1]) * f;
+      a += f;
+    }
+    if (a === 0) return null;
+    return [x / (3 * a), y / (3 * a)];
+  }
+
+  /**
+   * Pole of inaccessibility of a ring, as [lng, lat].
+   * Grid search for the deepest cell, then a bounded hill-climb.
+   * @param {Array<[number,number]>} ring outer ring, [[lng,lat],...]
+   * @param {number} [precision] target resolution in degrees (~1e-5 = 1 m)
+   * @returns {Array<number>|null}
+   */
+  function _polylabel(ring, precision) {
+    if (!ring || ring.length < 3) return null;
+    precision = precision || 1e-5;
+
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (var i = 0; i < ring.length; i++) {
+      var p = ring[i];
+      if (p[0] < minX) minX = p[0];
+      if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minY) minY = p[1];
+      if (p[1] > maxY) maxY = p[1];
+    }
+    var width = maxX - minX, height = maxY - minY;
+    if (width === 0 && height === 0) return [minX, minY];
+    var cellSize = Math.min(width, height);
+    if (cellSize <= 0) cellSize = Math.max(width, height);
+    if (cellSize <= 0) return [minX, minY];
+    // A very thin polygon would otherwise explode the seed grid (the step
+    // is the smaller side), so the grid is capped at 64 cells per axis.
+    cellSize = Math.max(cellSize, Math.max(width, height) / 64);
+
+    // Candidate cells, kept in a simple array; we always take the one with
+    // the largest distance to the boundary.
+    var queue = [];
+    function push(x, y, h) {
+      queue.push({ x: x, y: y, h: h, d: _pointToPolygonDist(x, y, ring), max: 0 });
+      queue[queue.length - 1].max = queue[queue.length - 1].d + h * Math.SQRT2;
+    }
+    function pop() {
+      var best = 0;
+      for (var k = 1; k < queue.length; k++) if (queue[k].d > queue[best].d) best = k;
+      return queue.splice(best, 1)[0];
+    }
+
+    var h = cellSize / 2;
+    for (var x = minX; x < maxX; x += cellSize) {
+      for (var y = minY; y < maxY; y += cellSize) {
+        push(x + h, y + h, h);
+      }
+    }
+
+    // Seed with the area centroid and the bbox centre - both are usually
+    // close to the answer and make the search converge much faster.
+    var bestCell = { d: -Infinity, x: 0, y: 0, h: 0 };
+    var seeds = [_ringCentroid(ring), [minX + width / 2, minY + height / 2]];
+    for (var s = 0; s < seeds.length; s++) {
+      var seed = seeds[s];
+      if (!seed) continue;
+      var sd = _pointToPolygonDist(seed[0], seed[1], ring);
+      if (sd > bestCell.d) bestCell = { d: sd, x: seed[0], y: seed[1], h: 0 };
+    }
+
+    var guard = 0;
+    while (queue.length && guard++ < 20000) {
+      var cell = pop();
+      if (cell.d > bestCell.d) bestCell = { d: cell.d, x: cell.x, y: cell.y, h: cell.h };
+      // No chance of beating the current best from here.
+      if (cell.max - bestCell.d <= precision) continue;
+      var hh = cell.h / 2;
+      if (hh <= precision) continue;
+      push(cell.x - hh, cell.y - hh, hh);
+      push(cell.x + hh, cell.y - hh, hh);
+      push(cell.x - hh, cell.y + hh, hh);
+      push(cell.x + hh, cell.y + hh, hh);
+    }    return [bestCell.x, bestCell.y];
+  }
+
+  /**
+   * The anchor a barangay's label should sit on: the pole of inaccessibility
+   * of the largest polygon part, so the name lands in the visual middle of
+   * the area. Falls back to the geojson's own `center` when the geometry
+   * cannot be used.
+   * @param {geojson.Feature} feature
+   * @returns {Array<number>} [lng, lat]
+   */
+  function _barangayLabelAnchor(feature) {
+    var polygons = _geometryPolygons(feature && feature.geometry);
+    var best = null, bestD = -Infinity;
+    for (var p = 0; p < polygons.length; p++) {
+      var ring = polygons[p][0];
+      if (!ring || ring.length < 3) continue;
+      var pt = _polylabel(ring);
+      if (!pt) continue;
+      var d = _pointToPolygonDist(pt[0], pt[1], ring);
+      if (d > bestD) { bestD = d; best = pt; }
+    }
+    if (best) {
+      // A point inside a hole would read as "outside the barangay".
+      var holes = polygons.length ? polygons[0].slice(1) : [];
+      for (var h = 0; h < holes.length; h++) {
+        if (_pointToPolygonDist(best[0], best[1], holes[h]) > 0) {
+          var c = _ringCentroid(polygons[0][0]);
+          if (c) return c;
+        }
+      }
+      return best;
+    }
+    var props = (feature && feature.properties) || {};
+    return (props.center && props.center.length >= 2) ? props.center : null;
+  }
+
+  /**
+   * Nudge the barangay labels away from the report pins.
+   *
+   * The names and the incident pins cluster in the same places (the
+   * Poblacion / Bayan Luma core), so a label drawn on the anchor ends up
+   * hidden behind a pin. Each label is moved to the nearest free spot
+   * instead - but only to a spot that is still inside its own barangay, so
+   * a name never ends up on the wrong side of a boundary.
+   *
+   * @param {L.Map} map
+   * @param {Array} placed the label records ({marker, anchor, ring})
+   * @param {Array<[number,number]>} avoid [lat,lng] points to keep clear of
+   */
+  function _nudgeLabels(map, placed, avoid) {
+    if (!placed || !placed.length) return;
+    var PIN_HALF_W = 15;  // the report pin graphic is 30 x 38, anchored at
+    var PIN_HEIGHT = 38;  // its bottom tip, so it covers the area above
+    var PIN_MARGIN = 4;   // the anchor point
+    var pins = [];
+    if (avoid && avoid.length) {
+      for (var i = 0; i < avoid.length; i++) {
+        // avoid[] holds [lat, lng] pairs - Leaflet needs a real LatLng here.
+        var a = avoid[i];
+        var pp = map.latLngToContainerPoint(L.latLng(a[0], a[1]));
+        pins.push({
+          l: pp.x - PIN_HALF_W - PIN_MARGIN,
+          r: pp.x + PIN_HALF_W + PIN_MARGIN,
+          t: pp.y - PIN_HEIGHT - PIN_MARGIN,
+          b: pp.y + PIN_MARGIN
+        });
+      }
+    }
+
+    // Big barangays are placed first so they get first pick of the best
+    // spot; the small ones then fit around them.
+    var order = placed.slice().sort(function (x, y) { return y.km2 - x.km2; });
+    var taken = []; // rects already occupied by a placed label
+
+    for (var n = 0; n < order.length; n++) {
+      var it = order[n];
+      var el = it.marker.getElement();
+      var span = el && el.querySelector('span');
+      if (!span) continue;
+      if (it.marker.getOpacity && it.marker.getOpacity() === 0) continue;
+      var w = span.offsetWidth, h = span.offsetHeight;
+      if (!w || !h) continue;
+
+      var base = map.latLngToContainerPoint(it.anchor);
+      var chosen = null;
+      for (var ring = 0; ring <= 56 && !chosen; ring += 8) {
+        var cands = ring === 0
+          ? [[0, 0]]
+          : [[0, -ring], [0, ring], [-ring, 0], [ring, 0],
+             [-ring, -ring], [ring, -ring], [-ring, ring], [ring, ring]];
+        for (var c = 0; c < cands.length; c++) {
+          var cx = base.x + cands[c][0], cy = base.y + cands[c][1];
+          // The label must stay on its own barangay.
+          if (it.ring) {
+            var target = map.containerPointToLatLng(L.point(cx, cy));
+            if (_pointToPolygonDist(target.lng, target.lat, it.ring) <= 0) continue;
+          }
+          var clash = false;
+          for (var k = 0; k < pins.length; k++) {
+            var pr = pins[k];
+            if (cx + w / 2 > pr.l && cx - w / 2 < pr.r &&
+                cy + h / 2 > pr.t && cy - h / 2 < pr.b) { clash = true; break; }
+          }
+          if (!clash) {
+            for (var t = 0; t < taken.length; t++) {
+              var tr = taken[t];
+              if (cx + w / 2 > tr.l && cx - w / 2 < tr.r &&
+                  cy + h / 2 > tr.t && cy - h / 2 < tr.b) { clash = true; break; }
+            }
+          }
+          if (!clash) { chosen = cands[c]; break; }
+        }
+      }
+      if (!chosen) chosen = [0, 0];
+      var fx = base.x + chosen[0], fy = base.y + chosen[1];
+      if (chosen[0] || chosen[1]) {
+        it.marker.setLatLng(map.containerPointToLatLng(L.point(fx, fy)));
+      } else {
+        it.marker.setLatLng(L.latLng(it.anchor[0], it.anchor[1]));
+      }
+      taken.push({ l: fx - w / 2, r: fx + w / 2, t: fy - h / 2, b: fy + h / 2 });
+    }
+  }
+
   /**
    * Place a permanent name label on every barangay of the perimeter set.
    *
-   * Labels are anchored on the geojson's own `center` property, which is
-   * verified to fall inside the matching polygon for all 95 barangays - more
-   * accurate than the bounding-box centre Leaflet would use for a path.
+   * Labels are anchored on the pole of inaccessibility of the barangay
+   * polygon, so the name always sits in the visual middle of its own area.
+   * The geojson's stored `center` was not usable for this: it sits up to
+   * 940 m away from the true middle of the largest barangays, which put the
+   * name visibly off-centre.
    *
    * They are drawn as non-interactive markers in the marker pane, so they
-   * never intercept a click meant for the boundary underneath, and they sit
-   * below the report pins (zIndexOffset) so an incident is never hidden by
-   * a place name.
+   * never intercept a click meant for the boundary underneath.
    *
    * Which names are drawn depends on the zoom (see LABEL_AREA_BY_ZOOM): at
    * the city-wide view only the large barangays are named, and the rest
-   * appear as the user zooms in.
+   * appear as the user zooms in. The type size and the chip behind it also
+   * follow the zoom (see LABEL_STYLE_BY_ZOOM).
    *
    * @param {L.Map} map
    * @param {geojson.FeatureCollection} fc
-   * @param {Object} [opts] {onlyName?:string, opacity?:number, fontSize?:number,
+   * @param {Object} [opts] {onlyName?:string, fontSize?:number,
    *                          allAt?:boolean  ignore the zoom thresholds}
    * @returns {L.LayerGroup}
    */
   function _addBarangayLabels(map, fc, opts) {
     opts = opts || {};
     var group = L.layerGroup();
-    var opacity = opts.opacity != null ? opts.opacity : 0.82;
-    var fontSize = opts.fontSize != null ? opts.fontSize : 10;
     var placed = [];
     for (var f = 0; f < fc.features.length; f++) {
       var props = fc.features[f].properties || {};
       var name = props.name;
-      var center = props.center;
-      if (!name || !center || center.length < 2) continue;
+      if (!name) continue;
       if (opts.onlyName && name !== opts.onlyName) continue;
+      var anchor = _barangayLabelAnchor(fc.features[f]);
+      if (!anchor) continue;
+      var polys = _geometryPolygons(fc.features[f].geometry);
       var html = '<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);'
-        + 'white-space:nowrap;pointer-events:none;'
-        + "font-family:'Poppins',sans-serif;font-size:" + fontSize + 'px;font-weight:700;'
-        + 'letter-spacing:.1px;color:#0a3d62;opacity:' + opacity + ';'
-        + 'text-shadow:0 0 3px rgba(255,255,255,.95),0 0 6px rgba(255,255,255,.85),'
-        + '0 1px 2px rgba(255,255,255,.9);">' + _escHtml(name) + '</div>';
-      var marker = L.marker([center[1], center[0]], {
+        + 'white-space:nowrap;pointer-events:none;">'
+        + '<span style="display:inline-block;">' + _escHtml(name) + '</span></div>';
+      var marker = L.marker([anchor[1], anchor[0]], {
         icon: L.divIcon({ className: '', html: html, iconSize: [0, 0], iconAnchor: [0, 0] }),
         interactive: false,
         keyboard: false,
         riseOnHover: false,
-        zIndexOffset: -1000
+        // Above the report pins: a name is easier to read than a pin head,
+        // and the chip is pointer-events:none so the pin stays clickable.
+        zIndexOffset: 1000
       }).addTo(group);
-      placed.push({ marker: marker, km2: _barangayAreaKm2(fc.features[f]) });
+      placed.push({
+        marker: marker,
+        km2: _barangayAreaKm2(fc.features[f]),
+        anchor: [anchor[1], anchor[0]],
+        ring: (polys.length && polys[0].length) ? polys[0][0] : null
+      });
     }
     group.addTo(map);
 
-    // Show or hide names as the zoom level changes.
+    var lastAvoid = [];
+
+    // Show, hide and re-style the names as the zoom level changes.
     function applyZoom() {
-      var threshold = opts.allAt ? 0 : _barangayLabelThreshold(map.getZoom());
+      var zoom = map.getZoom();
+      var threshold = opts.allAt ? 0 : _barangayLabelThreshold(zoom);
+      var style = _labelStyle(zoom);
+      var fontSize = opts.fontSize != null ? opts.fontSize : style.fontSize;
       for (var i = 0; i < placed.length; i++) {
-        placed[i].marker.setOpacity(placed[i].km2 >= threshold ? 1 : 0);
+        var visible = placed[i].km2 >= threshold;
+        placed[i].marker.setOpacity(visible ? 1 : 0);
+        if (!visible) continue;
+        var el = placed[i].marker.getElement();
+        var span = el && el.querySelector('span');
+        if (!span) continue;
+        span.style.background = style.chip;
+        span.style.border = '1px solid ' + style.border;
+        span.style.borderRadius = '7px';
+        span.style.padding = '1px 6px';
+        span.style.boxShadow = '0 1px 3px rgba(6,36,68,.28)';
+        span.style.fontFamily = "'Poppins',sans-serif";
+        span.style.fontSize = fontSize + 'px';
+        span.style.fontWeight = '700';
+        span.style.color = '#0a3d62';
+        span.style.letterSpacing = '.1px';
+        span.style.lineHeight = '1.4';
       }
+      _nudgeLabels(map, placed, lastAvoid);
     }
     map.on('zoomend', applyZoom);
+    // invalidateSize() shifts every pixel position, so the placement has to
+    // be recomputed then too - otherwise the labels drift off the spots
+    // they were nudged to.
+    map.on('resize', applyZoom);
+    map._sentriBarangayLabels = {
+      placed: placed,
+      avoid: function (points) {
+        lastAvoid = points || [];
+        _nudgeLabels(map, placed, lastAvoid);
+      }
+    };
     applyZoom();
     return group;
   }
@@ -571,6 +882,11 @@
     imusLatLngBounds: imusLatLngBounds,
     geoReady: geoReady,
     isInImus: isInImus,
+    barangayLabelAnchor: _barangayLabelAnchor,
+    avoidLabelOverlap: function (map, points) {
+      var ctrl = map && map._sentriBarangayLabels;
+      if (ctrl && typeof ctrl.avoid === 'function') ctrl.avoid(points);
+    },
     lockToImus: lockToImus,
     applyImusZoomLimit: applyImusZoomLimit,
     haversine: haversine,
