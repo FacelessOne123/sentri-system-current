@@ -111,16 +111,29 @@ class SenTriMailer
  * @param string $toName Recipient display name
  * @param string $subject Email subject
  * @param string $htmlBody Full HTML body
+ * @param string $channel Mail channel: 'community' | 'gov' | 'admin' |
+ *   'notification'. Decides SMTP-vs-outbox when the debug outbox is on but
+ *   MAIL_SMTP_REALMS whitelists some channels for real Gmail delivery.
  * @return bool true on success
  * @throws RuntimeException on SMTP error
  */
- public function send(string $toEmail, string $toName, string $subject, string $htmlBody): bool
+ public function send(string $toEmail, string $toName, string $subject, string $htmlBody, string $channel = 'community'): bool
  {
  // Offline development outbox: APP_DEBUG=1 (or MAIL_OUTBOX=1) in .env diverts
- // every transactional email to logs/mail/*.eml — signup, verification and
- // password reset all work with no internet. debug.php lists the outbox with
- // clickable verification/reset links.
+ // email to logs/mail/*.eml — signup, verification and password reset all
+ // work with no internet. debug.php lists the outbox with clickable links.
+ //
+ // Exception: MAIL_SMTP_REALMS in .env (comma list, lowercase) whitelists
+ // channels that are sent via REAL SMTP even while the debug outbox is
+ // active — e.g. MAIL_SMTP_REALMS=community sends account verification and
+ // password resets to real inboxes, while gov/admin/notification mail stays
+ // in the offline outbox for the admin to exercise manually on localhost.
+ // Never enable MAIL_SMTP_REALMS on a production box (there the outbox is
+ // off anyway and this gate is inert).
  if (defined('MAIL_DEBUG_OUTBOX') && MAIL_DEBUG_OUTBOX && defined('MAIL_DEBUG_DIR')) {
+ $smtpRealms = array_filter(array_map('trim', explode(',', strtolower((string) get_env_var('MAIL_SMTP_REALMS', '')))));
+ $chan = strtolower($channel !== '' ? $channel : 'community');
+ if ($smtpRealms === [] || !in_array($chan, $smtpRealms, true)) {
  if (!is_dir(MAIL_DEBUG_DIR)) { @mkdir(MAIL_DEBUG_DIR, 0777, true); }
  $boundary = 'sentri_' . bin2hex(random_bytes(8));
  $eml = "From: SenTri <" . MAIL_FROM . ">\r\n"
@@ -135,7 +148,8 @@ class SenTriMailer
  $file = MAIL_DEBUG_DIR . '/' . date('Ymd-His') . '_' . $safe . '_' . substr($boundary, -6) . '.eml';
  @file_put_contents($file, $eml);
  return true;
- }
+ } // whitelisted channel: fall through to real SMTP even in debug mode
+ } // end outbox gate
  $this->connect();
  $this->ehlo();
  $this->startTLS();
@@ -305,9 +319,13 @@ function sendVerificationEmail(string $toEmail, string $toName, string $token): 
 /**
  * Send a password-reset email.
  */
-function sendPasswordResetEmail(string $toEmail, string $toName, string $token): bool
+function sendPasswordResetEmail(string $toEmail, string $toName, string $token, string $role = 'community'): bool
 {
- $link = sentri_app_url() . '/reset_password.php?token=' . urlencode($token);
+ // Realm separation: the reset link MUST open the reset page of the
+ // account's OWN realm (community -> reset_password.php, officials ->
+ // gov/reset_password.php, admins -> admin/reset_password.php).
+ $resetPage = function_exists('reset_url_for_role') ? reset_url_for_role($role) : '/reset_password.php';
+ $link = sentri_app_url() . $resetPage . '?token=' . urlencode($token);
  $html = buildEmailTemplate(
  'Reset Your Password',
  "Hi $toName,",

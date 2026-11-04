@@ -1,5 +1,7 @@
 <?php
 ini_set('display_errors', 0);
+header('Cache-Control: no-store, no-cache, must-revalidate');
+header('Pragma: no-cache');
 require_once __DIR__ . '/config/session.php';
 // The admin panel owns its own session cookie ('sentri-admin'). Boot it for
 // every request (including the anonymous pre-auth page below) so the sign-in
@@ -17,7 +19,8 @@ require __DIR__ . '/core/login_handler.php';
 
 $sentri_admin_ident = sentri_identity();
 if (!$sentri_admin_ident || ($sentri_admin_ident['role'] ?? '') !== 'admin') {
- ?><!DOCTYPE html>
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -61,7 +64,7 @@ p.sub{font-size:0.8rem;color:var(--muted);line-height:1.5;margin-bottom:18px;}
  <div id="loginMsg" class="msg"></div>
  <form id="loginForm" novalidate>
  <input type="hidden" name="portal" value="admin">
- <div class="form-group"><label>Admin Email / Username</label><input type="text" name="email" id="emailField" required autocomplete="username"></div>
+ <div class="form-group"><label>Admin Email / Username</label><input type="text" name="email" id="emailField" required autocomplete="username" placeholder="admin@sentri.ph"></div>
  <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pwField" required autocomplete="current-password"><button type="button" class="toggle-pw" onclick="togglePw()">SHOW</button></div></div>
  <button type="submit" class="btn-login" id="loginBtn"><i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Access Admin Panel</span></button>
  </form>
@@ -130,10 +133,7 @@ if ($sentri_res = $conn->query("SELECT DATEDIFF(CURDATE(), DATE(created_at)) AS 
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
 <script src="assets/vendor/leaflet/leaflet.js"></script>
-<<<<<<< HEAD
-=======
 <script src="assets/js/sentri-geo.js"></script>
->>>>>>> c1a115abe9175f34360c210a176195134f778f08
 <style>
 :root{
  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
@@ -420,7 +420,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="name"><?= htmlspecialchars($first_name) ?></div>
  <div class="role"><i class="fas fa-circle" style="font-size:0.5rem;color:#a78bfa;margin-right:4px;"></i>Administrator</div>
  </div>
- <a href="logout.php?realm=admin" class="logout-btn" title="Log Out"><i class="fas fa-right-from-bracket"></i></a>
+ <a href="admin/logout.php" class="logout-btn" title="Log Out"><i class="fas fa-right-from-bracket"></i></a>
  </div>
  </div>
 </aside>
@@ -924,18 +924,19 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-user-shield" style="color:#166534;margin-right:8px;"></i>Create Official Account</h3>
  <button onclick="closeCreateOfficialModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
  </div>
- <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;line-height:1.5;">Provision a barangay, LGU, or first responder account. The account is created pre-approved, and credentials are emailed to the official. A password change is forced on first sign-in.</p>
+ <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;line-height:1.5;">Provision a <b>barangay</b>, <b>LGU</b>, <b>first responder</b>, or <b>community</b> account. The account is created pre-approved with an <b>Official ID</b> (email-free, 5 name-derived digits + creation year); credentials are shared directly and a password change is forced on first sign-in.</p>
  <div id="createOfficialMsg" class="msg" style="padding:9px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:12px;display:none;text-align:center;"></div>
  <form id="createOfficialForm" onsubmit="submitCreateOfficial(event)" novalidate>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Portal Role *</label>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Account Category *</label>
  <select id="coRole" onchange="coRoleChanged()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
  <option value="barangay">Barangay Official</option>
  <option value="lgu">LGU Official</option>
  <option value="first_responder">First Responder</option>
+ <option value="community">Community Member</option>
  </select></div>
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Responder Type</label>
- <select id="coResponderType" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ <div id="coRtypeWrap" style="display:none;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Responder Type</label>
+ <select id="coResponderType" onchange="coPopulatePositions()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
  <option value="">Select type...</option>
  <option value="bfp">BFP - Bureau of Fire Protection</option>
  <option value="pnp">PNP - Philippine National Police</option>
@@ -947,22 +948,39 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </select></div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">First Name *</label><input id="coFirst" type="text" placeholder="Juan" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Last Name *</label><input id="coLast" type="text" placeholder="dela Cruz" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">First Name *</label><input id="coFirst" type="text" placeholder="Juan" oninput="coAutoOffId()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Last Name *</label><input id="coLast" type="text" placeholder="dela Cruz" oninput="coAutoOffId()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
  </div>
- <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Official Email Address *</label><input id="coEmail" type="email" placeholder="official@example.gov.ph" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label><input id="coOrg" type="text" placeholder="e.g. Brgy. Malagasang I-A Hall" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Position / Rank</label><input id="coPosition" type="text" placeholder="e.g. Barangay Captain" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Official ID (sign-in ID) *</label>
+ <div style="display:flex;gap:8px;align-items:center;">
+ <input id="coOffId" type="text" inputmode="numeric" maxlength="9" oninput="this.dataset.manual='1'" placeholder="auto: 5 digits + year (123452026)" style="flex:1;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;font-family:ui-monospace,Menlo,monospace;letter-spacing:.12em;">
+ <button type="button" onclick="coRegenOffId()" title="Regenerate from names" style="padding:9px 12px;border:1.5px solid #e2e8f0;background:#fff;border-radius:8px;font-size:.8rem;cursor:pointer;color:#374151;font-weight:600;">↺</button>
+ </div>
+ <div style="font-size:.7rem;color:#6b7280;margin-top:4px;line-height:1.5;">Auto-generated from <b>first + last name</b>: 5 digits + the creation year (e.g. <code>12345</code> + <code>2026</code> = <code>123452026</code>). Officials sign in with this ID on their portals instead of an email. Overridable — must stay 9 unique digits.</div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Barangay</label><input id="coBarangay" type="text" placeholder="e.g. Malagasang I-A" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">City / Municipality *</label><input id="coMunicipality" type="text" placeholder="e.g. Imus" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label><input id="coOrg" type="text" placeholder="e.g. Brgy. Bucandala I Hall" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Position / Rank *</label>
+ <select id="coPosition" onchange="coPositionChanged()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></select>
+ <input id="coPositionOther" type="text" placeholder="Specify position / rank" style="display:none;width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;margin-top:6px;">
+ </div>
+ </div>
+ <div style="margin-top:12px;">
+ <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+ <label style="font-size:0.75rem;font-weight:600;color:#374151;">Territory — click a highlighted barangay *</label>
+ <a href="javascript:void(0)" onclick="coClearTerritory()" style="font-size:0.72rem;color:#dc2626;font-weight:600;">Clear</a>
+ </div>
+ <div id="coMap" style="height:230px;border:1.5px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#eef4fb;"></div>
+ <div id="coMapHint" style="font-size:0.7rem;color:#6b7280;margin-top:4px;line-height:1.5;">Click the official's <b>barangay</b> polygon to assign it. LGU accounts are citywide — clicking a barangay sets the city only.</div>
+ </div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Barangay</label><input id="coBarangay" type="text" readonly placeholder="— pick on the map —" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#f3f4f6;outline:none;color:#374151;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">City / Municipality *</label><input id="coMunicipality" type="text" readonly placeholder="— pick on the map —" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#f3f4f6;outline:none;color:#374151;"></div>
  </div>
  <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Initial Password</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="coPassword" type="text" placeholder="Leave blank to auto-generate" style="flex:1;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;font-family:monospace;">
- <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.76rem;color:#374151;font-weight:600;white-space:nowrap;"><input type="checkbox" id="coEmailCreds" checked> Email credentials</label>
+ <span style="font-size:0.76rem;color:#6b7280;white-space:nowrap;">Share credentials directly</span>
  </div></div>
  <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
  <button type="button" onclick="closeCreateOfficialModal()" style="padding:10px 20px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.86rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
@@ -1083,11 +1101,7 @@ async function loadOverview(){
 }
 
 // ── CITY-WIDE INCIDENT MAP (Leaflet) ─────────────────────────
-<<<<<<< HEAD
 let incidentMap=null, incidentMapLayer=null;
-=======
-let incidentMap=null, incidentMapLayer=null, incidentBrgyLayer=null, incidentBrgyAdding=false;
->>>>>>> c1a115abe9175f34360c210a176195134f778f08
 function renderIncidentMap(){
  const mapEl=document.getElementById('incidentMap');
  if(!mapEl || !window.L) return;
@@ -1109,33 +1123,6 @@ function renderIncidentMap(){
  if(pts.length){
  incidentMap.fitBounds(L.featureGroup(incidentMapLayer.getLayers()).getBounds().pad(0.25));
  }
-<<<<<<< HEAD
-=======
- // Official barangay perimeters: admin gets city-wide context around the plotted reports.
- if(window.SentriGeo && !incidentBrgyLayer && !incidentBrgyAdding){
- incidentBrgyAdding=true;
- const normName=s=>String(s||'').toLowerCase().replace(/^(brgy\.?|barangay)\s*/,'').replace(/[^a-z0-9]/g,'');
- const counts={};
- allReports.forEach(r=>{
- if(r.is_archived) return;
- const n=normName(r.barangay);
- if(n) counts[n]=(counts[n]||0)+1;
- });
- SentriGeo.addBarangayOverlay(incidentMap, {
- onEach: function(feature, layer){
- const props=(feature&&feature.properties)||{};
- const name=props.name||props.NAME||props.Barangay||'Barangay';
- const c=counts[normName(name)]||0;
- layer.bindPopup(`<strong>${esc(name)}</strong><br><span style="color:#555;">${c} report${c===1?'':'s'} tagged to this barangay</span>`);
- }
- }).then(l=>{
- incidentBrgyLayer=(l||true);
- incidentBrgyAdding=false;
- }).catch(()=>{
- incidentBrgyAdding=false;
- });
- }
->>>>>>> c1a115abe9175f34360c210a176195134f778f08
 }
 
 // ── 30-DAY REPORT TREND (inline CSS bar chart) ───────────────
@@ -1180,7 +1167,7 @@ function renderUsers(){
  const role=document.getElementById('userRoleFilter').value;
  let list=allUsers.filter(u=>{
  if(role && u.role!==role) return false;
- if(search){const hay=(u.first_name+' '+u.last_name+u.email).toLowerCase(); if(!hay.includes(search)) return false;}
+ if(search){const hay=(u.first_name+' '+u.last_name+' '+(u.official_id||'')+' '+u.email).toLowerCase(); if(!hay.includes(search)) return false;}
  return true;
  });
  const body=document.getElementById('usersBody');
@@ -1197,7 +1184,7 @@ function renderUsers(){
  <div class="user-avatar-sm ${u.role==='admin'?'admin-av':''}">${initials}</div>
  <div><div style="font-weight:600;">${esc(u.first_name)} ${esc(u.last_name)}</div>${orgInfo}${isPending?'<span style="font-size:0.68rem;background:#fef9ec;color:#92400e;border:1px solid #fde68a;padding:1px 7px;border-radius:10px;font-weight:700;margin-top:3px;display:inline-block;">PENDING APPROVAL</span>':''}</div>
  </div></td>
- <td style="color:var(--muted);">${esc(u.email)}</td>
+ <td style="color:var(--muted);"><div style="font-family:ui-monospace,Menlo,monospace;font-weight:600;color:#1a1a2e;letter-spacing:.08em;">${esc(u.official_id||'—')}</div><div style="font-size:0.72rem;color:#aaa;">${(/^official\.sentri$/.test(u.email.split('@').pop())?'ID-based sign-in':esc(u.email))}</div></td>
  <td><span class="badge ${u.role}">${roleLabel}</span></td>
  <td style="color:#888;font-size:0.78rem;">${date}</td>
  <td style="text-align:center;">${u.report_count}</td>
@@ -1226,11 +1213,191 @@ async function rejectUser(uid, name){
 }
 
 // ── CREATE OFFICIAL ACCOUNT ──────────────────────────────────
+// Official ID: mirror of config/db.php sentri_generate_official_id() —
+// CRC32 of the uppercased name pair, mod 100000, zero-padded to 5 digits,
+// plus the 4-digit creation year (e.g. 123452026).
+function coCrc32(s){
+ let c, table=[];
+ for(let n=0;n<256;n++){c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);table[n]=c;}
+ let crc=-1;
+ for(let i=0;i<s.length;i++)crc=(crc>>>8)^table[(crc^s.charCodeAt(i))&0xFF];
+ return (crc^-1)>>>0;
+}
+function coAutoOffId(){
+ const el=document.getElementById('coOffId');
+ if(el.dataset.manual==='1')return;
+ const f=document.getElementById('coFirst').value.trim();
+ const l=document.getElementById('coLast').value.trim();
+ el.value=(f&&l)?String(coCrc32((f+l).toUpperCase()+'|0')%100000).padStart(5,'0')+String(new Date().getFullYear()):'';
+}
+function coRegenOffId(){
+ const el=document.getElementById('coOffId');
+ delete el.dataset.manual;
+ coAutoOffId();
+}
+
+// Position catalog grounded in RA 7160 (Local Government Code — barangay &
+// LGU officials) and uniformed-service structures:
+//   • Barangay: Sec. 387–395 — Punong Barangay + Sangguniang Barangay members,
+//     SK chairperson; appointive: secretary/treasurer; BBHW, tanod, lupon.
+//   • LGU: RA 10121 mandates a DRRMO in every province/city/municipality —
+//     operational posts (ops & warning, rescue) + typical city departments.
+//   • BFP: RA 9263 ranks (Fire/Senior Fire Officer, Fire Marshal).
+//   • PNP: RA 6975/8551/11200 rank set (Patrolman → Police Major).
+//   • EMS / hospital / MDRRMO: common operational titles.
+const CO_POSITIONS={
+ barangay:[
+ {g:'Elected Officials — Sec. 387, RA 7160',items:[
+ 'Punong Barangay (Barangay Captain)',
+ 'Sangguniang Barangay Member (Kagawad)',
+ 'Sangguniang Kabataan (SK) Chairperson']},
+ {g:'Appointive Staff — Sec. 393',items:[
+ 'Barangay Secretary','Barangay Treasurer','Lupon Tagapamayapa Member']},
+ {g:'Auxiliary / Volunteer',items:[
+ 'Barangay Health Worker (BHW)','Barangay Tanod','Barangay DRRM Focal Person']},
+ {g:'Other',items:['__other__']}
+ ],
+ lgu:[
+ {g:'Command / Department Heads',items:[
+ 'City DRRMO Head (RA 10121)','City Health Officer',
+ 'City Social Welfare & Development Officer','City Engineer',
+ 'City Administrator','Public Information Officer']},
+ {g:'Operations / Field',items:[
+ 'DRRMO Operations & Warning Officer','DRRMO Search & Rescue Officer',
+ 'City Sanitation Officer']},
+ {g:'Support / Admin',items:['Administrative Officer']},
+ {g:'Other',items:['__other__']}
+ ],
+ first_responder:{
+ bfp:[
+ {g:'Command',items:['Fire Marshal (Station Head)']},
+ {g:'Senior Fire Officer',items:['Senior Fire Officer I (SFO1)','Senior Fire Officer II (SFO2)','Senior Fire Officer III (SFO3)','Senior Fire Officer IV (SFO4)']},
+ {g:'Fire Officer',items:['Fire Officer I (FO1)','Fire Officer II (FO2)','Fire Officer III (FO3)']},
+ {g:'Specialty',items:['Arson Investigator']},
+ {g:'Other',items:['__other__']}],
+ pnp:[
+ {g:'Command / Station Leadership',items:['Station Commander','Police Major','Police Captain','Police Lieutenant']},
+ {g:'Senior Non-Commissioned',items:['Police Executive Master Sergeant','Police Chief Master Sergeant','Police Master Sergeant']},
+ {g:'Operational / Patrol',items:['Patrol Corporal','Patrolman / Patrolwoman']},
+ {g:'Other',items:['__other__']}],
+ ems:[
+ {g:'Command',items:['EMS Chief']},
+ {g:'Operations',items:['Team Leader','Paramedic','EMT-Basic','EMS Dispatcher','EMS Driver']},
+ {g:'Other',items:['__other__']}],
+ drrmo:[
+ {g:'Command',items:['DRRMO Head']},
+ {g:'Operations',items:['Operations & Warning Officer','Search & Rescue Officer','Rescue Team Leader']},
+ {g:'Support',items:['Administrative Officer']},
+ {g:'Other',items:['__other__']}],
+ mdrrmo:[
+ {g:'Command',items:['MDRRMO Head']},
+ {g:'Operations',items:['Operations Officer','Rescue Team Leader','Rescue Technician','Communications Officer']},
+ {g:'Other',items:['__other__']}],
+ hospital:[
+ {g:'Medical Leadership',items:['Emergency Department Head','Facility Administrator']},
+ {g:'Clinical Staff',items:['ER Physician on Duty','ER Head Nurse','Duty Nurse','Medical Technologist']},
+ {g:'Other',items:['__other__']}],
+ other:[
+ {g:'Other',items:['Other (volunteer / other agency)']}
+ ]
+ },
+ community:[
+ {g:'Resident Tier',items:['Resident (Citizen)','Purok Leader']},
+ {g:'Volunteer',items:['Community Watch Volunteer']},
+ {g:'Other',items:['__other__']}
+ ]
+};
+const CO_OTHER='__other__';
+
+let coMap=null, coMapLayer=null, coSelLayer=null;
+
+function coPopulatePositions(){
+ const role=document.getElementById('coRole').value;
+ let groups;
+ if(role==='first_responder'){
+ const t=document.getElementById('coResponderType').value||'other';
+ groups=(CO_POSITIONS.first_responder[t])||CO_POSITIONS.first_responder.other;
+ }else{
+ groups=CO_POSITIONS[role]||CO_POSITIONS.community;
+ }
+ const sel=document.getElementById('coPosition');
+ let html='';
+ groups.forEach(function(grp){
+ const opts=grp.items.map(function(p){
+ const val=(p===CO_OTHER)?CO_OTHER:p;
+ const label=(p===CO_OTHER)?'Other (specify…)':p;
+ return '<option value="'+val+'">'+label+'</option>';
+ }).join('');
+ html+='<optgroup label="'+grp.g+'">'+opts+'</optgroup>';
+ });
+ sel.innerHTML=html;
+ coPositionChanged();
+}
+function coPositionChanged(){
+ const sel=document.getElementById('coPosition');
+ document.getElementById('coPositionOther').style.display=(sel.value===CO_OTHER)?'block':'none';
+}
+let coPyramid=null;
+function coInitMap(){
+ if(coMap||!window.L||!window.SentriGeo) return;
+ const coOrg=document.getElementById('coOrg');
+ if(window.SentriOffices&&!coOrg.getAttribute('data-sentri-ac')){
+ SentriOffices.combobox(coOrg,function(){
+ return SentriOffices.poolFor({
+ role:document.getElementById('coRole').value,
+ responderType:document.getElementById('coResponderType').value
+ });
+ });
+ }
+ coMap=L.map('coMap',{scrollWheelZoom:false}).setView([14.4243,120.9399],12);
+ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+ {maxZoom:19,attribution:'© OpenStreetMap'}).addTo(coMap);
+ SentriGeo.loadBarangays().then(function(fc){
+ coMapLayer=L.geoJSON(fc,{
+ style:function(){return {weight:1.5,color:'#2563eb',opacity:0.7,fillOpacity:0.08};},
+ onEachFeature:function(f,l){
+ l.on('click',function(){coSelectFeature(f,l);});
+ l.on('mouseover',function(){if(l!==coSelLayer)l.setStyle({fillOpacity:0.2});});
+ l.on('mouseout',function(){if(l!==coSelLayer)l.setStyle({fillOpacity:0.08});});
+ }
+ }).addTo(coMap);
+ coMap.fitBounds(coMapLayer.getBounds(),{padding:[6,6]});
+ }).catch(function(){});
+ setTimeout(function(){if(coMap)coMap.invalidateSize();},80);
+}
+function coSelectFeature(f,l){
+ if(coSelLayer){coSelLayer.setStyle({weight:1.5,color:'#2563eb',opacity:0.7,fillOpacity:0.08});}
+ coSelLayer=l;
+ l.setStyle({weight:3,color:'#16a34a',opacity:0.9,fillOpacity:0.28});
+ if(l.bringToFront)l.bringToFront();
+ document.getElementById('coMunicipality').value='Imus';
+ const role=document.getElementById('coRole').value;
+ // LGU accounts are citywide: clicking only pins the city, barangay stays empty.
+ document.getElementById('coBarangay').value=(role==='lgu')?'':(f.properties.name||'');
+ // Auto-suggest the office unit: a barangay official's office is their hall.
+ if(role!=='lgu'&&f.properties.name){
+ const coOrg=document.getElementById('coOrg');
+ const hall=(window.SentriOffices?SentriOffices.barangayHall(f.properties.name):'');
+ const isOtherHall=coOrg.value===''||coOrg.value.indexOf('Hall, Imus')>-1||coOrg.value.indexOf('Hall')>-1;
+ if(hall&&(isOtherHall))coOrg.value=hall;
+ }
+}
+function coClearTerritory(){
+ document.getElementById('coBarangay').value='';
+ document.getElementById('coMunicipality').value='';
+ if(coSelLayer&&coMapLayer){
+ coSelLayer.setStyle({weight:1.5,color:'#2563eb',opacity:0.7,fillOpacity:0.08});
+ coSelLayer=null;
+ }
+}
 function openCreateOfficialModal(){
  document.getElementById('createOfficialForm').reset();
  document.getElementById('createOfficialMsg').style.display='none';
  coRoleChanged();
+ coInitMap();
+ coClearTerritory();
  document.getElementById('createOfficialModalOverlay').style.display='flex';
+ setTimeout(function(){if(coMap)coMap.invalidateSize();},60);
 }
 function closeCreateOfficialModal(){
  document.getElementById('createOfficialModalOverlay').style.display='none';
@@ -1238,7 +1405,21 @@ function closeCreateOfficialModal(){
 }
 function coRoleChanged(){
  const role=document.getElementById('coRole').value;
- document.getElementById('coResponderType').disabled=(role!=='first_responder');
+ const rt=document.getElementById('coResponderType');
+ const rtWrap=document.getElementById('coRtypeWrap');
+ if(role==='first_responder'){
+ rtWrap.style.display='';
+ if(!rt.value)rt.value='bfp';
+ }else{
+ rtWrap.style.display='none';
+ }
+ const hint=document.getElementById('coMapHint');
+ hint.innerHTML=(role==='lgu')
+ ?'<b>LGU = citywide.</b> Click the barangay polygon inside the city to pin its municipality — the account covers the whole city.'
+ :(role==='community')
+ ?'<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident\'s purok.'
+ :'<b>Click the official\'s barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.';
+ coPopulatePositions();
 }
 function coShowMsg(type,text){
  const el=document.getElementById('createOfficialMsg');
@@ -1254,29 +1435,35 @@ async function submitCreateOfficial(e){
  const role=document.getElementById('coRole').value;
  const first=document.getElementById('coFirst').value.trim();
  const last=document.getElementById('coLast').value.trim();
- const email=document.getElementById('coEmail').value.trim();
+ const offId=document.getElementById('coOffId').value.trim();
  const municipality=document.getElementById('coMunicipality').value.trim();
- if(!first||!last||!email||!municipality){coShowMsg('error','First name, last name, email, and municipality are required.');return;}
+ const barangay=document.getElementById('coBarangay').value.trim();
+ if(!first||!last||!offId){coShowMsg('error','First name, last name and Official ID are required.');return;}
+ if(!/^\d{9}$/.test(offId)){coShowMsg('error','Official ID must be exactly 9 digits (5 digits + year).');return;}
+ if(role!=='community'&&!municipality){coShowMsg('error','Territory required — click a barangay on the map (or city polygon for LGU).');return;}
+ if(role==='barangay'&&!barangay){coShowMsg('error','Barangay officials need a barangay — click the barangay polygon on the map.');return;}
+ let position=document.getElementById('coPosition').value;
+ if(position===CO_OTHER){position=document.getElementById('coPositionOther').value.trim()||'Other';}
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Creating...';
  const fd=new FormData();
  fd.append('action','admin_create_official');
  fd.append('role',role);
  fd.append('first_name',first);
  fd.append('last_name',last);
- fd.append('email',email);
+ fd.append('official_id',offId);
  fd.append('org_name',document.getElementById('coOrg').value.trim());
- fd.append('position',document.getElementById('coPosition').value.trim());
- fd.append('barangay_name',document.getElementById('coBarangay').value.trim());
+ fd.append('position',position);
+ fd.append('barangay_name',barangay);
  fd.append('municipality',municipality);
  fd.append('responder_type',document.getElementById('coResponderType').value);
+ fd.append('email_creds','0'); // officials sign in with their Official ID; no credential email
  fd.append('password',document.getElementById('coPassword').value);
- fd.append('email_creds',document.getElementById('coEmailCreds').checked?'1':'0');
  try{
  const res=await fetch('api/reports.php',{method:'POST',body:fd});
  const data=await res.json();
  if(data.status==='success'){
  coShowMsg('success',data.message);
- if(data.password){coShowMsg('success',data.message+' Initial password: '+data.password+' (also visible in the welcome email if sending was enabled).');}
+ if(data.password){coShowMsg('success','Account created. Share with the official — Official ID: '+(data.official_id||document.getElementById('coOffId').value)+' · Initial password: '+data.password+' (they must change it at first sign-in).');}
  document.getElementById('createOfficialForm').reset();
  coRoleChanged();
  loadUsers();

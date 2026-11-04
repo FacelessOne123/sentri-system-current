@@ -157,3 +157,61 @@ if (!function_exists('sentri_ensure_audit_log_schema')) {
 
 sentri_ensure_report_dispatch_schema($conn);
 sentri_ensure_audit_log_schema($conn);
+
+if (!function_exists('sentri_generate_official_id')) {
+ /**
+ * Shared deterministic official-ID generator: 5 digits derived from the
+ * official's first+last names + the 4-digit year of account creation →
+ * e.g. "12345" + "2026" = "123452026" (9 chars). Salt-retries on collision;
+ * the unique index on users.official_id is the final guarantee.
+ */
+ function sentri_generate_official_id(mysqli $conn, string $first, string $last): string {
+ $base = strtoupper(preg_replace('/[^A-Z0-9]/i', '', $first . $last));
+ $salt = 0;
+ do {
+ $num = hexdec(substr(hash('crc32b', $base . '|' . $salt), 0, 8)) % 100000;
+ $id = str_pad((string)$num, 5, '0', STR_PAD_LEFT) . date('Y');
+ $chk = $conn->prepare("SELECT id FROM users WHERE official_id=? LIMIT 1");
+ $chk->bind_param('s', $id); $chk->execute(); $chk->store_result();
+ $exists = $chk->num_rows > 0;
+ $chk->close();
+ $salt++;
+ } while ($exists && $salt < 200);
+ if ($exists) { // name space exhausted (2 identical names + same year): random fallback
+ $id = str_pad((string)random_int(0, 99999), 5, '0', STR_PAD_LEFT) . date('Y');
+ }
+ return $id;
+ }
+}
+
+if (!function_exists('sentri_ensure_official_id_schema')) {
+ function sentri_ensure_official_id_schema(mysqli $conn): void {
+ if (!sentri_table_has_column($conn, 'users', 'official_id')) {
+ if (!$conn->query("ALTER TABLE `users`
+ ADD COLUMN `official_id` VARCHAR(12) DEFAULT NULL COMMENT '9-char official login ID: 5 name-derived digits + created year' AFTER `email`")) {
+ error_log('SenTri DB migration error (users.official_id): ' . $conn->error);
+ return;
+ }
+ }
+ $hasIdx = false;
+ if ($idx = $conn->query("SHOW INDEX FROM `users` WHERE Key_name = 'uq_official_id'")) {
+ $hasIdx = $idx->num_rows > 0;
+ $idx->free();
+ }
+ if (!$hasIdx && !$conn->query("ALTER TABLE `users` ADD UNIQUE KEY `uq_official_id` (`official_id`)")) {
+ error_log('SenTri DB migration error (users.uq_official_id): ' . $conn->error);
+ }
+ // Backfill provisioned gov accounts deterministically from their names.
+ if ($res = $conn->query("SELECT id, first_name, last_name FROM users
+ WHERE role IN ('barangay','lgu','first_responder') AND official_id IS NULL")) {
+ while ($u = $res->fetch_assoc()) {
+ $id = sentri_generate_official_id($conn, (string)$u['first_name'], (string)$u['last_name']);
+ $up = $conn->prepare("UPDATE users SET official_id=? WHERE id=?");
+ $up->bind_param('si', $id, $u['id']); $up->execute(); $up->close();
+ }
+ $res->free();
+ }
+ }
+}
+sentri_ensure_official_id_schema($conn);
+

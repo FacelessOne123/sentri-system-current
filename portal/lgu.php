@@ -627,7 +627,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-upos"><?= htmlspecialchars($pos) ?></div>
  </div>
  </div>
- <a href="../logout.php?realm=gov" class="sb-logout">
+ <a href="../gov/logout.php" class="sb-logout">
  <i class="fas fa-right-from-bracket"></i> Sign Out
  </a>
  </div>

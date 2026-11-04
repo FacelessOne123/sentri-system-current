@@ -197,8 +197,6 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
 .msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
 .login-row{text-align:center;margin-top:16px;font-size:0.85rem;color:var(--muted);}
 .login-row a{color:#2563eb;font-weight:700;text-decoration:none;}
-.gov-row{text-align:center;margin-top:6px;font-size:0.78rem;color:var(--muted);}
-.gov-row a{color:var(--navy);font-weight:700;text-decoration:none;}
 .terms{font-size:0.76rem;color:var(--muted);text-align:center;margin-top:10px;line-height:1.5;}
 @media(max-width:640px){.form-row{grid-template-columns:1fr;}.form-card{padding:22px 18px;}.page-wrap{padding:20px 14px 50px;}.gov-links{display:none;}}
 </style>
@@ -211,7 +209,6 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
  </a>
  <nav class="gov-links">
  <a href="login.php">Sign In</a>
- <a href="gov/login.php">Government Portal</a>
  <a href="index.php">Home</a>
  </nav>
 </header>
@@ -248,7 +245,7 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
  </form>
 
  <div class="login-row">Already have an account? <a href="login.php">Sign in here</a></div>
- <div class="gov-row">Barangay official, LGU staff, or first responder? Government accounts are provisioned by the system administrator - <a href="gov/login.php">sign in at the Government Portal</a>.</div>
+
  <p class="terms">By registering you agree to use this system solely for legitimate community safety reporting. Misuse is subject to legal action under applicable Philippine laws.</p>
  </div>
 </div>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SenTri Local Authentication Test Report</title>
+<style>
+:root{color-scheme:light;--navy:#0a3d62;--gold:#f39c12;--ink:#172033;--muted:#64748b;--line:#dbe3ec;--bg:#f3f6fa;--pass:#166534;--passbg:#dcfce7;--note:#92400e;--notebg:#fef3c7}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+header{background:linear-gradient(130deg,#062444,var(--navy));color:white;padding:38px max(24px,calc((100% - 1100px)/2));border-bottom:5px solid var(--gold)}header h1{margin:0 0 8px;font-size:clamp(1.7rem,4vw,2.5rem)}header p{margin:0;color:#dbeafe}
+main{max-width:1100px;margin:28px auto;padding:0 20px 60px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:24px}.card,.panel{background:white;border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:0 2px 8px #0f172a0a}.metric{font-size:1.6rem;font-weight:800;color:var(--navy)}.label{color:var(--muted);font-size:.9rem}.panel{margin:18px 0}.panel h2{margin:0 0 12px;font-size:1.3rem;color:var(--navy)}
+.badge{display:inline-block;border-radius:999px;padding:2px 10px;font-size:.78rem;font-weight:750;white-space:nowrap}.pass{color:var(--pass);background:var(--passbg)}.note{color:var(--note);background:var(--notebg)}table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:10px 8px}th{color:#334155;background:#f8fafc}td:first-child{font-weight:700}.caveat{border-left:4px solid var(--gold);background:#fffbeb;padding:12px 16px;border-radius:5px}.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.shot{margin:0;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}.shot a{display:block}.shot img{display:block;width:100%;height:auto;background:#e2e8f0}.shot figcaption{padding:10px 12px;font-size:.88rem}.shot strong{display:block;color:var(--navy)}code{background:#f1f5f9;padding:2px 5px;border-radius:4px}footer{color:var(--muted);font-size:.85rem;margin-top:24px}@media(max-width:650px){main{padding:0 12px 40px}table{font-size:.83rem}th,td{padding:8px 5px}}
+</style>
+</head>
+<body>
+<header><h1>SenTri · Local Authentication Test Report</h1><p>Manual browser + live HTTP/DB checks · 29 October 2026 · Target: <code>http://localhost/</code></p></header>
+<main>
+<section class="summary" aria-label="Test summary">
+ <div class="card"><div class="metric">PASS</div><div class="label">Authentication + route checks</div></div>
+ <div class="card"><div class="metric">6 routes</div><div class="label">HTTP pages checked — all returned 200</div></div>
+ <div class="card"><div class="metric">1 created → cleaned</div><div class="label">Isolated community test account</div></div>
+ <div class="card"><div class="metric">14</div><div class="label">Screenshots included below</div></div>
+</section>
+
+<section class="panel"><h2>What was tested</h2>
+<table><thead><tr><th>Area</th><th>Check</th><th>Result</th><th>Evidence</th></tr></thead><tbody>
+<tr><td>Registration</td><td>Form loads; invalid email rejected; password under 8 characters rejected; mismatched confirmation rejected.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/01-register-form.png">01</a>, <a href="screenshots/02-register-invalid-email.png">02</a>, <a href="screenshots/03-register-short-password.png">03</a>, <a href="screenshots/11-register-password-mismatch.png">11</a></td></tr>
+<tr><td>Registration</td><td>Submitted unique test account; DB confirmed community role, approved flag, and unverified state. Duplicate email was rejected.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/04-register-success.png">04</a>, <a href="screenshots/10-register-duplicate.png">10</a></td></tr>
+<tr><td>Email verification</td><td>Used the local verification token; app showed the verified success page and the DB showed <code>email_verified=1</code>.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/06-email-verification.png">06</a></td></tr>
+<tr><td>Login</td><td>Login form loads; wrong password rejected; correct password established a session and opened the community dashboard.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/05-login-form.png">05</a>, <a href="screenshots/07-login-invalid-password.png">07</a>, <a href="screenshots/08-login-success-dashboard.png">08</a></td></tr>
+<tr><td>Portal enforcement</td><td>Changing the community login request to the government portal was rejected.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/12-login-wrong-portal.png">12</a></td></tr>
+<tr><td>Session handling</td><td>Logout returned to sign-in; opening the protected community dashboard logged out redirected to sign-in.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/09-logout.png">09</a>, <a href="screenshots/13-protected-dashboard-redirect.png">13</a></td></tr>
+<tr><td>Related routes</td><td>Forgot-password and government login pages load. No password-reset submission was made.</td><td><span class="badge pass">PASS</span></td><td><a href="screenshots/14-forgot-password-page.png">14</a></td></tr>
+<tr><td>Availability / syntax</td><td><code>/</code>, signup, login, forgot-password, government login, and verification routes returned HTTP 200; PHP lint passed for index, login, signup.</td><td><span class="badge pass">PASS</span></td><td>Live checks recorded during test</td></tr>
+</tbody></table></section>
+
+<section class="panel"><h2>Scope and caveats</h2>
+<p class="caveat"><strong>Email delivery was not validated.</strong> The app is served from <code>/var/www/html</code>, which has a separate existing mail configuration. A repository-local temporary SMTP override did not affect that runtime and was removed. The test used a reserved <code>.invalid</code> address and activated the account using its local DB token; no real mailbox was used. The password-reset form was viewed but not submitted.</p>
+<p>The temporary account and its login-log rows were removed after evidence capture. Existing project edits were not changed. Screenshots are of the live local browser pages; each image can be opened full-size by clicking it.</p>
+</section>
+
+<section class="panel"><h2>Screenshot evidence</h2><div class="shots">
+<figure class="shot"><a href="screenshots/01-register-form.png"><img loading="lazy" src="screenshots/01-register-form.png" alt="Registration form"></a><figcaption><strong>01 · Registration form</strong>Initial registration page.</figcaption></figure>
+<figure class="shot"><a href="screenshots/02-register-invalid-email.png"><img loading="lazy" src="screenshots/02-register-invalid-email.png" alt="Invalid email validation"></a><figcaption><strong>02 · Invalid email</strong>Malformed address rejected.</figcaption></figure>
+<figure class="shot"><a href="screenshots/03-register-short-password.png"><img loading="lazy" src="screenshots/03-register-short-password.png" alt="Short password validation"></a><figcaption><strong>03 · Short password</strong>Minimum length enforced.</figcaption></figure>
+<figure class="shot"><a href="screenshots/04-register-success.png"><img loading="lazy" src="screenshots/04-register-success.png" alt="Registration success notice"></a><figcaption><strong>04 · Registration success</strong>Post-registration sign-in notice.</figcaption></figure>
+<figure class="shot"><a href="screenshots/05-login-form.png"><img loading="lazy" src="screenshots/05-login-form.png" alt="Community sign in form"></a><figcaption><strong>05 · Login form</strong>Community portal sign-in.</figcaption></figure>
+<figure class="shot"><a href="screenshots/06-email-verification.png"><img loading="lazy" src="screenshots/06-email-verification.png" alt="Email verified successfully"></a><figcaption><strong>06 · Verification</strong>Token accepted; account activated.</figcaption></figure>
+<figure class="shot"><a href="screenshots/07-login-invalid-password.png"><img loading="lazy" src="screenshots/07-login-invalid-password.png" alt="Invalid password response"></a><figcaption><strong>07 · Invalid password</strong>Incorrect credentials rejected.</figcaption></figure>
+<figure class="shot"><a href="screenshots/08-login-success-dashboard.png"><img loading="lazy" src="screenshots/08-login-success-dashboard.png" alt="Community dashboard after login"></a><figcaption><strong>08 · Login success</strong>Authenticated community dashboard.</figcaption></figure>
+<figure class="shot"><a href="screenshots/09-logout.png"><img loading="lazy" src="screenshots/09-logout.png" alt="Sign in page after logout"></a><figcaption><strong>09 · Logout</strong>Returned to the sign-in page.</figcaption></figure>
+<figure class="shot"><a href="screenshots/10-register-duplicate.png"><img loading="lazy" src="screenshots/10-register-duplicate.png" alt="Duplicate registration rejected"></a><figcaption><strong>10 · Duplicate account</strong>Existing test address rejected.</figcaption></figure>
+<figure class="shot"><a href="screenshots/11-register-password-mismatch.png"><img loading="lazy" src="screenshots/11-register-password-mismatch.png" alt="Password mismatch rejected"></a><figcaption><strong>11 · Password mismatch</strong>Confirmation mismatch rejected.</figcaption></figure>
+<figure class="shot"><a href="screenshots/12-login-wrong-portal.png"><img loading="lazy" src="screenshots/12-login-wrong-portal.png" alt="Wrong portal selection rejected"></a><figcaption><strong>12 · Wrong portal</strong>Community page rejects government portal selection.</figcaption></figure>
+<figure class="shot"><a href="screenshots/13-protected-dashboard-redirect.png"><img loading="lazy" src="screenshots/13-protected-dashboard-redirect.png" alt="Protected dashboard redirects to sign in"></a><figcaption><strong>13 · Protected route</strong>Anonymous request redirected to login.</figcaption></figure>
+<figure class="shot"><a href="screenshots/14-forgot-password-page.png"><img loading="lazy" src="screenshots/14-forgot-password-page.png" alt="Forgot password page"></a><figcaption><strong>14 · Password reset page</strong>Page load checked; no email sent.</figcaption></figure>
+</div></section>
+<footer>Report generated from the local Sentri-system workspace. Test credentials and verification token are intentionally excluded.</footer>
+</main></body></html>

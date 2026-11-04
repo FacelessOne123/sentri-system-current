@@ -1,70 +1,30 @@
 <?php
 /**
- * logout.php - Sign out of ONE realm session
+ * logout.php - Sign out of the COMMUNITY realm session ONLY.
  *
- * Every realm keeps its own cookie (config/session.php: sentri-comm /
- * sentri-gov / sentri-admin), so logging out tears down exactly one realm
- * and returns the user to that role's sign-in page. Other realms stay
- * signed in.
+ * Each realm has its own logout page so community pages never touch
+ * government or administrator sessions (separation by design):
+ *   community -> logout.php          (this page)
+ *   gov       -> gov/logout.php
+ *   admin     -> admin/logout.php
  *
- * Realm selection, in priority order:
- *   1. ?realm=community|gov|admin   (explicit, preferred; portal pages should
- *      link e.g. /logout.php?realm=gov)
- *   2. HTTP referrer path (portal pages may link plain logout.php)
- *   3. First realm cookie that actually holds an identity (order: gov,
- *      community, admin) via sentri_boot_auto_realm()
- *   4. Nothing signed in anywhere: straight redirect, no session work.
+ * Only the community realm's own cookie (sentri-comm) is read and destroyed.
+ * If the visitor holds no community identity, nothing is destroyed - other
+ * realms' sessions are never signed out from a community page.
  */
 ini_set('display_errors', 0);
 require_once __DIR__ . '/config/session.php';
+sentri_boot_realm('community');
 
-$realm = (string)($_GET['realm'] ?? '');
-if (!array_key_exists($realm, SENTRI_REALM_COOKIES)) {
-  $realm = null;
+$identity = sentri_identity();
+$has_identity = $identity !== null;
+$was_role = $identity['role'] ?? 'community';
 
-  // Infer from the page that linked here where sensible.
-  $refPath = '';
-  if (!empty($_SERVER['HTTP_REFERER'])) {
-    $refPath = (string)parse_url($_SERVER['HTTP_REFERER'], PHP_URL_PATH);
-  }
-  if ($refPath !== '') {
-    $isGov = strpos($refPath, '/gov/') === 0
-      || strpos($refPath, '/portal/barangay') === 0
-      || strpos($refPath, '/portal/lgu') === 0
-      || strpos($refPath, '/portal/responder') === 0;
-    if ($isGov) {
-      $realm = 'gov';
-    } elseif (strpos($refPath, '/admin.php') === 0) {
-      $realm = 'admin';
-    } elseif (strpos($refPath, '/portal/') === 0) {
-      $realm = 'community';
-    }
-  }
-
-  if ($realm !== null) {
-    sentri_boot_realm($realm);
-  } elseif (sentri_available_cookie_names() === []) {
-    // Nothing to sign out anywhere; just route the visitor to a login page.
-    header('Location: ' . login_url_for_role('community'));
-    exit;
-  } else {
-    // Open whichever realm session actually holds an identity (session stays
-    // OPEN on return) and map the chosen cookie name back to its realm.
-    $chosen = sentri_boot_auto_realm();
-    $realm = array_search($chosen, SENTRI_REALM_COOKIES, true) ?: 'community';
-  }
-} else {
-  sentri_boot_realm($realm);
+if ($has_identity) {
+  sentri_destroy_current_realm(); // community realm cookie/session only
 }
 
-// Capture the identity role BEFORE destroying the session.
-$identity = sentri_identity();
-$was_role = $identity['role'] ?? '';
-
-// Destroy ONLY the current realm's session and its cookie. Nothing is read
-// from other realms here - they are separate cookies/sessions.
-sentri_destroy_current_realm();
-
-// Return the user to the sign-in page for their portal
+// Always return to the community sign-in page. Government/admin visitors
+// signing out land on their own pages via gov/logout.php / admin/logout.php.
 header('Location: ' . login_url_for_role($was_role !== '' ? $was_role : 'community'));
 exit;

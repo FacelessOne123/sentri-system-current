@@ -39,15 +39,18 @@ function login_url_for_role($role) {
   }
 }
 
-function require_login() {
+function require_login($allowedRoles = null) {
   $identity = sentri_identity();
   if ($identity === null) {
-    header('Location: ' . login_url_for_role('community')); exit;
+    // Direct to the sign-in page of the realm whose page asked for a login
+    // (never cross realms: gov pages must not bounce visitors to community).
+    $hint = is_array($allowedRoles) && $allowedRoles ? reset($allowedRoles) : 'community';
+    header('Location: ' . login_url_for_role($hint)); exit;
   }
 }
 
 function require_role($allowed) {
-  require_login();
+  require_login($allowed);
   $role = sentri_identity()['role'] ?? '';
   if (!in_array($role, (array)$allowed, true)) {
     header('Location: ' . portal_url($role)); exit;
@@ -85,6 +88,23 @@ function redirect_to_portal() {
 
 function gov_login_url() {
   return '/gov/login.php';
+}
+
+/**
+ * The password-reset page that may set a password for a role. Realms are
+ * fully separated: officials use gov/reset_password.php, administrators use
+ * admin/reset_password.php, community members use reset_password.php.
+ */
+function reset_url_for_role($role) {
+  switch($role) {
+  case 'barangay':
+  case 'lgu':
+  case 'first_responder': return '/gov/reset_password.php';
+  case 'admin':           return '/admin/reset_password.php';
+  case 'community':
+  case 'user':
+  default: return '/reset_password.php';
+  }
 }
 
 function role_label($role) {
