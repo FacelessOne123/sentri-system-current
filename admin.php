@@ -19,7 +19,8 @@ require __DIR__ . '/core/login_handler.php';
 
 $sentri_admin_ident = sentri_identity();
 if (!$sentri_admin_ident || ($sentri_admin_ident['role'] ?? '') !== 'admin') {
- ?><!DOCTYPE html>
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1100,11 +1101,7 @@ async function loadOverview(){
 }
 
 // ── CITY-WIDE INCIDENT MAP (Leaflet) ─────────────────────────
-<<<<<<< HEAD
 let incidentMap=null, incidentMapLayer=null;
-=======
-let incidentMap=null, incidentMapLayer=null, incidentBrgyLayer=null, incidentBrgyAdding=false;
->>>>>>> c1a115abe9175f34360c210a176195134f778f08
 function renderIncidentMap(){
  const mapEl=document.getElementById('incidentMap');
  if(!mapEl || !window.L) return;
@@ -1126,33 +1123,6 @@ function renderIncidentMap(){
  if(pts.length){
  incidentMap.fitBounds(L.featureGroup(incidentMapLayer.getLayers()).getBounds().pad(0.25));
  }
-<<<<<<< HEAD
-=======
- // Official barangay perimeters: admin gets city-wide context around the plotted reports.
- if(window.SentriGeo && !incidentBrgyLayer && !incidentBrgyAdding){
- incidentBrgyAdding=true;
- const normName=s=>String(s||'').toLowerCase().replace(/^(brgy\.?|barangay)\s*/,'').replace(/[^a-z0-9]/g,'');
- const counts={};
- allReports.forEach(r=>{
- if(r.is_archived) return;
- const n=normName(r.barangay);
- if(n) counts[n]=(counts[n]||0)+1;
- });
- SentriGeo.addBarangayOverlay(incidentMap, {
- onEach: function(feature, layer){
- const props=(feature&&feature.properties)||{};
- const name=props.name||props.NAME||props.Barangay||'Barangay';
- const c=counts[normName(name)]||0;
- layer.bindPopup(`<strong>${esc(name)}</strong><br><span style="color:#555;">${c} report${c===1?'':'s'} tagged to this barangay</span>`);
- }
- }).then(l=>{
- incidentBrgyLayer=(l||true);
- incidentBrgyAdding=false;
- }).catch(()=>{
- incidentBrgyAdding=false;
- });
- }
->>>>>>> c1a115abe9175f34360c210a176195134f778f08
 }
 
 // ── 30-DAY REPORT TREND (inline CSS bar chart) ───────────────
