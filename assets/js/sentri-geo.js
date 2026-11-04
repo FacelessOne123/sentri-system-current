@@ -279,11 +279,121 @@
     if (isFinite(z) && z > 0) map.setMinZoom(Math.floor(z));
   }
 
+  /** Escape a string for safe use as HTML text. */
+  function _escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Minimum polygon area (km^2) a barangay must have for its label to be
+   * drawn, by map zoom. Imus has 95 barangays, many of them slivers in the
+   * Poblacion / Bayan Luma core, so labelling every one of them at the
+   * city-wide zoom produces an unreadable wall of text. The thresholds step
+   * down as the user zooms in, and every name is labelled by z17.
+   */
+  var LABEL_AREA_BY_ZOOM = [
+    { maxZoom: 13, minKm2: 1.00 },
+    { maxZoom: 14, minKm2: 0.50 },
+    { maxZoom: 15, minKm2: 0.25 },
+    { maxZoom: 16, minKm2: 0.10 },
+    { maxZoom: Infinity, minKm2: 0 }
+  ];
+
+  function _barangayLabelThreshold(zoom) {
+    for (var i = 0; i < LABEL_AREA_BY_ZOOM.length; i++) {
+      if (zoom <= LABEL_AREA_BY_ZOOM[i].maxZoom) return LABEL_AREA_BY_ZOOM[i].minKm2;
+    }
+    return 0;
+  }
+
+  /** Rough area of a barangay polygon in km^2 (planar, at the Imus latitude). */
+  function _barangayAreaKm2(feature) {
+    var polygons = _geometryPolygons(feature.geometry);
+    var total = 0;
+    for (var p = 0; p < polygons.length; p++) {
+      var ring = polygons[p][0];
+      var a = 0;
+      for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        a += (ring[j][0] * ring[i][1]) - (ring[i][0] * ring[j][1]);
+      }
+      total += Math.abs(a / 2);
+    }
+    return total * 111.32 * 111.32 * Math.cos(14.4 * Math.PI / 180);
+  }
+
+  /**
+   * Place a permanent name label on every barangay of the perimeter set.
+   *
+   * Labels are anchored on the geojson's own `center` property, which is
+   * verified to fall inside the matching polygon for all 95 barangays - more
+   * accurate than the bounding-box centre Leaflet would use for a path.
+   *
+   * They are drawn as non-interactive markers in the marker pane, so they
+   * never intercept a click meant for the boundary underneath, and they sit
+   * below the report pins (zIndexOffset) so an incident is never hidden by
+   * a place name.
+   *
+   * Which names are drawn depends on the zoom (see LABEL_AREA_BY_ZOOM): at
+   * the city-wide view only the large barangays are named, and the rest
+   * appear as the user zooms in.
+   *
+   * @param {L.Map} map
+   * @param {geojson.FeatureCollection} fc
+   * @param {Object} [opts] {onlyName?:string, opacity?:number, fontSize?:number,
+   *                          allAt?:boolean  ignore the zoom thresholds}
+   * @returns {L.LayerGroup}
+   */
+  function _addBarangayLabels(map, fc, opts) {
+    opts = opts || {};
+    var group = L.layerGroup();
+    var opacity = opts.opacity != null ? opts.opacity : 0.82;
+    var fontSize = opts.fontSize != null ? opts.fontSize : 10;
+    var placed = [];
+    for (var f = 0; f < fc.features.length; f++) {
+      var props = fc.features[f].properties || {};
+      var name = props.name;
+      var center = props.center;
+      if (!name || !center || center.length < 2) continue;
+      if (opts.onlyName && name !== opts.onlyName) continue;
+      var html = '<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);'
+        + 'white-space:nowrap;pointer-events:none;'
+        + "font-family:'Poppins',sans-serif;font-size:" + fontSize + 'px;font-weight:700;'
+        + 'letter-spacing:.1px;color:#0a3d62;opacity:' + opacity + ';'
+        + 'text-shadow:0 0 3px rgba(255,255,255,.95),0 0 6px rgba(255,255,255,.85),'
+        + '0 1px 2px rgba(255,255,255,.9);">' + _escHtml(name) + '</div>';
+      var marker = L.marker([center[1], center[0]], {
+        icon: L.divIcon({ className: '', html: html, iconSize: [0, 0], iconAnchor: [0, 0] }),
+        interactive: false,
+        keyboard: false,
+        riseOnHover: false,
+        zIndexOffset: -1000
+      }).addTo(group);
+      placed.push({ marker: marker, km2: _barangayAreaKm2(fc.features[f]) });
+    }
+    group.addTo(map);
+
+    // Show or hide names as the zoom level changes.
+    function applyZoom() {
+      var threshold = opts.allAt ? 0 : _barangayLabelThreshold(map.getZoom());
+      for (var i = 0; i < placed.length; i++) {
+        placed[i].marker.setOpacity(placed[i].km2 >= threshold ? 1 : 0);
+      }
+    }
+    map.on('zoomend', applyZoom);
+    applyZoom();
+    return group;
+  }
+
   /**
    * Draw thin translucent barangay outlines under map pins.
    * @param {L.Map} map Leaflet map
    * @param {Object} [opts] {onlyName?:string, style?:(feat)=>LeafletPathOptions,
-   *                         onEach?: (feature, layer)=>void}
+   *                         onEach?: (feature, layer)=>void,
+   *                         labels?:boolean|Object  draw the barangay name on
+   *                          the map (default false). Object form accepts
+   *                          {onlyName?, opacity?, fontSize?}.}
    * @returns {Promise<L.GeoJSON>}
    */
   function addBarangayOverlay(map, opts) {
@@ -309,6 +419,9 @@
       });
       layer.addData(fc);
       layer.addTo(map);
+      if (opts.labels) {
+        _addBarangayLabels(map, fc, (typeof opts.labels === 'object') ? opts.labels : {});
+      }
       if (opts.onlyName) {
         // Bring the highlighted barangay above the rest of the overlays.
         layer.eachLayer(function (l) {
