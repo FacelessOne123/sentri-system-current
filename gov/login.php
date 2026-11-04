@@ -122,8 +122,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <div class="gov-text"><h1>SenTri</h1><p>Government Access - Official Use Only</p></div>
  </a>
  <nav class="gov-links">
- <a href="../index.php">Home</a>
- <a href="../login.php">Community Portal</a>
  <a href="forgot_password.php">Forgot Password</a>
  </nav>
 </header>
