@@ -16,6 +16,20 @@
   var GEO_PATH_ROOT = 'assets/geo/imus-barangays.geojson';
 
   var _fcPromise = null; // cache of the FeatureCollection fetch
+  var _fcCache = null;   // the resolved FeatureCollection (for sync access)
+
+  /**
+   * Fallback bounding box of the Imus perimeter set, used only when the
+   * geojson cannot be loaded (offline / 404). Values are the bbox of
+   * assets/geo/imus-barangays.geojson (95 barangays of Imus City).
+   * When the geojson DOES load, the exact bounds are computed from it and
+   * this constant is ignored - it only keeps the map usable if the fetch
+   * fails.
+   */
+  var IMUS_BOUNDS_FALLBACK = {
+    minLat: 14.354107, minLng: 120.892088,
+    maxLat: 14.446365, maxLng: 120.981669
+  };
 
   /** Resolve the geojson URL relative to the current page. */
   function _geoUrl() {
@@ -41,6 +55,10 @@
       .then(function (res) {
         if (!res.ok) throw new Error('SentriGeo: geojson ' + res.status + ' ' + res.statusText);
         return res.json();
+      })
+      .then(function (fc) {
+        _fcCache = fc; // keep the resolved data for synchronous queries
+        return fc;
       })
       .catch(function (err) {
         _fcPromise = null; // allow retry on network error
@@ -121,6 +139,144 @@
       }
       return null;
     });
+  }
+
+  /**
+   * Bounding box of the Imus perimeter set.
+   * Computed from the loaded geojson when available, otherwise the built-in
+   * fallback box is returned so the map still works offline.
+   * @returns {{minLat:number,minLng:number,maxLat:number,maxLng:number}}
+   */
+  function imusBounds() {
+    var fc = _fcCache;
+    if (fc && fc.features && fc.features.length) {
+      var minLat = Infinity, minLng = Infinity, maxLat = -Infinity, maxLng = -Infinity;
+      for (var f = 0; f < fc.features.length; f++) {
+        var polygons = _geometryPolygons(fc.features[f].geometry);
+        for (var p = 0; p < polygons.length; p++) {
+          for (var r = 0; r < polygons[p].length; r++) {
+            var ring = polygons[p][r];
+            for (var i = 0; i < ring.length; i++) {
+              var lng = ring[i][0], lat = ring[i][1];
+              if (lat < minLat) minLat = lat;
+              if (lat > maxLat) maxLat = lat;
+              if (lng < minLng) minLng = lng;
+              if (lng > maxLng) maxLng = lng;
+            }
+          }
+        }
+      }
+      if (isFinite(minLat) && isFinite(minLng) && isFinite(maxLat) && isFinite(maxLng)) {
+        return { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng };
+      }
+    }
+    return {
+      minLat: IMUS_BOUNDS_FALLBACK.minLat, minLng: IMUS_BOUNDS_FALLBACK.minLng,
+      maxLat: IMUS_BOUNDS_FALLBACK.maxLat, maxLng: IMUS_BOUNDS_FALLBACK.maxLng
+    };
+  }
+
+  /**
+   * Has the Imus perimeter set finished loading?
+   * Callers that filter by isInImus() must wait for this: until the geometry
+   * is available isInImus() cannot answer and would report every point as
+   * outside the city.
+   * @returns {boolean}
+   */
+  function geoReady() {
+    return !!(global.SentriGeo && _fcCache && _fcCache.features && _fcCache.features.length);
+  }
+
+  /**
+   * Is this point inside the Imus City perimeter set?
+   * Exact test: the point must fall inside one of the 95 barangay polygons
+   * (not merely inside the bounding box), so sea area and neighbouring
+   * municipalities are excluded.
+   * @param {number} lat
+   * @param {number} lng
+   * @returns {boolean} false while the geometry is still loading
+   */
+  function isInImus(lat, lng) {
+    var fc = _fcCache;
+    if (!fc || !fc.features || !fc.features.length) return false;
+    if (typeof lat !== 'number' || typeof lng !== 'number' ||
+      !isFinite(lat) || !isFinite(lng)) return false;
+    for (var f = 0; f < fc.features.length; f++) {
+      var polygons = _geometryPolygons(fc.features[f].geometry);
+      for (var p = 0; p < polygons.length; p++) {
+        if (_inRings(polygons[p], lng, lat)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The Imus area as a Leaflet rectangle, ready for map.setMaxBounds().
+   * @param {number} [pad] padding as a fraction of the Imus span
+   * @returns {L.LatLngBounds|null}
+   */
+  function imusLatLngBounds(pad) {
+    if (typeof L === 'undefined') return null;
+    var b = imusBounds();
+    var p = (pad != null) ? pad : 0.06;
+    var padLat = (b.maxLat - b.minLat) * p;
+    var padLng = (b.maxLng - b.minLng) * p;
+    return L.latLngBounds(
+      [b.minLat - padLat, b.minLng - padLng],
+      [b.maxLat + padLat, b.maxLng + padLng]
+    );
+  }
+
+  /**
+   * Restrict a Leaflet map to the Imus City area.
+   *
+   * Two guards are applied:
+   *  - maxBounds  -> the viewport can never be panned outside the city.
+   *  - minZoom    -> the user cannot zoom out past the city, so the map
+   *                  never becomes a view of the whole region.
+   *
+   * @param {L.Map} map
+   * @param {Object} [opts] {pad?:number  padding as a fraction of the Imus
+   *                                  span (default 0.06),
+   *                          fit?:boolean  fit the view to Imus,
+   *                          maxZoom?:number zoom cap when fitting}
+   * @returns {Promise<Object>} resolves with the Imus bounds
+   */
+  function lockToImus(map, opts) {
+    opts = opts || {};
+    if (typeof L === 'undefined') return Promise.reject(new Error('SentriGeo: Leaflet (L) not loaded'));
+    if (!map) return Promise.reject(new Error('SentriGeo: map is required'));
+    return loadBarangays().catch(function () { return null; }).then(function () {
+      var bounds = imusLatLngBounds(opts.pad != null ? opts.pad : 0.06);
+      if (!bounds) throw new Error('SentriGeo: Imus bounds unavailable');
+      map.setMaxBounds(bounds);
+      // The zoom cap depends on the container size, which is often still 0
+      // when the map is created (hidden panel, modal just opened). Re-apply
+      // it whenever Leaflet reports a new size.
+      map.on('resize', function () { applyImusZoomLimit(map, bounds); });
+      applyImusZoomLimit(map, bounds);
+      if (opts.fit) {
+        map.fitBounds(bounds, { padding: [10, 10], maxZoom: opts.maxZoom != null ? opts.maxZoom : 13 });
+      }
+      return imusBounds();
+    });
+  }
+
+  /**
+   * Cap a map's zoom-out so the viewport cannot grow past the Imus box.
+   * Recomputed whenever the map is resized (the container size drives the
+   * zoom level at which the box fills the viewport).
+   * @param {L.Map} map
+   * @param {L.LatLngBounds} [bounds] defaults to the map's current maxBounds
+   */
+  function applyImusZoomLimit(map, bounds) {
+    if (!map) return;
+    var box = bounds || map.options.maxBounds;
+    if (!box) return;
+    var size = map.getSize();
+    if (!size || !size.x || !size.y) return; // hidden container - try again later
+    var z = map.getBoundsZoom(box);
+    if (isFinite(z) && z > 0) map.setMinZoom(Math.floor(z));
   }
 
   /**
@@ -298,6 +454,12 @@
     pointInPolygon: pointInPolygon,
     findBarangay: findBarangay,
     addBarangayOverlay: addBarangayOverlay,
+    imusBounds: imusBounds,
+    imusLatLngBounds: imusLatLngBounds,
+    geoReady: geoReady,
+    isInImus: isInImus,
+    lockToImus: lockToImus,
+    applyImusZoomLimit: applyImusZoomLimit,
     haversine: haversine,
     getUserLocation: getUserLocation,
     watchUserLocation: watchUserLocation,
