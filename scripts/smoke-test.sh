@@ -118,7 +118,7 @@ C2=$(curl -s -b "$DJ" -o /dev/null -w '%{http_code}' "$BASE/portal/barangay.php"
 say "4. Realm-isolated logout (USE FRESH SESSION COPIES — logging out gov destroys that realm's server session for everyone logged in as it)"
 DJ2="$JDIR/dual3.jar"
 cat "$JDIR/community.jar" "$JDIR/barangay.jar" > "$DJ2"
-curl -s -b "$DJ2" -c "$DJ2" -o /dev/null "$BASE/logout.php?realm=gov"
+curl -s -b "$DJ2" -c "$DJ2" -o /dev/null "$BASE/gov/logout.php"
 C1=$(curl -s -b "$DJ2" -o /dev/null -w '%{http_code}' "$BASE/portal/community.php")
 C2=$(curl -s -b "$DJ2" -o /dev/null -w '%{http_code}' "$BASE/portal/barangay.php")
 [[ $C1 == 200 && $C2 != 200 ]] && p "gov logout leaves community signed in" || f "community=$C1 barangay=$C2 (expected 200 / non-200)"
@@ -131,7 +131,7 @@ SRES=$(curl -s -X POST "$BASE/signup.php" -A "Mozilla/5.0" \
   --data-urlencode "email=smoke.t$STAMP@demo.ph" --data-urlencode "password=Smoke@1234" \
   --data-urlencode "confirm_password=Smoke@1234" --data-urlencode "phone=09171234567")
 echo "$SRES" | grep -q '"success"' && p "signup OK" || f "signup: $SRES"
-LV=$(ls -t "$PWD/logs/mail"/*.eml 2>/dev/null | head -1)
+LV=$(find "$PWD/logs/mail" -maxdepth 1 -name '*.eml' -newermt "@$STAMP" 2>/dev/null | sort | tail -1)
 if [[ -n $LV ]]; then
   VL=$(grep -ohE "https?://[^\"' <]*verify_email\.php\?token=[a-z0-9]+" "$LV" | tail -1)
   [[ -n $VL ]] && p "verification link captured in outbox" || f "no verification link in $LV"

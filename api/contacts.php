@@ -275,8 +275,8 @@ switch ($action) {
  );
  try {
  $m = new SenTriMailer();
- // SenTriMailer::send(toEmail, toName, subject, htmlBody)
- $m->send($contact['contact_email'], $contact['name'], $subject, $html_body);
+ // SenTriMailer::send(toEmail, toName, subject, htmlBody, channel='gov')
+ $m->send($contact['contact_email'], $contact['name'], $subject, $html_body, 'gov');
  $email_sent = true;
  } catch (Exception $e) {
  error_log('SenTri contact notify error: ' . $e->getMessage());

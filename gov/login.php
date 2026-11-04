@@ -124,7 +124,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <nav class="gov-links">
  <a href="../index.php">Home</a>
  <a href="../login.php">Community Portal</a>
- <a href="../forgot_password.php">Forgot Password</a>
+ <a href="forgot_password.php">Forgot Password</a>
  </nav>
 </header>
 
@@ -165,7 +165,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <div id="loginMsg" class="msg"></div>
  <form id="loginForm" novalidate>
  <input type="hidden" name="portal" id="portalField" value="barangay">
- <div class="form-group"><label>Official Email Address</label><input type="email" name="email" id="emailField" placeholder="official@example.gov.ph" required autocomplete="email"></div>
+ <div class="form-group"><label>Official ID or Email</label><input type="text" name="email" id="emailField" placeholder="e.g. 123452026 (9-digit ID) or official@example.gov.ph" required autocomplete="username"></div>
  <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pwField" placeholder="••••••••" required><button type="button" class="toggle-pw" onclick="togglePw()">SHOW</button></div></div>
  <div class="forgot-row"><a href="../forgot_password.php">Forgot Password?</a></div>
  <button type="submit" class="btn-login" id="loginBtn" style="background:#166534;background-image:linear-gradient(135deg,#16a34a,#166534);"><i class="fas fa-right-to-bracket" id="loginBtnIcon"></i> <span id="loginBtnLabel">Sign In to Barangay Portal</span></button>
