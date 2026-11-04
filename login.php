@@ -233,9 +233,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 <script>
 let timerInterval = null;
 
-/* ── Guide video popup ── */
-const GUIDE_SRC='assets/video/GuideVideoTutorial.mp4';
-let guideRedirect=null;
+
 
 function openGuide(redirectUrl){
  guideRedirect=redirectUrl;
