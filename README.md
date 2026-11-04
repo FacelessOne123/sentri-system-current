@@ -236,6 +236,7 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-11-04 | **fix:** GPS acquisition delay diagnosed and fixed in `SentriGeo.getUserLocation` — `maximumAge` was 3000ms on every call, forcing a cold GPS lock each time (30-60s perceived hang). Added an acquisition ladder: instant cached-fix probe (≤60s old, ≤±250m resolves in ms) → high-accuracy acquire (cache ≤15s, fixes worse than ±1500m ignored instead of resolved) → 60s high-accuracy watch → coarse last-resort resolve instead of an error at ~76s. `watchUserLocation` timeout raised 20s→60s so cold-start tracking no longer dies silently. Verified headless: fast-path resolves in 202ms; no-hardware case errors cleanly at 76s with the map-pin fallback message |
 | 2026-10-27 | **feat:** Portal separation - government sign-in moved to `gov/login.php` (barangay/LGU/responder, no self-registration); community sign-in/registration simplified to community-only; admin panel renders its own unlinked sign-in; officials provisioned by admin (`admin_create_official`) with emailed credentials and forced password change on first sign-in (migration 007); shared auth logic extracted to `core/login_handler.php`; danger-alert emails now link to the government portal instead of admin |
 | 2026-06-11 | feat: Live GTA-style heading-up in-app navigation (Leaflet/OSM) replacing Google Maps redirects; auto-arrival detection |
 | 2026-06-11 | feat: Auto-arrival resolves report without flipping status to Safe; added Resolved/Unresolved badge |

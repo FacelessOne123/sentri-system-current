@@ -184,9 +184,25 @@
   }
 
   var LOW_ACCURACY_LIMIT = 1500; // metres; above this a fix is treated as junk
+  var FAST_FIX_MAX_AGE = 60000;   // ms; cached fixes up to 1 min old OK for the instant probe
+  var FAST_FIX_TIMEOUT = 2500;    // ms; the probe must never delay real acquisition
+  var FAST_RESOLVE_ACCURACY = 250; // m; a cached coarse fix at least this good resolves instantly
 
   /**
    * One-shot high-accuracy geolocation.
+   *
+   * Acquisition ladder (fast → slow):
+   *  0. Instant probe — any CACHED fix ≤ 60s old good to ±250m resolves at once.
+   *     (maximumAge used to be 3000ms on every call, which forced a cold GPS
+   *     lock each time "Get My GPS"/report-pinning was used and made geolocation
+   *     feel like it hung for 30-60s.)
+   *  1. High-accuracy getCurrentPosition — caller `timeout` (default 30s),
+   *     maximumAge 15s so a fresh high-accuracy cache also resolves instantly.
+   *     Fixes worse than ±LOW_ACCURACY_LIMIT are ignored, not resolved.
+   *  2. Persistent high-accuracy watch — up to 60s more; GPS chips frequently
+   *     deliver a fix a beat after the single-call window closes. As a last
+   *     resort before giving up, the coarse probe result (if any) resolves,
+   *     so the user gets a fix instead of an error after ~75s.
    * @param {Object} [opts] optional PositionOptions overrides
    * @returns {Promise<{lat:number,lng:number,accuracy:number,speed:number|null}>}
    *          Rejects with the GeolocationPositionError for the caller to toast.
@@ -199,18 +215,15 @@
  reject(new Error('Geolocation not supported on this device.'));
  return;
  }
- // ── Persistent high-accuracy acquisition ──────────────────────────────
- // Stage 1: getCurrentPosition (30s). Stage 2 (on timeout/unavailable):
- // keep WATCHING high-accuracy for up to 60s more — GPS chips frequently
- // deliver a fix a beat after a single-call window closes. No accuracy
- // downgrade, ever: only real fixes resolve.
  var done = false;
+ var coarse = null; // stage-0 probe fix, kept as the last-resort resolve
  var watchId = null, hardStop = null;
  function settle(fn, v) { if (done) return; done = true; if (watchId !== null) global.navigator.geolocation.clearWatch(watchId); if (hardStop !== null) global.clearTimeout(hardStop); fn(v); }
  function extract(pos) { var c = pos.coords || {};
  return { lat: c.latitude, lng: c.longitude,
  accuracy: typeof c.accuracy === 'number' ? c.accuracy : LOW_ACCURACY_LIMIT,
  speed: typeof c.speed === 'number' ? c.speed : null }; }
+ function acceptable(fix) { return isFinite(fix.lat) && isFinite(fix.lng) && fix.accuracy <= LOW_ACCURACY_LIMIT; }
  function failMsg(e) {
  var code = e && typeof e.code === 'number' ? e.code : null;
  var msg = code === 1 ? 'Location access denied — allow location for this site, then retry, or pick the spot on the map yourself.'
@@ -218,16 +231,36 @@
  : 'Location services unavailable — drag the pin on the map to set it manually.';
  return code === null ? new Error(msg) : { code: code, message: msg };
  }
- global.navigator.geolocation.getCurrentPosition(function (pos) { settle(resolve, extract(pos)); }, function (e) {
+ // ── Stage 0: instant cached-fix probe; silently dismisses on any error ──
+ global.navigator.geolocation.getCurrentPosition(function (pos) {
+ coarse = extract(pos);
+ if (acceptable(coarse) && coarse.accuracy <= FAST_RESOLVE_ACCURACY) settle(resolve, coarse);
+ }, function () {}, { enableHighAccuracy: false, timeout: FAST_FIX_TIMEOUT, maximumAge: FAST_FIX_MAX_AGE });
+ // ── Stage 1 + 2: persistent high-accuracy acquisition ─────────────────
+ function startWatch() {
+ if (done || watchId !== null) return;
+ watchId = global.navigator.geolocation.watchPosition(function (pos) {
+ var fix = extract(pos);
+ if (acceptable(fix)) settle(resolve, fix);
+ },
+ function (werr) { settle(reject, failMsg(werr)); },
+ { enableHighAccuracy: true, timeout: 60000, maximumAge: 3000 });
+ }
+ global.navigator.geolocation.getCurrentPosition(function (pos) {
+ var hi = extract(pos);
+ if (acceptable(hi)) { settle(resolve, hi); return; }
+ startWatch(); // real but junk-grade fix — keep waiting for a better one
+ }, function (e) {
  var code = e && typeof e.code === 'number' ? e.code : null;
  if (code === 1) { settle(reject, failMsg(e)); return; } // denied: retrying can't help
  // codes 2/3: transient — keep listening high-accuracy
- watchId = global.navigator.geolocation.watchPosition(function (pos) { settle(resolve, extract(pos)); },
- function (werr) { settle(reject, failMsg(werr)); },
- { enableHighAccuracy: true, timeout: 60000, maximumAge: 3000 });
+ startWatch();
  if (code === null) settle(reject, failMsg(e)); // non-standard error, don't wait
- }, { enableHighAccuracy: true, timeout: hiTimeout, maximumAge: 3000 });
- hardStop = global.setTimeout(function () { settle(reject, failMsg({ code: 3 })); }, hiTimeout + 46000);
+ }, { enableHighAccuracy: true, timeout: hiTimeout, maximumAge: 15000 });
+ hardStop = global.setTimeout(function () {
+ if (coarse && acceptable(coarse)) { settle(resolve, coarse); return; } // coarse beats nothing
+ settle(reject, failMsg({ code: 3 }));
+ }, hiTimeout + 46000);
  });
  }
 
@@ -248,8 +281,8 @@
       });
     }, errorHandler || function () {}, {
       enableHighAccuracy: true,
-      timeout: 20000,
-      maximumAge: 0
+      timeout: 60000, // was 20000 — a cold GPS chip needs up to a minute; aborting early appeared as a "delay" with no recovery
+      maximumAge: 0 // navigation positions must be fresh, not replayed
     });
   }
 
