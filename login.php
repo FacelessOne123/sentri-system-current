@@ -22,6 +22,8 @@ require __DIR__ . '/core/login_handler.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<?= csrf_meta_tag() ?>
+<?= csrf_script() ?>
 <title>Sign In - SenTri Community Portal</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
@@ -81,6 +83,23 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .video-close{background:none;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;padding:6px;}
 .video-close:hover{color:#fff;}
 .video-card video{width:100%;border-radius:10px;display:block;max-height:70vh;}
+/* ── First-login guide popup ── */
+.guide-overlay{position:fixed;inset:0;background:rgba(6,36,68,.86);backdrop-filter:blur(4px);z-index:1300;display:none;align-items:center;justify-content:center;padding:20px;}
+.guide-overlay.open{display:flex;animation:guideFade .25s ease;}
+.guide-box{background:#fff;border-radius:16px;width:100%;max-width:880px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.55);animation:guidePop .3s cubic-bezier(.34,1.56,.64,1);}
+.guide-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:3px solid var(--gold);}
+.guide-title{font-family:'Poppins',sans-serif;font-size:.95rem;font-weight:800;color:var(--navy);display:flex;align-items:center;gap:8px;}
+.guide-title i{color:var(--gold-dark);}
+.guide-x{background:#f3f4f6;border:none;width:32px;height:32px;border-radius:8px;cursor:pointer;color:#374151;font-size:1rem;display:flex;align-items:center;justify-content:center;transition:background .15s;}
+.guide-x:hover{background:#e5e7eb;}
+.guide-video{display:block;width:100%;max-height:70vh;background:#000;}
+.guide-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;}
+.guide-hint{font-size:.76rem;color:var(--muted);}
+.guide-skip{background:linear-gradient(135deg,var(--navy),var(--navy-light));color:#fff;border:none;padding:9px 20px;border-radius:9px;font-size:.84rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;display:inline-flex;align-items:center;gap:7px;}
+.guide-skip:hover{filter:brightness(1.1);}
+@keyframes guideFade{from{opacity:0}to{opacity:1}}
+@keyframes guidePop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+@media(max-width:580px){.guide-hint{display:none;}.guide-foot{justify-content:flex-end;}}
 .msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:11px;display:none;text-align:center;}
 .msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
 .msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
@@ -178,6 +197,21 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  </div>
 </div>
 <footer class="site-footer"><p>SenTri Community Safety Incident Reporting System - For community use.</p></footer>
+
+<!-- First-login guide popup -->
+<div class="guide-overlay" id="guideOverlay" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+ <div class="guide-box">
+  <div class="guide-head">
+   <div class="guide-title" id="guideTitle"><i class="fas fa-circle-play"></i> Quick Guide: How to Use SenTri</div>
+   <button type="button" class="guide-x" id="guideClose" aria-label="Close and continue"><i class="fas fa-xmark"></i></button>
+  </div>
+  <video class="guide-video" id="guideVideo" controls playsinline preload="none"></video>
+  <div class="guide-foot">
+   <span class="guide-hint">Press <b>Esc</b> to skip</span>
+   <button type="button" class="guide-skip" id="guideSkip">Skip <i class="fas fa-forward"></i></button>
+  </div>
+ </div>
+</div>
 <script>
 let timerInterval = null;
 
@@ -211,7 +245,7 @@ document.getElementById('otpForm').addEventListener('submit',async e=>{
  try{
  const res=await fetch('login.php',{method:'POST',body:new FormData(e.target)});
  const data=await res.json();
- if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
+ if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>afterLogin(data.redirect),700);}
  else{
  showMsg('error',data.message||'Invalid OTP.');
  btn.disabled=false;btn.innerHTML=orig;
@@ -257,7 +291,7 @@ document.getElementById('loginForm').addEventListener('submit',async e=>{
  try{
  const res=await fetch('login.php',{method:'POST',body:new FormData(e.target)});
  const data=await res.json();
- if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
+ if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>afterLogin(data.redirect),700);}
  else if(data.status==='must_reset'){showMsg('success',data.message||'Redirecting to password setup...');setTimeout(()=>window.location.href=data.redirect,900);}
  else if(data.status==='otp_required'){
  showMsg('success',data.message||'Enter the 6-digit code from your email.');
@@ -288,7 +322,46 @@ function showMsg(type,text){const el=document.getElementById('loginMsg');el.clas
 function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTutorial();});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeTutorial();finishGuide();}});
+
+/* ── First-login guide popup ── */
+const GUIDE_SRC='assets/video/GuideVideoTutorial.mp4';
+let guideRedirect=null;
+
+function openGuide(redirectUrl){
+ guideRedirect=redirectUrl;
+ const ov=document.getElementById('guideOverlay'),v=document.getElementById('guideVideo');
+ if(!v.getAttribute('src'))v.src=GUIDE_SRC;
+ ov.classList.add('open');
+ document.getElementById('guideSkip').focus();
+ const p=v.play();
+ if(p&&p.catch)p.catch(()=>{}); // autoplay may be blocked - the user can press play
+}
+
+async function afterLogin(redirectUrl){
+ let show=false;
+ try{
+  const res=await fetch('api/guide.php',{method:'POST'});
+  const d=await res.json();
+  show=!!d.show;
+ }catch{}
+ if(show)openGuide(redirectUrl);
+ else window.location.href=redirectUrl;
+}
+
+function finishGuide(){
+ const ov=document.getElementById('guideOverlay');
+ if(!ov.classList.contains('open'))return; // prevents a double redirect
+ document.getElementById('guideVideo').pause();
+ ov.classList.remove('open');
+ const url=guideRedirect;guideRedirect=null;
+ if(url)window.location.href=url;
+}
+
+document.getElementById('guideSkip').addEventListener('click',finishGuide);
+document.getElementById('guideClose').addEventListener('click',finishGuide);
+document.getElementById('guideVideo').addEventListener('ended',finishGuide);
+document.getElementById('guideVideo').addEventListener('error',finishGuide); // video missing -> never block sign-in
 </script>
 <div class="video-modal" id="tutorialModal" role="dialog" aria-modal="true">
  <div class="video-card">
