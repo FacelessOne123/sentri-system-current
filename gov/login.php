@@ -124,7 +124,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <nav class="gov-links">
  <a href="../index.php">Home</a>
  <a href="../login.php">Community Portal</a>
- <a href="../forgot_password.php">Forgot Password</a>
+ <a href="forgot_password.php">Forgot Password</a>
  </nav>
 </header>
 

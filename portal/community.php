@@ -540,7 +540,7 @@ function actionToast(message,type){const clsMap={success:'safe',error:'dangerous
  <span class="dm-row-label"><i class="fas fa-moon"></i> Dark Mode</span>
  <label class="dm-switch" onclick="event.stopPropagation()"><input type="checkbox" id="dmCheck" onchange="toggleDark()"><span class="dm-slider"></span></label>
  </div>
- <a href="../logout.php?realm=community"><i class="fas fa-right-from-bracket"></i> Log Out</a>
+ <a href="logout.php"><i class="fas fa-right-from-bracket"></i> Log Out</a>
  <button type="button" class="sb-tutorial-link" onclick="openTutorial()" style="display:flex;align-items:center;gap:10px;width:100%;padding:10px 22px;background:none;border:none;color:#cbd5e1;font-size:0.86rem;font-weight:600;cursor:pointer;text-align:left;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#cbd5e1'"><i class="fas fa-circle-play"></i> How SenTri Works</button>
  </div>
 </aside>

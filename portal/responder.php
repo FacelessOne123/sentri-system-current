@@ -371,7 +371,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-avatar"><?= strtoupper(substr($fname,0,1)) ?></div>
  <div style="min-width:0;"><div class="sb-uname"><?= htmlspecialchars($fname) ?></div><div class="sb-upos"><?= htmlspecialchars($pos) ?></div></div>
  </div>
- <a href="../logout.php?realm=gov" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
+ <a href="../gov/logout.php" class="sb-logout"><i class="fas fa-right-from-bracket"></i> Sign Out</a>
  </div>
 </aside>
 

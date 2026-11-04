@@ -10,8 +10,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
  echo json_encode(['status'=>'error','message'=>'Please enter a valid email address.']); exit;
  }
- // Look up user
- $stmt = $conn->prepare("SELECT id, first_name FROM users WHERE email=? LIMIT 1");
+ // Look up a COMMUNITY account only (role must be community/user). This
+ // page never touches government or administrator accounts: they are
+ // separated by design - officials recover access on gov/forgot_password.php,
+ // admins are provisioned by the system administrator.
+ $stmt = $conn->prepare("SELECT id, first_name, role FROM users WHERE email=? AND role IN ('community','user') LIMIT 1");
  $stmt->bind_param("s", $email);
  $stmt->execute();
  $res = $stmt->get_result();

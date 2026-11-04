@@ -86,8 +86,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
 .signup-row{text-align:center;margin-top:10px;font-size:0.8rem;color:#6b7280;}
 .signup-row a{color:#2563eb;font-weight:700;text-decoration:none;}
-.gov-portal-row{text-align:center;margin-top:6px;font-size:0.76rem;color:#6b7280;}
-.gov-portal-row a{color:#0a3d62;font-weight:700;text-decoration:none;}
 .resend-box{background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:11px;margin-top:9px;display:none;}
 .resend-box p{font-size:0.78rem;color:#92400e;margin-bottom:8px;line-height:1.45;}
 .resend-box input{width:100%;padding:8px 11px;border:1.5px solid #e5e7eb;border-radius:7px;font-size:0.84rem;outline:none;font-family:'Inter',sans-serif;margin-bottom:6px;}
@@ -120,7 +118,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <nav class="gov-links">
  <a href="index.php">Home</a>
  <a href="signup.php">Register</a>
- <a href="gov/login.php">Government Portal</a>
  <a href="forgot_password.php">Forgot Password</a>
  </nav>
 </header>
@@ -142,7 +139,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 
 <?php if(isset($_GET['verify_sent'])): ?><div class="page-notice"><div class="notice info"><i class="fas fa-envelope"></i><span>Verification link sent. Check your inbox and spam folder.</span></div></div>
 <?php elseif(isset($_GET['reset'])): ?><div class="page-notice"><div class="notice success"><i class="fas fa-circle-check"></i><span>Password reset successfully. You may now sign in.</span></div></div>
-<?php elseif(isset($_GET['pending'])): ?><div class="page-notice"><div class="notice info"><i class="fas fa-clock"></i><span>Your official account is awaiting administrator approval. Government portal users sign in at the <a href="gov/login.php" style="color:#1d4ed8;font-weight:700;">Government Portal</a>.</span></div></div>
+<?php elseif(isset($_GET['pending'])): ?><div class="page-notice"><div class="notice info"><i class="fas fa-clock"></i><span>Your official account is awaiting administrator approval. Government portals have their own sign-in page.</span></div></div>
 <?php endif; ?>
 
 <div class="form-wrap">
@@ -178,10 +175,9 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <button class="btn-resend" id="resendBtn" onclick="resend()"><i class="fas fa-paper-plane"></i> Resend Verification Email</button>
  </div>
  <div class="signup-row" id="signupRow">Don't have an account? <a href="signup.php">Register here</a></div>
- <div class="gov-portal-row">Barangay official, LGU staff, or first responder? <a href="gov/login.php">Sign in at the Government Portal</a></div>
  </div>
 </div>
-<footer class="site-footer"><p>SenTri Community Safety Incident Reporting System - For official and community use only. <a href="gov/login.php">Government Portal</a></p></footer>
+<footer class="site-footer"><p>SenTri Community Safety Incident Reporting System - For community use.</p></footer>
 <script>
 let timerInterval = null;
 

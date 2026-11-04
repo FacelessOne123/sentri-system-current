@@ -319,9 +319,13 @@ function sendVerificationEmail(string $toEmail, string $toName, string $token): 
 /**
  * Send a password-reset email.
  */
-function sendPasswordResetEmail(string $toEmail, string $toName, string $token): bool
+function sendPasswordResetEmail(string $toEmail, string $toName, string $token, string $role = 'community'): bool
 {
- $link = sentri_app_url() . '/reset_password.php?token=' . urlencode($token);
+ // Realm separation: the reset link MUST open the reset page of the
+ // account's OWN realm (community -> reset_password.php, officials ->
+ // gov/reset_password.php, admins -> admin/reset_password.php).
+ $resetPage = function_exists('reset_url_for_role') ? reset_url_for_role($role) : '/reset_password.php';
+ $link = sentri_app_url() . $resetPage . '?token=' . urlencode($token);
  $html = buildEmailTemplate(
  'Reset Your Password',
  "Hi $toName,",
