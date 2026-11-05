@@ -92,8 +92,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:11px;display:none;text-align:center;}
 .msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
 .msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
-.com-row{text-align:center;margin-top:10px;font-size:0.78rem;color:#6b7280;border-top:1px solid var(--border);padding-top:10px;}
-.com-row a{color:#2563eb;font-weight:700;text-decoration:none;}
 .page-notice{max-width:920px;margin:12px auto 0;padding:0 24px;}
 .notice{padding:10px 14px;border-radius:9px;font-size:0.81rem;font-weight:500;display:flex;align-items:flex-start;gap:8px;line-height:1.45;}
 .notice.info{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;}
@@ -123,7 +121,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  </a>
  <nav class="gov-links">
  <a href="../index.php">Home</a>
- <a href="../login.php">Community Portal</a>
  <a href="forgot_password.php">Forgot Password</a>
  </nav>
 </header>
@@ -167,7 +164,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <input type="hidden" name="portal" id="portalField" value="barangay">
  <div class="form-group"><label>Official ID or Email</label><input type="text" name="email" id="emailField" placeholder="e.g. 123452026 (9-digit ID) or official@example.gov.ph" required autocomplete="username"></div>
  <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pwField" placeholder="••••••••" required><button type="button" class="toggle-pw" onclick="togglePw()">SHOW</button></div></div>
- <div class="forgot-row"><a href="../forgot_password.php">Forgot Password?</a></div>
+ <div class="forgot-row"><a href="forgot_password.php">Forgot Password?</a></div>
  <button type="submit" class="btn-login" id="loginBtn" style="background:#166534;background-image:linear-gradient(135deg,#16a34a,#166534);"><i class="fas fa-right-to-bracket" id="loginBtnIcon"></i> <span id="loginBtnLabel">Sign In to Barangay Portal</span></button>
  </form>
  <div id="otpSection" style="display:none;">
@@ -180,7 +177,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <button type="button" class="btn-login" id="otpBackBtn" style="background:#f3f4f6;color:#1f2937;margin-top:10px;"><i class="fas fa-arrow-left"></i> Back to Password</button>
  </form>
  </div>
- <div class="com-row">Community member? <a href="../login.php">Sign in at the Community Portal</a></div>
  </div>
 </div>
 <footer class="site-footer"><p>SenTri Government Access - For authorized government personnel only. Unauthorized access is subject to legal action.</p></footer>
