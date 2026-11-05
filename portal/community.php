@@ -318,7 +318,7 @@ body.dark .btn-cancel{background:#21262d;border-color:#30363d;color:var(--muted)
 body.dark .picker-section{background:#0d1117;}
 .picker-header{padding:10px 14px;background:linear-gradient(90deg,#ebf2ff,#f8faff);display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:600;color:var(--blue);border-bottom:1px solid var(--input-border);}
 body.dark .picker-header{background:linear-gradient(90deg,#1f3a5f,#0d1117);color:var(--blue-accent);}
-#pickerMap{height:220px;background:#dde8f0;}
+#pickerMap{height:260px;background:#dde8f0;border-radius:10px;overflow:hidden;}
 .picker-toolbar{padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--card);border-top:1px solid var(--card-border);}
 .locate-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:1.5px solid var(--blue-accent);border-radius:8px;font-size:.79rem;font-weight:600;color:var(--blue);background:#f0f6ff;cursor:pointer;font-family:'Poppins',sans-serif;transition:all .2s;}
 .locate-btn:hover{background:#dbeafe;}
@@ -873,7 +873,7 @@ function actionToast(message,type){const clsMap={success:'safe',error:'dangerous
  </div>
  <button type="button" class="map-pick-btn" id="mapPickBtn" onclick="toggleMapPicker()"><i class="fas fa-map-pin"></i> Drop a Pin on Map</button>
  <div id="mapPickerSection" style="display:none;" class="picker-section">
- <div class="picker-header"><i class="fas fa-crosshairs"></i> Click to drop a pin · Drag to move · Scroll to zoom</div>
+ <div class="picker-header"><i class="fas fa-crosshairs"></i> Click any Imus barangay to drop a pin · Drag to move · Scroll to zoom</div>
  <div id="pickerMap"></div>
  <div class="picker-toolbar">
  <button type="button" class="clear-pin-btn" id="clearPinBtn" onclick="clearPin()" style="display:none;"><i class="fas fa-xmark"></i> Clear pin</button>
@@ -1111,51 +1111,135 @@ function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
+let pickerGeoLayer=null,_highlightedBrgy=null;
 let _autoBrgySeq=0;
-function autoBrgyDetect(lat,lng){const seq=++_autoBrgySeq;SentriGeo.findBarangay(lat,lng).then(b=>{if(seq!==_autoBrgySeq||!b)return;const el=document.getElementById('r_barangay');if(el){el.value=b.name;el.placeholder='Barangay (auto-detected)';}}).catch(()=>{});}
+
+function highlightPickerBarangay(brgyName){
+ _highlightedBrgy=brgyName||null;
+ if(!pickerGeoLayer)return;
+ pickerGeoLayer.eachLayer(l=>{
+  const name=l.feature&&l.feature.properties&&l.feature.properties.name;
+  if(name&&_highlightedBrgy&&name.toLowerCase()===_highlightedBrgy.toLowerCase()){
+   l.setStyle({weight:3,color:'#166534',fillColor:'#22c55e',fillOpacity:0.28});
+   if(l.bringToFront)l.bringToFront();
+  }else{
+   l.setStyle({weight:1.5,color:'#2563eb',fillColor:'#3b82f6',fillOpacity:0.08});
+  }
+ });
+}
+
+function autoBrgyDetect(lat,lng){
+ const seq=++_autoBrgySeq;
+ SentriGeo.findBarangay(lat,lng).then(b=>{
+  if(seq!==_autoBrgySeq||!b)return;
+  const el=document.getElementById('r_barangay');
+  if(el){el.value=b.name;el.placeholder='Barangay (auto-detected)';}
+  const ps2=document.getElementById('pinStatus2');
+  if(ps2){ps2.className='pin-status set';ps2.innerHTML=`<i class="fas fa-location-dot"></i> Brgy ${esc(b.name)}`;}
+  highlightPickerBarangay(b.name);
+ }).catch(()=>{});
+}
+
 function initPickerMap(){
  if(pickerMap){setTimeout(()=>pickerMap.invalidateSize(),60);return;}
  const curLat=parseFloat(document.getElementById('r_latitude').value)||null;
  const curLng=parseFloat(document.getElementById('r_longitude').value)||null;
- const lat=curLat!==null?curLat:(SAVED_LAT!==null?SAVED_LAT:14.400236);
- const lng=curLng!==null?curLng:(SAVED_LNG!==null?SAVED_LNG:120.936879);
- const zoom=(curLat!==null||SAVED_LAT!==null)?15:11;
- pickerMap=L.map('pickerMap').setView([lat,lng],zoom);SentriGeo.lockToImus(pickerMap);
+ const lat=curLat!==null?curLat:(SAVED_LAT!==null?SAVED_LAT:14.4240);
+ const lng=curLng!==null?curLng:(SAVED_LNG!==null?SAVED_LNG:120.9215);
+ const zoom=(curLat!==null||SAVED_LAT!==null)?15:13;
+ pickerMap=L.map('pickerMap').setView([lat,lng],zoom);
+ SentriGeo.lockToImus(pickerMap,{fit:(!curLat&&!SAVED_LAT)});
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(pickerMap);
+ SentriGeo.addBarangayOverlay(pickerMap,{
+  labels:true,
+  style:function(feature){
+   const name=feature&&feature.properties&&feature.properties.name;
+   if(_highlightedBrgy&&name&&name.toLowerCase()===_highlightedBrgy.toLowerCase()){
+    return {weight:3,color:'#166534',fillColor:'#22c55e',fillOpacity:0.28};
+   }
+   return {weight:1.5,color:'#2563eb',fillColor:'#3b82f6',fillOpacity:0.08};
+  },
+  onEach:function(feature,layer){
+   const name=(feature&&feature.properties&&feature.properties.name)||'';
+   layer.on('click',function(e){
+    placePin(e.latlng.lat,e.latlng.lng,true);
+   });
+   layer.on('mouseover',function(){
+    if(!_highlightedBrgy||_highlightedBrgy.toLowerCase()!==name.toLowerCase()){
+     layer.setStyle({weight:2.5,color:'#1d4ed8',fillOpacity:0.18});
+    }
+   });
+   layer.on('mouseout',function(){
+    if(!_highlightedBrgy||_highlightedBrgy.toLowerCase()!==name.toLowerCase()){
+     layer.setStyle({weight:1.5,color:'#2563eb',fillOpacity:0.08});
+    }
+   });
+  }
+ }).then(l=>{
+  pickerGeoLayer=l;
+  if(!curLat&&!SAVED_LAT){
+   try{pickerMap.fitBounds(l.getBounds(),{padding:[15,15]});}catch(e){}
+  }
+  const curB=document.getElementById('r_barangay').value.trim()||USER_BRGY;
+  if(curB)highlightPickerBarangay(curB);
+ }).catch(()=>{});
  pickerMap.on('click',e=>placePin(e.latlng.lat,e.latlng.lng,true));
+ watchMapResize(()=>pickerMap,document.getElementById('pickerMap'));
  setTimeout(()=>{
- pickerMap.invalidateSize();
- if(curLat!==null)placePin(curLat,curLng,false);
- else if(SAVED_LAT!==null)placePin(SAVED_LAT,SAVED_LNG,false);
+  pickerMap.invalidateSize();
+  if(curLat!==null)placePin(curLat,curLng,false);
+  else if(SAVED_LAT!==null)placePin(SAVED_LAT,SAVED_LNG,false);
  },150);
 }
+
 function placePin(lat,lng,doRG){
+ if(SentriGeo.geoReady()&&!SentriGeo.isInImus(lat,lng)){
+  actionToast('Reports are limited to Imus City only. Please drop your pin inside Imus.','error');
+  return false;
+ }
  document.getElementById('r_latitude').value=lat;
  document.getElementById('r_longitude').value=lng;
+ const cityEl=document.getElementById('r_city');
+ if(cityEl&&(!cityEl.value.trim()||cityEl.value.trim().toLowerCase()!=='imus')){
+  cityEl.value='Imus';
+ }
  autoBrgyDetect(lat,lng);
  if(pickerMap){
- if(pickerMarker)pickerMap.removeLayer(pickerMarker);
- if(pickerCircle)pickerMap.removeLayer(pickerCircle);
- pickerCircle=L.circle([lat,lng],{radius:pickerRadius,color:'#3a8dff',fillColor:'rgba(58,141,255,.12)',fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(pickerMap);
- pickerMarker=L.marker([lat,lng],{icon:L.divIcon({html:`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38"><path d="M15 0C6.716 0 0 6.716 0 15c0 10 15 23 15 23S30 25 30 15 23.284 0 15 0z" fill="#3a8dff" stroke="white" stroke-width="2"/><circle cx="15" cy="15" r="6" fill="white" opacity=".9"/></svg>`,className:'',iconSize:[30,38],iconAnchor:[15,38]}),draggable:true}).addTo(pickerMap);
- pickerMarker.on('dragend',ev=>{const p=ev.target.getLatLng();placePin(p.lat,p.lng,true);});
- pickerMap.setView([lat,lng],Math.max(pickerMap.getZoom(),15));
+  if(pickerMarker)pickerMap.removeLayer(pickerMarker);
+  if(pickerCircle)pickerMap.removeLayer(pickerCircle);
+  pickerCircle=L.circle([lat,lng],{radius:pickerRadius,color:'#3a8dff',fillColor:'rgba(58,141,255,.12)',fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(pickerMap);
+  pickerMarker=L.marker([lat,lng],{icon:L.divIcon({html:`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38"><path d="M15 0C6.716 0 0 6.716 0 15c0 10 15 23 15 23S30 25 30 15 23.284 0 15 0z" fill="#3a8dff" stroke="white" stroke-width="2"/><circle cx="15" cy="15" r="6" fill="white" opacity=".9"/></svg>`,className:'',iconSize:[30,38],iconAnchor:[15,38]}),draggable:true}).addTo(pickerMap);
+  pickerMarker.on('dragend',ev=>{
+   const p=ev.target.getLatLng();
+   if(SentriGeo.geoReady()&&!SentriGeo.isInImus(p.lat,p.lng)){
+    actionToast('Location must be within Imus City boundaries.','error');
+    pickerMarker.setLatLng([lat,lng]);
+    if(pickerCircle)pickerCircle.setLatLng([lat,lng]);
+    return;
+   }
+   placePin(p.lat,p.lng,true);
+  });
+  pickerMap.setView([lat,lng],Math.max(pickerMap.getZoom(),15));
  }
  const ps=document.getElementById('pinStatus');
- if(ps){const inImus=SentriGeo.isInImus(lat,lng);ps.className='pin-status '+(inImus?'set':'warn');ps.innerHTML=inImus?`<i class="fas fa-circle-check"></i> ${lat.toFixed(5)}, ${lng.toFixed(5)}`:`<i class="fas fa-triangle-exclamation"></i> ${lat.toFixed(5)}, ${lng.toFixed(5)} \u00b7 outside Imus`;}
+ if(ps){ps.className='pin-status set';ps.innerHTML=`<i class="fas fa-circle-check"></i> ${lat.toFixed(5)}, ${lng.toFixed(5)}`;}
  const ps2=document.getElementById('pinStatus2');
  if(ps2){ps2.className='pin-status set';ps2.innerHTML=`<i class="fas fa-circle-check"></i> Pinned`;}
  document.getElementById('clearPinBtn').style.display='inline-flex';
  if(doRG)reverseGeocode(lat,lng);
+ return true;
 }
+
 function clearPin(){
  if(pickerMap){
- if(pickerMarker){pickerMap.removeLayer(pickerMarker);}
- if(pickerCircle){pickerMap.removeLayer(pickerCircle);}
+  if(pickerMarker){pickerMap.removeLayer(pickerMarker);}
+  if(pickerCircle){pickerMap.removeLayer(pickerCircle);}
  }
  pickerMarker=null;pickerCircle=null;
+ highlightPickerBarangay(null);
  document.getElementById('r_latitude').value='';
  document.getElementById('r_longitude').value='';
+ const bEl=document.getElementById('r_barangay');if(bEl)bEl.value=USER_BRGY||'';
  document.getElementById('r_radius_m').value='200';
  const rs=document.getElementById('radiusSlider');if(rs)rs.value=200;
  const rv=document.getElementById('radiusVal');if(rv)rv.textContent='200 m';
@@ -1166,20 +1250,36 @@ function clearPin(){
  if(ps2){ps2.className='pin-status';ps2.innerHTML='';}
  document.getElementById('clearPinBtn').style.display='none';
 }
+const _brgyInput=document.getElementById('r_barangay');
+if(_brgyInput){
+ _brgyInput.addEventListener('input',()=>{
+  const val=_brgyInput.value.trim();
+  if(val)highlightPickerBarangay(val);
+ });
+}
 function onRadiusChange(val){pickerRadius=parseInt(val);document.getElementById('radiusVal').textContent=pickerRadius>=1000?(pickerRadius/1000).toFixed(1)+' km':pickerRadius+' m';document.getElementById('r_radius_m').value=pickerRadius;if(pickerCircle)pickerCircle.setRadius(pickerRadius);}
 async function reverseGeocode(lat,lng){try{const res=await fetch(`../api/geocode_proxy.php?lat=${lat}&lon=${lng}`);const d=await res.json();if(d&&d.address){const a=d.address;const locEl=document.getElementById('r_location'),brgyEl=document.getElementById('r_barangay'),cityEl=document.getElementById('r_city'),provEl=document.getElementById('r_province');const road=a.road||a.pedestrian||a.residential||a.amenity||a.building||a.hamlet||a.neighbourhood||'';const brgy=a.quarter||a.neighbourhood||a.suburb||a.village||a.hamlet||USER_BRGY||'';const city=a.city||a.town||a.municipality||a.county||USER_MUNI||'';const prov=a.state||a.province||a.region||'';if(locEl)locEl.value=road;if(brgyEl)brgyEl.value=brgy;if(cityEl&&city)cityEl.value=city;if(provEl&&prov)provEl.value=prov;}}catch{}}
 function useMyLocation(){
  const btn=document.getElementById('locateBtn');
- const fallback=()=>{if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}const cf=document.getElementById('r_city');if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}};
+ const fallback=()=>{if(SAVED_LAT!==null&&SAVED_LNG!==null&&(!SentriGeo.geoReady()||SentriGeo.isInImus(SAVED_LAT,SAVED_LNG))){placePin(SAVED_LAT,SAVED_LNG,true);return;}const cf=document.getElementById('r_city');if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}};
  if(!navigator.geolocation){fallback();return;}
  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating…';
  btn.disabled=true;
  SentriGeo.getUserLocation({timeout:30000,enableHighAccuracy:true}).then(pos=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ if(SentriGeo.geoReady()&&!SentriGeo.isInImus(pos.lat,pos.lng)){
+  actionToast('Your detected location is outside Imus City. Reports can only be filed within Imus.','error');
+  if(SAVED_LAT!==null&&SAVED_LNG!==null&&SentriGeo.isInImus(SAVED_LAT,SAVED_LNG)){
+   placePin(SAVED_LAT,SAVED_LNG,true);
+  }
+  return;
+ }
  if(pos.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){
- placePin(SAVED_LAT,SAVED_LNG,true);
- return;
+  if(!SentriGeo.geoReady()||SentriGeo.isInImus(SAVED_LAT,SAVED_LNG)){
+   placePin(SAVED_LAT,SAVED_LNG,true);
+   return;
+  }
  }
  userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();
  placePin(pos.lat,pos.lng,true);
@@ -1196,9 +1296,14 @@ function openModal(){
  document.getElementById('modalOverlay').classList.add('open');
  if(USER_BRGY&&!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=USER_BRGY;
  if(USER_MUNI&&!document.getElementById('r_city').value)document.getElementById('r_city').value=USER_MUNI;
+ else if(!document.getElementById('r_city').value)document.getElementById('r_city').value='Imus';
  const initLat=liveGPS&&userLat!==null?userLat:SAVED_LAT;
  const initLng=liveGPS&&userLng!==null?userLng:SAVED_LNG;
- if(initLat!==null&&initLng!==null){setTimeout(()=>placePin(initLat,initLng,true),250);}
+ if(initLat!==null&&initLng!==null){
+  if(!SentriGeo.geoReady()||SentriGeo.isInImus(initLat,initLng)){
+   setTimeout(()=>placePin(initLat,initLng,true),250);
+  }
+ }
 }
 function closeModal(){
  document.getElementById('modalOverlay').classList.remove('open');
@@ -1296,6 +1401,12 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  else if(!['image/png','image/jpeg','image/webp'].includes(f.type))problems.push('"'+f.name+'" is not a JPG, PNG, or WEBP image');
  });
  if(problems.length){showMsg(msgEl,'error','Invalid photo: '+problems.join('; ')+'. Remove or replace it and resubmit.');return;}
+ }
+ const la=parseFloat(document.getElementById('r_latitude').value);
+ const ln=parseFloat(document.getElementById('r_longitude').value);
+ if(!isNaN(la)&&!isNaN(ln)&&SentriGeo.geoReady()&&!SentriGeo.isInImus(la,ln)){
+  showMsg(msgEl,'error','Incident location must be within Imus City boundaries.');
+  return;
  }
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
