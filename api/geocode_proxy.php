@@ -11,7 +11,26 @@ sentri_boot_realm('community');
 header('Content-Type: application/json');
 
 if (!sentri_identity()) {
- echo json_encode(['address' => []]); exit;
+ echo json_encode(['address' => [], 'results' => []]); exit;
+}
+
+$q = trim($_GET['q'] ?? '');
+if ($q !== '') {
+  $searchQuery = $q;
+  if (stripos($searchQuery, 'Imus') === false) {
+    $searchQuery .= ', Imus, Cavite';
+  }
+  $url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=5&q=' . urlencode($searchQuery);
+  $ctx = stream_context_create([
+    'http' => [
+      'method' => 'GET',
+      'header' => "User-Agent: SenTri/1.0\r\nAccept-Language: en\r\n",
+      'timeout' => 5,
+    ]
+  ]);
+  $response = @file_get_contents($url, false, $ctx);
+  echo $response !== false ? $response : json_encode([]);
+  exit;
 }
 
 $lat = isset($_GET['lat']) ? (float)$_GET['lat'] : null;

@@ -398,6 +398,26 @@ switch ($action) {
  }
  }
 
+  // ── Residents may only report inside their own profile barangay ──
+ if (in_array($role, ['community','user'], true)) {
+ $pb = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+ $pb->bind_param("i", $user_id); $pb->execute();
+ $pb->bind_result($prof_brgy); $pb->fetch(); $pb->close();
+ $prof_brgy = (string)$prof_brgy;
+
+ if (sentri_geo_norm_brgy($prof_brgy) === '') {
+ echo json_encode(['status'=>'error','message'=>'Set your barangay in My Profile before posting.']); exit;
+ }
+ if ($lat === null || $lng === null) {
+ echo json_encode(['status'=>'error','message'=>'Please pin the incident location on the map.']); exit;
+ }
+ $pin_brgy = sentri_geo_detect((float)$lat, (float)$lng);
+ if (!$pin_brgy || sentri_geo_norm_brgy($pin_brgy) !== sentri_geo_norm_brgy($prof_brgy)) {
+ echo json_encode(['status'=>'error','message'=>'You can only report incidents inside your own barangay ('.$prof_brgy.').']); exit;
+ }
+ $barangay = $pin_brgy; // canonical OSM name, never the client value
+ }
+
  $rate = $conn->prepare("SELECT COUNT(*) FROM reports WHERE user_id=? AND created_at>DATE_SUB(NOW(),INTERVAL 1 HOUR)");
  $rate->bind_param("i",$user_id); $rate->execute(); $rate->bind_result($cnt); $rate->fetch(); $rate->close();
  if ($cnt >= 10) { echo json_encode(['status'=>'error','message'=>'Posting limit reached (10/hr).']); exit; }

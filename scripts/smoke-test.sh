@@ -47,7 +47,7 @@ csrf_for() { # jar url → csrf token meta
 }
 
 say "0. Public surfaces reachable"
-for p in index.php login.php signup.php admin.php verify_email.php forgot_password.php reset_password.php install.php debug.php; do
+for p in index.php login.php signup.php admin.php verify_email.php forgot_password.php reset_password.php gov/index.php gov/login.php install.php debug.php; do
   code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$BASE/$p")
   # install.php may legitimately return 403 after a successful install (locked)
   [[ $code == 200 ]] || { [[ $p == install.php && $code == 403 && -f config/install.lock ]]; } && p "$p → $code" || f "$p → $code"
