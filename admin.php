@@ -19,7 +19,8 @@ require __DIR__ . '/core/login_handler.php';
 
 $sentri_admin_ident = sentri_identity();
 if (!$sentri_admin_ident || ($sentri_admin_ident['role'] ?? '') !== 'admin') {
- ?><!DOCTYPE html>
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -132,8 +133,7 @@ if ($sentri_res = $conn->query("SELECT DATEDIFF(CURDATE(), DATE(created_at)) AS 
 <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
 <script src="assets/vendor/leaflet/leaflet.js"></script>
-<script src="assets/js/sentri-geo.js?v=<?= filemtime(__DIR__ . '/assets/js/sentri-geo.js') ?>"></script>
-<script src="assets/js/sentri-offices.js?v=<?= filemtime(__DIR__ . '/assets/js/sentri-offices.js') ?>"></script>
+<script src="assets/js/sentri-geo.js"></script>
 <style>
 :root{
  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
@@ -1101,7 +1101,7 @@ async function loadOverview(){
 }
 
 // ── CITY-WIDE INCIDENT MAP (Leaflet) ─────────────────────────
-let incidentMap=null, incidentMapLayer=null, incidentBrgyLayer=null, incidentBrgyAdding=false;
+let incidentMap=null, incidentMapLayer=null;
 function renderIncidentMap(){
  const mapEl=document.getElementById('incidentMap');
  if(!mapEl || !window.L) return;
@@ -1122,30 +1122,6 @@ function renderIncidentMap(){
  });
  if(pts.length){
  incidentMap.fitBounds(L.featureGroup(incidentMapLayer.getLayers()).getBounds().pad(0.25));
- }
- // Official barangay perimeters: admin gets city-wide context around the plotted reports.
- if(window.SentriGeo && !incidentBrgyLayer && !incidentBrgyAdding){
- incidentBrgyAdding=true;
- const normName=s=>String(s||'').toLowerCase().replace(/^(brgy\.?|barangay)\s*/,'').replace(/[^a-z0-9]/g,'');
- const counts={};
- allReports.forEach(r=>{
- if(r.is_archived) return;
- const n=normName(r.barangay);
- if(n) counts[n]=(counts[n]||0)+1;
- });
- SentriGeo.addBarangayOverlay(incidentMap, {
- onEach: function(feature, layer){
- const props=(feature&&feature.properties)||{};
- const name=props.name||props.NAME||props.Barangay||'Barangay';
- const c=counts[normName(name)]||0;
- layer.bindPopup(`<strong>${esc(name)}</strong><br><span style="color:#555;">${c} report${c===1?'':'s'} tagged to this barangay</span>`);
- }
- }).then(l=>{
- incidentBrgyLayer=(l||true);
- incidentBrgyAdding=false;
- }).catch(()=>{
- incidentBrgyAdding=false;
- });
  }
 }
 

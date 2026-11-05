@@ -6,6 +6,25 @@ require_role(['community','user']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 
+
+define('BRGY_LOCK_MINUTES', 1);   // <-- raise this later (60, 1440 = 1 day, 43200 = 30 days)
+
+// Add the column once if it doesn't exist
+$cc = $conn->query("SHOW COLUMNS FROM users LIKE 'barangay_changed_at'");
+if ($cc && $cc->num_rows === 0) {
+ $conn->query("ALTER TABLE users ADD COLUMN barangay_changed_at DATETIME NULL DEFAULT NULL");
+}
+
+// Returns [current barangay, seconds of lock remaining]. Uses DB time so there are no PHP/MySQL timezone mismatches.
+function brgy_lock_state($conn, $uid){
+ $m = BRGY_LOCK_MINUTES;
+ $s = $conn->prepare("SELECT COALESCE(barangay_name,''),
+   COALESCE(GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), DATE_ADD(barangay_changed_at, INTERVAL ? MINUTE))), 0)
+   FROM users WHERE id=? LIMIT 1");
+ $s->bind_param("ii", $m, $uid); $s->execute(); $s->bind_result($b, $secs); $s->fetch(); $s->close();
+ return [$b, (int)$secs];
+}
+
 $identity = sentri_identity();
 $uid = (int)$identity['user_id'];
 $fname = $identity['first_name'];
@@ -36,7 +55,6 @@ $my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=? AND is_archive
 $contacts = [];
 if($view==='contacts'){$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");if($cs)while($r=$cs->fetch_assoc())$contacts[]=$r;}
 
-/* ── Profile POST ─────────────────────────────────────────────── */
 $profile_msg = '';
 if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_profile'])){
  $pf=trim($_POST['first_name']??'');$pl=trim($_POST['last_name']??'');
@@ -45,15 +63,38 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
  if($pw&&$pw!==$pw2) {$profile_msg='error:Passwords do not match.';}
  elseif(!$pf||!$pl) {$profile_msg='error:Name fields are required.';}
  else{
- if($pw){$h=password_hash($pw,PASSWORD_BCRYPT,['cost'=>12]);$su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,municipality=?,barangay_name=?,password=? WHERE id=?");$su->bind_param("ssssssi",$pf,$pl,$pp,$pm,$pb,$h,$uid);}
- else{$su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,municipality=?,barangay_name=? WHERE id=?");$su->bind_param("sssssi",$pf,$pl,$pp,$pm,$pb,$uid);}
- $su->execute();$su->close();
- $pf_safe=htmlspecialchars($pf,ENT_QUOTES,'UTF-8');$pl_safe=htmlspecialchars($pl,ENT_QUOTES,'UTF-8');
- if(isset($_SESSION['identity'])&&is_array($_SESSION['identity'])){$_SESSION['identity']['first_name']=$pf_safe;$_SESSION['identity']['last_name']=$pl_safe;}
- $fname=$pf_safe;$lname=$pl_safe;
- $user_phone=$pp;$user_muni=$pm;$user_brgy=$pb;$profile_msg='success:Profile updated.';
+  // Barangay lock: a change is only allowed when the lock has expired (or none was ever set)
+  [$cur_brgy, $lock_left] = brgy_lock_state($conn, $uid);
+  $norm = function($v){ return preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',strtr(mb_strtolower(trim($v),'UTF-8'),['ñ'=>'n']))); };
+  $wants_change = ($norm($pb) !== $norm($cur_brgy));
+  $brgy_changed = false; $lock_note = '';
+  if($wants_change && $cur_brgy !== '' && $lock_left > 0){
+   $pb = $cur_brgy;   // reject the change, keep the old value
+   $lock_note = ' Barangay was not changed: locked for '.ceil($lock_left/60).' more min.';
+  } elseif($wants_change){
+   $brgy_changed = true;
+  }
+
+  $sets="first_name=?,last_name=?,phone_number=?,municipality=?,barangay_name=?";
+  $types="sssss"; $vals=[$pf,$pl,$pp,$pm,$pb];
+  if($pw){ $sets.=",password=?"; $types.="s"; $vals[]=password_hash($pw,PASSWORD_BCRYPT,['cost'=>12]); }
+  if($brgy_changed){ $sets.=",barangay_changed_at=NOW()"; }
+  $types.="i"; $vals[]=$uid;
+  $su=$conn->prepare("UPDATE users SET $sets WHERE id=?");
+  $su->bind_param($types, ...$vals);
+  $su->execute();$su->close();
+
+  $pf_safe=htmlspecialchars($pf,ENT_QUOTES,'UTF-8');$pl_safe=htmlspecialchars($pl,ENT_QUOTES,'UTF-8');
+  if(isset($_SESSION['identity'])&&is_array($_SESSION['identity'])){$_SESSION['identity']['first_name']=$pf_safe;$_SESSION['identity']['last_name']=$pl_safe;}
+  $fname=$pf_safe;$lname=$pl_safe;
+  $user_phone=$pp;$user_muni=$pm;$user_brgy=$pb;
+  $profile_msg='success:Profile updated.'.$lock_note;
  }
 }
+
+// State used by the form
+[, $brgy_lock_secs] = brgy_lock_state($conn, $uid);
+$brgy_locked = ($user_brgy !== '' && $brgy_lock_secs > 0);
 
 /* ── Lookup maps ──────────────────────────────────────────────── */
 $type_icons =['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
@@ -537,7 +578,22 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 <div id="toastContainer"></div>
 <script>
 /* Generic action toast — reuses the nearby-alert toast component styles */
-function actionToast(message,type){const clsMap={success:'safe',error:'dangerous',info:'caution'};const iconMap={safe:'fa-circle-check',dangerous:'fa-circle-xmark',caution:'fa-triangle-exclamation'};const cls=clsMap[type]||'caution';const t=document.createElement('div');t.className=`toast ${cls}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${iconMap[cls]}"></i></div><div><div class="toast-title">${esc(message)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
+function actionToast(message,type){
+ const clsMap={success:'safe',error:'dangerous',info:'caution'};
+ const iconMap={safe:'fa-circle-check',dangerous:'fa-circle-xmark',caution:'fa-triangle-exclamation'};
+ const cls=clsMap[type]||'caution';
+ const box=document.getElementById('toastContainer');
+ // Drop any existing toast with the same message (no duplicates)
+ box.querySelectorAll('.toast[data-msg]').forEach(t=>{
+  if(t.getAttribute('data-msg')===message){ clearTimeout(t._timer); t.remove(); }
+ });
+ const t=document.createElement('div');
+ t.className=`toast ${cls}`;
+ t.setAttribute('data-msg',message);
+ t.innerHTML=`<div class="toast-icon"><i class="fas ${iconMap[cls]}"></i></div><div><div class="toast-title">${esc(message)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;
+ box.appendChild(t);
+ t._timer=setTimeout(()=>dismissToast(t),5200);
+}
 </script>
 
 <!-- ═══ SIDEBAR ═══ -->
@@ -749,7 +805,10 @@ function actionToast(message,type){const clsMap={success:'safe',error:'dangerous
  </div>
  <div class="form-group"><label>Phone Number</label><input name="phone" value="<?= htmlspecialchars($user_phone) ?>" placeholder="e.g. 09XX-XXX-XXXX" maxlength="30"></div>
  <div class="form-row">
- <div class="form-group"><label>Barangay</label><input name="barangay_name" value="<?= htmlspecialchars($user_brgy) ?>" placeholder="Your barangay" maxlength="150"></div>
+ <div class="form-group">
+ <label>Barangay <?php if($brgy_locked): ?><i class="fas fa-lock" style="color:var(--muted);font-size:.75rem;"></i><?php endif; ?></label>
+ <input id="pfBrgy" name="barangay_name" value="<?= htmlspecialchars($user_brgy) ?>" placeholder="Your barangay" maxlength="150" <?= $brgy_locked?'readonly style="opacity:.7;cursor:not-allowed;"':'' ?>>
+ <div id="pfBrgyHint" style="font-size:.74rem;color:var(--muted);margin-top:4px;<?= $brgy_locked?'':'display:none;' ?>"></div></div>
  <div class="form-group"><label>City / Municipality</label><input name="municipality" value="<?= htmlspecialchars($user_muni) ?>" placeholder="e.g. Imus, Cavite" maxlength="150"></div>
  </div>
  <div class="pf-divider"></div>
@@ -1262,13 +1321,43 @@ function initPickerMap(){
  },150);
 }
 
-function placePin(lat,lng,doRG){
+/* ── Pin must stay inside the user's own profile barangay ── */
+function normBrgy(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/barangay|brgy/g,'').replace(/[^a-z0-9]/g,'');}
+const USER_BRGY_KEY = normBrgy(USER_BRGY);
+let _lastPin = null;
+
+let _pinChecking=false;
+async function pinAllowed(lat,lng){
+ if(!USER_BRGY_KEY){actionToast('Set your barangay in My Profile before posting a report.','error');return false;}
+ const b = await SentriGeo.findBarangay(lat,lng);
+ if(!b){actionToast('That spot is not inside any Imus barangay.','error');return false;}
+ if(normBrgy(b.name)!==USER_BRGY_KEY){
+  actionToast(`You can only report inside your barangay (${USER_BRGY}). That spot is in ${b.name}.`,'error');
+  return false;
+ }
+ return true;
+}
+
+async function placePin(lat,lng,doRG){
+ if(_pinChecking) return false;
+ _pinChecking=true;
+ try{
+  if(!(await pinAllowed(lat,lng))){
+   if(pickerMarker&&_lastPin){pickerMarker.setLatLng(_lastPin);if(pickerCircle)pickerCircle.setLatLng(_lastPin);}
+   return false;
+  }
+  return _applyPin(lat,lng,doRG);
+ } finally { _pinChecking=false; }
+}
+
+function _applyPin(lat,lng,doRG){
  if(SentriGeo.geoReady()&&!SentriGeo.isInImus(lat,lng)){
   actionToast('Reports are limited to Imus City only. Please drop your pin inside Imus.','error');
   return false;
  }
  document.getElementById('r_latitude').value=lat;
  document.getElementById('r_longitude').value=lng;
+ _lastPin=[lat,lng];
  const cityEl=document.getElementById('r_city');
  if(cityEl&&(!cityEl.value.trim()||cityEl.value.trim().toLowerCase()!=='imus')){
   cityEl.value='Imus';
@@ -1283,16 +1372,7 @@ function placePin(lat,lng,doRG){
   if(pickerCircle)pickerMap.removeLayer(pickerCircle);
   pickerCircle=L.circle([lat,lng],{radius:pickerRadius,color:'#3a8dff',fillColor:'rgba(58,141,255,.12)',fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(pickerMap);
   pickerMarker=L.marker([lat,lng],{icon:L.divIcon({html:`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38"><path d="M15 0C6.716 0 0 6.716 0 15c0 10 15 23 15 23S30 25 30 15 23.284 0 15 0z" fill="#3a8dff" stroke="white" stroke-width="2"/><circle cx="15" cy="15" r="6" fill="white" opacity=".9"/></svg>`,className:'',iconSize:[30,38],iconAnchor:[15,38]}),draggable:true}).addTo(pickerMap);
-  pickerMarker.on('dragend',ev=>{
-   const p=ev.target.getLatLng();
-   if(SentriGeo.geoReady()&&!SentriGeo.isInImus(p.lat,p.lng)){
-    actionToast('Location must be within Imus City boundaries.','error');
-    pickerMarker.setLatLng([lat,lng]);
-    if(pickerCircle)pickerCircle.setLatLng([lat,lng]);
-    return;
-   }
-   placePin(p.lat,p.lng,true);
-  });
+  pickerMarker.on('dragend',ev=>{const p=ev.target.getLatLng();placePin(p.lat,p.lng,true);});
   pickerMap.setView([lat,lng],Math.max(pickerMap.getZoom(),15));
  }
  const ps=document.getElementById('pinStatus');
@@ -1327,6 +1407,8 @@ function clearPin(){
  const ps2=document.getElementById('pinStatus2');
  if(ps2){ps2.className='pin-status';ps2.innerHTML='';}
  document.getElementById('clearPinBtn').style.display='none';
+
+ _lastPin=null;
 }
 
 function onRadiusChange(val){pickerRadius=parseInt(val);document.getElementById('radiusVal').textContent=pickerRadius>=1000?(pickerRadius/1000).toFixed(1)+' km':pickerRadius+' m';document.getElementById('r_radius_m').value=pickerRadius;if(pickerCircle)pickerCircle.setRadius(pickerRadius);}
@@ -1773,15 +1855,15 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  }
  const la=parseFloat(document.getElementById('r_latitude').value);
  const ln=parseFloat(document.getElementById('r_longitude').value);
- if(!isNaN(la)&&!isNaN(ln)&&SentriGeo.geoReady()&&!SentriGeo.isInImus(la,ln)){
-  showMsg(msgEl,'error','Incident location must be within Imus City boundaries.');
+  if(!isNaN(la)&&!isNaN(ln)&&!(await pinAllowed(la,ln))){
+  showMsg(msgEl,'error','Pin must be inside your own barangay ('+USER_BRGY+').');
   return;
  }
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
  fd.append('incident_type',incType);
- fd.append('location_name',loc);fd.append('barangay',document.getElementById('r_barangay').value.trim());
+ fd.append('location_name',loc);fd.append('barangay', USER_BRGY);   // replaces the r_barangay.value line
  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);
  fd.append('longitude',document.getElementById('r_longitude').value);fd.append('radius_m',document.getElementById('r_radius_m').value);
@@ -2575,6 +2657,18 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  </div>
 </div>
 <script>
+(function(){
+ let left = <?= (int)($brgy_lock_secs ?? 0) ?>;
+ const inp = document.getElementById('pfBrgy'), hint = document.getElementById('pfBrgyHint');
+ if(!inp || !hint || left <= 0) return;
+ const fmt = s => Math.floor(s/60) + 'm ' + String(s%60).padStart(2,'0') + 's';
+ const tick = () => {
+  if(left <= 0){ inp.readOnly = false; inp.style.opacity = ''; inp.style.cursor = ''; hint.style.display = 'none'; return; }
+  hint.textContent = 'Locked to prevent report abuse. You can change it again in ' + fmt(left);
+  left--; setTimeout(tick, 1000);
+ };
+ tick();
+})();
 function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});

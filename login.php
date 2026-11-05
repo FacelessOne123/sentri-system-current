@@ -56,14 +56,14 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .hero-badge span{font-size:0.68rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;}
 .form-wrap{max-width:480px;width:100%;margin:0 auto;padding:0 16px 28px;position:relative;z-index:2;}
 /* Two-column sign-in: the tutorial video on the left, the form on the right. */
-.auth-split{max-width:1180px;margin:auto;padding:22px 20px 30px;display:flex;gap:36px;align-items:center;justify-content:center;}
-.auth-media{flex:1 1 0;min-width:0;max-width:560px;}
+.auth-split{max-width:1500px;margin:auto;padding:22px 28px 30px;display:flex;gap:44px;align-items:center;justify-content:center;}
+.auth-media{flex:1 1 0;min-width:0;max-width:920px;}
 .media-frame{background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
-.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:cover;cursor:pointer;}
+.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:contain;cursor:pointer;}
 .media-caption{margin-top:14px;}
 .media-caption h3{font-family:'Poppins',sans-serif;font-size:1rem;font-weight:800;color:#fff;margin-bottom:4px;}
 .media-caption p{font-size:.8rem;line-height:1.5;color:rgba(255,255,255,.62);}
-.auth-split .form-wrap{flex:0 0 470px;max-width:470px;margin:0;padding:0;}
+.auth-split .form-wrap{flex:0 0 430px;max-width:430px;margin:0;padding:0;}
 .auth-split .form-card{margin-top:0;}
 @media(max-width:1000px){
 .auth-split{flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;}
@@ -123,6 +123,24 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .site-footer a:hover{color:var(--gold);}
 @media(max-width:840px){.hero-badge{display:none;}.gov-links{display:none;}.form-card{padding:22px 20px 18px;margin-top:18px;}.form-wrap{max-width:480px;padding:0 16px 24px;}.hero-inner h2{font-size:1.3rem;}}
 @media(max-width:580px){.form-card{padding:18px 14px 16px;margin-top:14px;}.form-wrap{max-width:100%;padding:0 12px 20px;}.hero-inner h2{font-size:1.2rem;}}
+
+/* ── Guide video popup ── */
+.guide-overlay{position:fixed;inset:0;background:rgba(6,36,68,.82);backdrop-filter:blur(4px);z-index:9999;display:none;align-items:center;justify-content:center;padding:20px;}
+.guide-overlay.open{display:flex;animation:guideFade .25s ease;}
+.guide-box{background:#fff;border-radius:16px;width:100%;max-width:880px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);animation:guidePop .3s cubic-bezier(.34,1.56,.64,1);}
+.guide-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:3px solid var(--gold);}
+.guide-title{font-family:'Poppins',sans-serif;font-size:.95rem;font-weight:800;color:var(--navy);display:flex;align-items:center;gap:8px;}
+.guide-title i{color:var(--gold-dark);}
+.guide-x{background:#f3f4f6;border:none;width:32px;height:32px;border-radius:8px;cursor:pointer;color:#374151;font-size:1rem;display:flex;align-items:center;justify-content:center;transition:background .15s;}
+.guide-x:hover{background:#e5e7eb;}
+.guide-video{display:block;width:100%;max-height:70vh;background:#000;}
+.guide-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;}
+.guide-hint{font-size:.76rem;color:var(--muted);}
+.guide-skip{background:linear-gradient(135deg,var(--navy),var(--navy-light));color:#fff;border:none;padding:9px 20px;border-radius:9px;font-size:.84rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;display:inline-flex;align-items:center;gap:7px;}
+.guide-skip:hover{filter:brightness(1.1);}
+@keyframes guideFade{from{opacity:0}to{opacity:1}}
+@keyframes guidePop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+@media(max-width:580px){.guide-hint{display:none;}.guide-foot{justify-content:flex-end;}}
 
 /* ── Motion ── */
 @keyframes msgError{0%{opacity:0;transform:translateY(-4px);}50%{opacity:1;transform:translateY(0);}100%{transform:translateY(0);}}
@@ -226,6 +244,44 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 </div>
 <script>
 let timerInterval = null;
+
+
+
+function openGuide(redirectUrl){
+ guideRedirect=redirectUrl;
+ const ov=document.getElementById('guideOverlay'),v=document.getElementById('guideVideo');
+ if(!v.getAttribute('src'))v.src=GUIDE_SRC;
+ ov.classList.add('open');
+ document.getElementById('guideSkip').focus();
+ const p=v.play();
+ if(p&&p.catch)p.catch(()=>{}); // if the browser blocks autoplay, the user can press play
+}
+
+async function afterLogin(redirectUrl){
+ let show=false;
+ try{
+  const res=await fetch('api/guide.php',{method:'POST'});
+  const d=await res.json();
+  show=!!d.show;
+ }catch{}
+ if(show)openGuide(redirectUrl);
+ else window.location.href=redirectUrl;
+}
+
+function finishGuide(){
+ const ov=document.getElementById('guideOverlay');
+ if(!ov.classList.contains('open'))return; // prevents a double redirect
+ document.getElementById('guideVideo').pause();
+ ov.classList.remove('open');
+ const url=guideRedirect;guideRedirect=null;
+ if(url)window.location.href=url;
+}
+
+document.getElementById('guideSkip').addEventListener('click',finishGuide);
+document.getElementById('guideClose').addEventListener('click',finishGuide);
+document.getElementById('guideVideo').addEventListener('ended',finishGuide);
+document.getElementById('guideVideo').addEventListener('error',finishGuide); // video missing -> never block login
+document.addEventListener('keydown',e=>{if(e.key==='Escape')finishGuide();});
 
 function togglePw(){const f=document.getElementById('pwField');const b=f.nextElementSibling;const s=f.type==='password';f.type=s?'text':'password';b.textContent=s?'HIDE':'SHOW';}
 
