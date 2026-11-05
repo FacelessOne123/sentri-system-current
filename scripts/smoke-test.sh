@@ -102,6 +102,13 @@ else
   ST=$(curl -s -b "$JDIR/barangay.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
     -F "action=update_report_status" -F "csrf_token=$TB" -F "report_id=$RID" -F "status=dangerous")
   echo "$ST" | grep -q success && p "barangay status update ok" || f "status update: $ST"
+
+  # Cross-barangay isolation test: official of Bucandala I cannot update a report in another barangay (e.g. Pasong Buaya II)
+  X_ST=$(curl -s -b "$JDIR/barangay.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+    -F "action=update_report_status" -F "csrf_token=$TB" -F "report_id=72" -F "status=safe")
+  echo "$X_ST" | grep -q "You can only update reports in your assigned barangay" \
+    && p "cross-barangay report update rejected (official scoped to own barangay)" \
+    || f "cross-barangay update expected rejection: $X_ST"
   LS2=$(login lgu lgu lgu@demo.ph Demo@1234) && p "re-login LGU for chain" || s "lgu re-login issue"
   TL=$(csrf_for "$JDIR/lgu.jar" "$BASE/portal/lgu.php")
   TRP=${MYSQL_CMD:+$($MYSQL_CMD -N -e "SELECT id FROM users WHERE email='responder@demo.ph'" 2>/dev/null)}
