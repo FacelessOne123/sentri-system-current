@@ -56,14 +56,14 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .hero-badge span{font-size:0.68rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;}
 .form-wrap{max-width:480px;width:100%;margin:0 auto;padding:0 16px 28px;position:relative;z-index:2;}
 /* Two-column sign-in: the tutorial video on the left, the form on the right. */
-.auth-split{max-width:1180px;margin:auto;padding:22px 20px 30px;display:flex;gap:36px;align-items:center;justify-content:center;}
-.auth-media{flex:1 1 0;min-width:0;max-width:560px;}
+.auth-split{max-width:1500px;margin:auto;padding:22px 28px 30px;display:flex;gap:44px;align-items:center;justify-content:center;}
+.auth-media{flex:1 1 0;min-width:0;max-width:920px;}
 .media-frame{background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
-.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:cover;cursor:pointer;}
+.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:contain;cursor:pointer;}
 .media-caption{margin-top:14px;}
 .media-caption h3{font-family:'Poppins',sans-serif;font-size:1rem;font-weight:800;color:#fff;margin-bottom:4px;}
 .media-caption p{font-size:.8rem;line-height:1.5;color:rgba(255,255,255,.62);}
-.auth-split .form-wrap{flex:0 0 470px;max-width:470px;margin:0;padding:0;}
+.auth-split .form-wrap{flex:0 0 430px;max-width:430px;margin:0;padding:0;}
 .auth-split .form-card{margin-top:0;}
 @media(max-width:1000px){
 .auth-split{flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;}
