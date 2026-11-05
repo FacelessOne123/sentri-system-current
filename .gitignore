@@ -32,3 +32,4 @@ composer.lock
 .env.local.*
 !.env.local.example
 
+.env
