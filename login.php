@@ -59,7 +59,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .auth-split{max-width:1180px;margin:auto;padding:22px 20px 30px;display:flex;gap:36px;align-items:center;justify-content:center;}
 .auth-media{flex:1 1 0;min-width:0;max-width:560px;}
 .media-frame{background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
-.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:cover;}
+.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:cover;cursor:pointer;}
 .media-caption{margin-top:14px;}
 .media-caption h3{font-family:'Poppins',sans-serif;font-size:1rem;font-weight:800;color:#fff;margin-bottom:4px;}
 .media-caption p{font-size:.8rem;line-height:1.5;color:rgba(255,255,255,.62);}
@@ -168,7 +168,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 <div class="auth-split">
 <aside class="auth-media">
  <div class="media-frame">
-  <video class="media-video" src="assets/media/community-tutorial.mp4" poster="assets/media/community-tutorial-poster.jpg" controls preload="metadata" playsinline></video>
+  <video class="media-video" id="tutorialVideo" src="assets/media/community-tutorial.mp4" poster="assets/media/community-tutorial-poster.jpg" autoplay muted loop playsinline preload="auto" title="Click to toggle sound"></video>
  </div>
  <div class="media-caption">
   <h3>How SenTri Works</h3>
@@ -371,6 +371,17 @@ document.getElementById('guideSkip').addEventListener('click',finishGuide);
 document.getElementById('guideClose').addEventListener('click',finishGuide);
 document.getElementById('guideVideo').addEventListener('ended',finishGuide);
 document.getElementById('guideVideo').addEventListener('error',finishGuide); // video missing -> never block sign-in
+
+// Autoplay tutorial video beside the form; click toggles audio
+const tv = document.getElementById('tutorialVideo');
+if (tv) {
+  tv.addEventListener('click', () => {
+    tv.muted = !tv.muted;
+    tv.title = tv.muted ? 'Click to unmute' : 'Click to mute';
+  });
+  const p = tv.play();
+  if (p && p.catch) p.catch(() => {});
+}
 </script>
 </body>
 </html>
