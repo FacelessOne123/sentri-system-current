@@ -7,13 +7,23 @@ require_approved();
 require_once __DIR__ . '/../config/db.php';
 
 
-define('BRGY_LOCK_MINUTES', 1);   // <-- raise this later (60, 1440 = 1 day, 43200 = 30 days)
+define('BRGY_LOCK_MINUTES', 43200); // 30 days — see sql/migrations/009_barangay_lock.sql
 
-// Add the column once if it doesn't exist
-$cc = $conn->query("SHOW COLUMNS FROM users LIKE 'barangay_changed_at'");
-if ($cc && $cc->num_rows === 0) {
- $conn->query("ALTER TABLE users ADD COLUMN barangay_changed_at DATETIME NULL DEFAULT NULL");
+/* ── Canonical Imus barangay list (authoritative GeoJSON) ─────── */
+function sentri_norm_brgy($v){
+ return preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',strtr(mb_strtolower(trim((string)$v),'UTF-8'),['ñ'=>'n'])));
 }
+$imus_barangays = [];
+$imus_brgy_norm = [];
+$__geo = @json_decode(@file_get_contents(__DIR__.'/../assets/geo/imus-barangays.geojson'), true);
+if (is_array($__geo) && !empty($__geo['features'])) {
+ foreach ($__geo['features'] as $__f) {
+  $__n = trim((string)($__f['properties']['name'] ?? ''));
+  if ($__n !== '') $imus_barangays[] = $__n;
+ }
+}
+usort($imus_barangays, 'strnatcasecmp');
+foreach ($imus_barangays as $__n) $imus_brgy_norm[sentri_norm_brgy($__n)] = $__n;
 
 // Returns [current barangay, seconds of lock remaining]. Uses DB time so there are no PHP/MySQL timezone mismatches.
 function brgy_lock_state($conn, $uid){
@@ -62,15 +72,17 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
  $pw=$_POST['new_password']??'';$pw2=$_POST['confirm_password']??'';
  if($pw&&$pw!==$pw2) {$profile_msg='error:Passwords do not match.';}
  elseif(!$pf||!$pl) {$profile_msg='error:Name fields are required.';}
+ elseif($pb==='') {$profile_msg='error:Please select your barangay.';}
+ elseif(!isset($imus_brgy_norm[sentri_norm_brgy($pb)])) {$profile_msg='error:Please select one of the 95 Imus barangays.';}
  else{
   // Barangay lock: a change is only allowed when the lock has expired (or none was ever set)
   [$cur_brgy, $lock_left] = brgy_lock_state($conn, $uid);
-  $norm = function($v){ return preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',strtr(mb_strtolower(trim($v),'UTF-8'),['ñ'=>'n']))); };
-  $wants_change = ($norm($pb) !== $norm($cur_brgy));
+  $pb = $imus_brgy_norm[sentri_norm_brgy($pb)]; // canonical OSM/GeoJSON spelling
+  $wants_change = (sentri_norm_brgy($pb) !== sentri_norm_brgy($cur_brgy));
   $brgy_changed = false; $lock_note = '';
   if($wants_change && $cur_brgy !== '' && $lock_left > 0){
    $pb = $cur_brgy;   // reject the change, keep the old value
-   $lock_note = ' Barangay was not changed: locked for '.ceil($lock_left/60).' more min.';
+   $lock_note = ' Barangay was not changed: locked for '.ceil($lock_left/86400).' more day(s).';
   } elseif($wants_change){
    $brgy_changed = true;
   }
@@ -95,6 +107,15 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
 // State used by the form
 [, $brgy_lock_secs] = brgy_lock_state($conn, $uid);
 $brgy_locked = ($user_brgy !== '' && $brgy_lock_secs > 0);
+
+// Members without a barangay are read-only: they may browse the map and the
+// emergency contacts, but reporting and the community feed stay locked until
+// they assign one in My Profile (enforced again server-side in api/reports.php).
+$needs_brgy = (trim((string)$user_brgy) === '');
+$locked_views = ['overview','my_reports'];
+if ($needs_brgy && in_array($view, $locked_views, true)) {
+ header('Location: community.php?view=map&locked=1'); exit;
+}
 
 /* ── Lookup maps ──────────────────────────────────────────────── */
 $type_icons =['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
@@ -180,6 +201,32 @@ body.dark .gps-chip.active{background:#1a2e24;}
 .avatar{width:36px;height:36px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.92rem;flex-shrink:0;}
 .user-name{font-size:.88rem;font-weight:600;color:var(--text);}
 .content{padding:28px;flex:1;animation:fadeIn .4s ease;}
+
+/* ── Barangay-required gating ── */
+.menu-locked{display:flex;align-items:center;gap:11px;padding:11px 13px;color:rgba(255,255,255,.38);font-size:.875rem;font-weight:500;border-radius:10px;cursor:not-allowed;filter:grayscale(1);white-space:nowrap;}
+.menu-locked .lock-tag{margin-left:auto;font-size:.65rem;opacity:.8;}
+.post-btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(1);}
+.brgy-banner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#fff7ed;border:1.5px solid #fdba74;border-left:5px solid #ea580c;border-radius:12px;padding:13px 16px;margin-bottom:22px;animation:fadeInUp .35s both;}
+body.dark .brgy-banner{background:#2a1a0d;border-color:#7c2d12;border-left-color:#fb923c;}
+.brgy-banner .bb-icon{width:34px;height:34px;border-radius:50%;background:#ffedd5;color:#c2410c;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0;}
+body.dark .brgy-banner .bb-icon{background:#431407;color:#fdba74;}
+.brgy-banner .bb-text{flex:1;min-width:200px;font-size:.82rem;line-height:1.5;color:#7c2d12;}
+body.dark .brgy-banner .bb-text{color:#fdba74;}
+.brgy-banner .bb-text b{display:block;font-size:.88rem;color:#9a3412;margin-bottom:1px;}
+body.dark .brgy-banner .bb-text b{color:#ffedd5;}
+.brgy-banner .bb-btn{background:#ea580c;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:.8rem;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:'Poppins',sans-serif;transition:filter .15s;}
+.brgy-banner .bb-btn:hover{filter:brightness(1.08);}
+#brgyPrompt{position:fixed;inset:0;background:rgba(4,18,31,.62);backdrop-filter:blur(3px);z-index:1200;display:none;align-items:center;justify-content:center;padding:20px;}
+#brgyPrompt.open{display:flex;}
+.brgy-prompt-box{background:var(--card);border-radius:18px;width:100%;max-width:470px;padding:26px;box-shadow:0 24px 70px rgba(0,0,0,.35);animation:fadeInUp .3s both;position:relative;}
+.brgy-prompt-box .bp-icon{width:54px;height:54px;border-radius:16px;background:#eff6ff;color:var(--blue);display:flex;align-items:center;justify-content:center;font-size:1.35rem;margin-bottom:14px;}
+body.dark .brgy-prompt-box .bp-icon{background:#172554;color:#93c5fd;}
+.brgy-prompt-box h3{font-family:'Poppins',sans-serif;font-size:1.05rem;font-weight:800;color:var(--text);margin-bottom:8px;}
+.brgy-prompt-box p{font-size:.83rem;line-height:1.6;color:var(--muted);margin-bottom:18px;}
+.brgy-prompt-box .bp-close{position:absolute;top:14px;right:14px;background:var(--bg);border:none;width:30px;height:30px;border-radius:8px;color:var(--muted);cursor:pointer;font-size:.85rem;}
+.brgy-prompt-box .bp-actions{display:flex;gap:10px;justify-content:flex-end;}
+.brgy-prompt-box .bp-later{background:var(--bg);border:1.5px solid var(--card-border);color:var(--muted);border-radius:9px;padding:9px 16px;font-size:.82rem;font-weight:600;cursor:pointer;}
+.brgy-prompt-box .bp-go{background:linear-gradient(135deg,var(--blue-accent),var(--blue));color:#fff;border:none;border-radius:9px;padding:9px 18px;font-size:.82rem;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;}
 
 /* ── Stats Row ── */
 .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:28px;}
@@ -607,10 +654,16 @@ function actionToast(message,type){
  </div>
  <nav class="menu">
  <?php foreach($nav as $key=>$item): ?>
+ <?php if($needs_brgy && in_array($key, $locked_views, true)): ?>
+ <span class="menu-locked" title="Assign a barangay in My Profile to unlock" aria-disabled="true">
+ <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?><i class="fas fa-lock lock-tag"></i>
+ </span>
+ <?php else: ?>
  <a href="community.php?view=<?= $key ?>" <?= $view===$key?'class="active"':'' ?>>
  <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
  <?php if($key==='my_reports'&&$my_count>0): ?><span class="menu-badge"><?= $my_count ?></span><?php endif; ?>
  </a>
+ <?php endif; ?>
  <?php endforeach; ?>
  </nav>
  <div class="sidebar-stats">
@@ -629,6 +682,21 @@ function actionToast(message,type){
  </div>
 </aside>
 
+<?php if($needs_brgy): ?>
+<div id="brgyPrompt" role="dialog" aria-modal="true" aria-labelledby="brgyPromptTitle">
+ <div class="brgy-prompt-box">
+  <button type="button" class="bp-close" onclick="dismissBrgyPrompt()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+  <div class="bp-icon"><i class="fas fa-map-location-dot"></i></div>
+  <h3 id="brgyPromptTitle">Assign your barangay to get started</h3>
+  <p>SenTri only accepts reports for the barangay a member belongs to. Set your barangay in <b>My Profile</b> to unlock the Community Feed, My Reports, and reporting. The Incidents Map and Emergency Contacts stay available in the meantime.</p>
+  <div class="bp-actions">
+   <button type="button" class="bp-later" onclick="dismissBrgyPrompt()">Later</button>
+   <a class="bp-go" href="community.php?view=profile&amp;assign=1" onclick="brgyPromptGo()"><i class="fas fa-arrow-right"></i> Assign my barangay</a>
+  </div>
+ </div>
+</div>
+<?php endif; ?>
+
 <!-- ═══ MAIN ═══ -->
 <div class="main" id="main">
  <div class="topbar">
@@ -639,7 +707,7 @@ function actionToast(message,type){
  <div class="right-top">
  <?php if(in_array($view,['overview','my_reports','map'])): ?>
  <div class="gps-chip" id="gpsChip"><span class="gps-dot" id="gpsDot"></span><span id="gpsLabel">GPS Off</span><span id="gpsAcc" style="display:none;margin-left:3px;font-size:.6rem;font-weight:700;letter-spacing:.3px;" title="GPS accuracy — &lt;12m good / &lt;50m ok / weak"></span></div>
- <button class="post-btn" onclick="openModal()"><i class="fas fa-plus"></i> <span>Post Report</span></button>
+ <button class="post-btn" <?php if($needs_brgy): ?>disabled title="Assign your barangay in My Profile to enable reporting"<?php else: ?>onclick="openModal()"<?php endif; ?>><i class="fas fa-<?= $needs_brgy?'lock':'plus' ?>"></i> <span>Post Report</span></button>
  <?php endif; ?>
  <div class="user-info" onclick="window.location='community.php?view=profile'" title="My Profile">
  <div class="avatar" id="topAvatar" style="background:<?= htmlspecialchars($avatar_color) ?>"><?= strtoupper(substr($fname,0,1).substr($lname,0,1)) ?></div>
@@ -649,6 +717,17 @@ function actionToast(message,type){
  </div>
 
  <div class="content">
+
+ <?php if($needs_brgy): ?>
+ <div class="brgy-banner" role="status">
+  <div class="bb-icon"><i class="fas fa-location-dot"></i></div>
+  <div class="bb-text">
+   <b>Your account isn't assigned to a barangay yet.</b>
+   Reporting and community features stay locked until you set it. You can still browse the Incidents Map and Emergency Contacts.
+  </div>
+  <a class="bb-btn" href="community.php?view=profile&amp;assign=1" onclick="brgyPromptGo()"><i class="fas fa-id-card"></i> Assign my barangay</a>
+ </div>
+ <?php endif; ?>
 
  <?php if($view==='overview'): ?>
  <div class="stats-row">
@@ -807,7 +886,8 @@ function actionToast(message,type){
  <div class="form-row">
  <div class="form-group">
  <label>Barangay <?php if($brgy_locked): ?><i class="fas fa-lock" style="color:var(--muted);font-size:.75rem;"></i><?php endif; ?></label>
- <input id="pfBrgy" name="barangay_name" value="<?= htmlspecialchars($user_brgy) ?>" placeholder="Your barangay" maxlength="150" <?= $brgy_locked?'readonly style="opacity:.7;cursor:not-allowed;"':'' ?>>
+ <input id="pfBrgy" name="barangay_name" list="pfBrgyList" value="<?= htmlspecialchars($user_brgy) ?>" placeholder="Select your barangay" maxlength="150" required autocomplete="off" <?= $brgy_locked?'readonly style="opacity:.7;cursor:not-allowed;"':'' ?><?= (!$brgy_locked && isset($_GET['assign']))?' autofocus':'' ?>>
+ <datalist id="pfBrgyList"><?php foreach($imus_barangays as $bn): ?><option value="<?= htmlspecialchars($bn) ?>"></option><?php endforeach; ?></datalist>
  <div id="pfBrgyHint" style="font-size:.74rem;color:var(--muted);margin-top:4px;<?= $brgy_locked?'':'display:none;' ?>"></div></div>
  <div class="form-group"><label>City / Municipality</label><input name="municipality" value="<?= htmlspecialchars($user_muni) ?>" placeholder="e.g. Imus, Cavite" maxlength="150"></div>
  </div>
@@ -1050,6 +1130,7 @@ const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
 const SAVED_LAT = <?= is_null($saved_gps_lat)?'null':(float)$saved_gps_lat ?>;
 const SAVED_LNG = <?= is_null($saved_gps_lng)?'null':(float)$saved_gps_lng ?>;
 const USER_BRGY = <?= json_encode((string)$user_brgy) ?>;
+const NEEDS_BRGY = <?= $needs_brgy?'true':'false' ?>;
 const USER_MUNI = <?= json_encode((string)$user_muni) ?>;
 const INIT_COLOR = '<?= htmlspecialchars($avatar_color) ?>';
 const DM_KEY = `sentri_dm_${MY_USER_ID}`;
@@ -1740,6 +1821,7 @@ function useMyLocation(){
 
 /* Post report modal */
 function openModal(){
+ if(NEEDS_BRGY){actionToast('Assign your barangay in My Profile before posting a report.','error');return;}
  document.getElementById('modalOverlay').classList.add('open');
  initAddressSuggestions();
  if(USER_BRGY&&!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=USER_BRGY;
@@ -2661,7 +2743,12 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  let left = <?= (int)($brgy_lock_secs ?? 0) ?>;
  const inp = document.getElementById('pfBrgy'), hint = document.getElementById('pfBrgyHint');
  if(!inp || !hint || left <= 0) return;
- const fmt = s => Math.floor(s/60) + 'm ' + String(s%60).padStart(2,'0') + 's';
+ const fmt = s => {
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  if(d > 0) return d + 'd ' + h + 'h';
+  if(h > 0) return h + 'h ' + m + 'm';
+  return m + 'm ' + String(s%60).padStart(2,'0') + 's';
+ };
  const tick = () => {
   if(left <= 0){ inp.readOnly = false; inp.style.opacity = ''; inp.style.cursor = ''; hint.style.display = 'none'; return; }
   hint.textContent = 'Locked to prevent report abuse. You can change it again in ' + fmt(left);
@@ -2669,6 +2756,21 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  };
  tick();
 })();
+<?php if($needs_brgy): ?>
+(function(){
+ if(<?= $view==='profile'?'true':'false' ?>) return; // stay out of the way on the page that fixes it
+ try{ if(localStorage.getItem('sentri_brgy_prompt_v1')==='1') return; }catch(e){}
+ const m=document.getElementById('brgyPrompt');
+ if(m) m.classList.add('open');
+})();
+function dismissBrgyPrompt(){
+ const m=document.getElementById('brgyPrompt'); if(m) m.classList.remove('open');
+ try{ localStorage.setItem('sentri_brgy_prompt_v1','1'); }catch(e){}
+}
+function brgyPromptGo(){
+ try{ localStorage.setItem('sentri_brgy_prompt_v1','1'); }catch(e){}
+}
+<?php endif; ?>
 function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});

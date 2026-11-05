@@ -64,7 +64,9 @@ sentri-system/
  ├── 004_report_images.sql # Photo upload table
  ├── 005_emergency_contacts.sql # LGU/Hospital/Traffic contacts
  ├── 006_roles.sql # Expanded role ENUM + community columns
- └── 007_force_password_reset.sql # Force password change on provisioned accounts
+ ├── 007_force_password_reset.sql # Force password change on provisioned accounts
+ ├── 008_guide_seen.sql # First-login guide video seen flag
+ └── 009_barangay_lock.sql # Anti-abuse barangay change lock timestamp
 ```
 
 ---
@@ -239,6 +241,8 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-11-05 | **fix(barangay):** Strictly scope barangay portal reports and actions to the assigned barangay territory - fixed query in `portal/barangay.php` and `api/reports.php` which previously queried `(r.barangay = ? OR u.barangay_name = ?)`, leaking incidents to other barangay portals whenever a resident's home address differed from the incident location (e.g. Palico IV officials receiving Pasong Buaya II reports). Scoped stats, dashboard lists, exports, and map markers strictly to `r.barangay`. Added server-side authorization guards to `update_report_status`, `resolve_report`, `escalate_report`, and `get_lifecycle` ensuring barangay officials can only access and update reports within their own assigned jurisdiction |
+| 2026-11-05 | **feat(community):** Mandatory barangay assignment for community reporting + portal gating - unassigned members are guided to assign their barangay in My Profile (via a dismissible welcome modal and persistent banner). Unassigned members can view the Incidents Map and Emergency Contacts, but the Community Feed, My Reports, and report creation are locked. Added a 30-day anti-abuse lock on barangay changes (`sql/migrations/009_barangay_lock.sql`) and validated barangay selections against the 95 canonical Imus barangays |
 | 2026-11-05 | **feat(report):** Auto-detecting suggestions and bidirectional address-map synchronization for community create-report - added smart autocomplete for City, Barangay (all 95 Imus barangays), and specific Street/location. Street suggestions are dynamically scoped to the selected barangay to prevent cluttering; entering/selecting a manual address automatically drops a pin and centers the map; conversely, dropping or dragging a pin automatically reverse-geocodes and populates the street, city, and barangay fields |
 | 2026-11-05 | **feat(map):** Highlight barangays and limit community report pin drop map to Imus only - integrated `SentriGeo.addBarangayOverlay` into `pickerMap` with progressive labels, interactive hover states, and dynamic highlighting of the active/auto-detected barangay. Applied `SentriGeo.lockToImus(pickerMap, {fit: true})` and strictly restricted pin drops, marker drags, and report submissions to valid coordinates within the 95 Imus City barangay perimeters |
 | 2026-11-05 | **feat(gov):** Dedicated government portal homepage (`gov/index.php`) and home navigation isolation - added dedicated landing page for the government portal (`/gov/`) highlighting the 3 official branches (Barangay, LGU, First Responders), infrastructure capabilities, and official provisioning notices. Fixed the "Home" and brand links in `gov/login.php`, `gov/forgot_password.php`, and `gov/reset_password.php` to point to `index.php` within `gov/` instead of `../index.php`, preventing foreign community realm redirects to citizen portal accounts when logged in |

@@ -32,9 +32,8 @@ function cq($conn,$sql,$types='',$params=[]){
 }
 
 
-// Normalized barangay match. Community users type the barangay as free text (or it comes from
-// reverse geocoding), so "Brgy. San Jose", "san jose" and "Barangay San Jose" must all match.
-// Reports with no barangay fall back to the reporter's profile barangay.
+// Normalized barangay match. Reports are strictly scoped to the official's assigned
+// barangay territory based on the incident's location (r.barangay).
 function brgy_norm($v){
  $v = mb_strtolower(trim((string)$v), 'UTF-8');
  $v = strtr($v, ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
@@ -45,19 +44,17 @@ function brgy_sql($col){
  return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE($col,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
 }
 $brgy_key = brgy_norm($brgy);
-$BRGY_COND = "(".brgy_sql('r.barangay')."=? OR ".brgy_sql('u.barangay_name')."=?)";
+$BRGY_COND = brgy_sql('r.barangay') . " = ?";
 
-// Stats - scoped to this barangay official's assigned barangay (falls back to community-wide if none set)
+// Stats - strictly scoped to this barangay official's assigned territory.
+// If no barangay is assigned, stats remain 0 to prevent unauthorized citywide data leak.
 if ($brgy) {
- $total = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $danger = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $caution = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $safe = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
+ $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $danger = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $caution = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
 } else {
- $total = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
- $danger = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
- $caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0");
- $safe = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
+ $total = 0; $danger = 0; $caution = 0; $safe = 0;
 }
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
@@ -74,54 +71,56 @@ if (in_array($view, ['overview','reports'])) {
  $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
  $has_esc_col = ($bc && $bc->num_rows > 0);
  $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- $brgy_where = $brgy ? " AND $BRGY_COND" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
- if ($brgy) { $s->bind_param("ss", $brgy_key, $brgy_key); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $reports[]=$row;
- $s->close();
+ if ($brgy) {
+  $brgy_where = " AND $BRGY_COND";
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+  $s->bind_param("s", $brgy_key);
+  $s->execute(); $res=$s->get_result();
+  while($row=$res->fetch_assoc()) $reports[]=$row;
+  $s->close();
+ } else {
+  $reports = [];
+ }
 }
 
 if ($view === 'contacts') {
- $q = $brgy
- ? "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name"
- : "SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name";
  if ($brgy) {
- $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
+  $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $res=$s->get_result();
+  while($r=$res->fetch_assoc()) $contacts[]=$r;
+  $s->close();
  } else {
- $s = $conn->prepare($q); $s->execute();
+  $contacts = [];
  }
- $res=$s->get_result();
- while($r=$res->fetch_assoc()) $contacts[]=$r;
- $s->close();
 }
 
 if ($view === 'residents') {
- $q = $brgy
- ? "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') AND barangay_name=? ORDER BY last_name"
- : "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') ORDER BY last_name LIMIT 100";
  if ($brgy) {
- $s=$conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $q = "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
+  $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
+  $res=$s->get_result();
+  while($r=$res->fetch_assoc()) $residents[]=$r;
+  $s->close();
  } else {
- $s=$conn->prepare($q); $s->execute();
+  $residents = [];
  }
- $res=$s->get_result();
- while($r=$res->fetch_assoc()) $residents[]=$r;
- $s->close();
 }
 
 $map_reports = [];
 if ($view === 'map') {
- $brgy_where = $brgy ? " AND $BRGY_COND" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
- if ($brgy) { $s->bind_param("ss", $brgy_key, $brgy_key); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
+ if ($brgy) {
+  $brgy_where = " AND $BRGY_COND";
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+  $s->bind_param("s", $brgy_key);
+  $s->execute(); $res=$s->get_result();
+  while($row=$res->fetch_assoc()) $map_reports[]=$row;
+  $s->close();
+ }
 }
 $map_total_all = $brgy
- ? cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key])
- : cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+ ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key])
+ : 0;
 
 $nav_items = [
  'overview' => ['icon'=>'fa-gauge', 'label'=>'Dashboard'],
@@ -397,6 +396,16 @@ tr:hover td{background:#fafafa;}
  </div>
 
  <div class="content">
+
+ <?php if(!$brgy): ?>
+ <div style="background:#fef2f2;border:1.5px solid #fecaca;border-left:5px solid #dc2626;border-radius:12px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+  <i class="fas fa-triangle-exclamation" style="font-size:1.3rem;color:#dc2626;"></i>
+  <div style="font-size:0.85rem;color:#991b1b;line-height:1.5;">
+   <b>No barangay assigned to your official account.</b><br>
+   Official access is strictly scoped per barangay. Please contact your system administrator to assign your jurisdiction.
+  </div>
+ </div>
+ <?php endif; ?>
 
  <?php if($view === 'overview'): ?>
  <div class="stat-grid">
