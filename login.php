@@ -55,6 +55,21 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .hero-badge i{font-size:1.5rem;color:var(--gold);display:block;margin-bottom:3px;}
 .hero-badge span{font-size:0.68rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;}
 .form-wrap{max-width:480px;width:100%;margin:0 auto;padding:0 16px 28px;position:relative;z-index:2;}
+/* Two-column sign-in: the tutorial video on the left, the form on the right. */
+.auth-split{max-width:1180px;margin:auto;padding:22px 20px 30px;display:flex;gap:36px;align-items:center;justify-content:center;}
+.auth-media{flex:1 1 0;min-width:0;max-width:560px;}
+.media-frame{background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
+.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:cover;}
+.media-caption{margin-top:14px;}
+.media-caption h3{font-family:'Poppins',sans-serif;font-size:1rem;font-weight:800;color:#fff;margin-bottom:4px;}
+.media-caption p{font-size:.8rem;line-height:1.5;color:rgba(255,255,255,.62);}
+.auth-split .form-wrap{flex:0 0 470px;max-width:470px;margin:0;padding:0;}
+.auth-split .form-card{margin-top:0;}
+@media(max-width:1000px){
+.auth-split{flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;}
+.auth-media{order:2;max-width:560px;margin:0 auto;width:100%;}
+.auth-split .form-wrap{order:1;flex:1 1 auto;max-width:480px;margin:0 auto;width:100%;}
+}
 .form-card{background:#fff;border-radius:16px;padding:24px 26px 20px;margin-top:20px;box-shadow:0 8px 32px rgba(0,0,0,0.2);width:100%;}
 .portal-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #e5e7eb;}
 .ph-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;background:#eff6ff;color:#2563eb;}
@@ -72,17 +87,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .btn-login:hover:not(:disabled){filter:brightness(1.05);box-shadow:0 4px 14px rgba(0,0,0,0.2);}
 .btn-login:active:not(:disabled){transform:scale(0.99);}
 .btn-login:disabled{opacity:0.6;cursor:not-allowed;background:#9ca3af!important;background-image:none!important;}
-.tutorial-row{margin-top:12px;text-align:center;}
-.btn-tutorial{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border:1px solid #cbd5e1;background:#fff;border-radius:10px;font-size:0.84rem;font-weight:700;font-family:'Inter',sans-serif;color:#1a1a2e;cursor:pointer;transition:border-color .15s,background .15s;}
-.btn-tutorial:hover{border-color:#2563eb;background:#eff6ff;}
-.video-modal{display:none;position:fixed;inset:0;z-index:1200;background:rgba(10,12,26,0.72);align-items:center;justify-content:center;padding:20px;}
-.video-modal.open{display:flex;}
-.video-card{background:#0f1220;border-radius:16px;padding:14px 14px 10px;max-width:720px;width:100%;box-shadow:0 18px 60px rgba(0,0,0,0.55);}
-.video-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
-.video-title{color:#fff;font-size:0.95rem;font-weight:800;display:flex;align-items:center;gap:8px;}
-.video-close{background:none;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;padding:6px;}
-.video-close:hover{color:#fff;}
-.video-card video{width:100%;border-radius:10px;display:block;max-height:70vh;}
 /* ── First-login guide popup ── */
 .guide-overlay{position:fixed;inset:0;background:rgba(6,36,68,.86);backdrop-filter:blur(4px);z-index:1300;display:none;align-items:center;justify-content:center;padding:20px;}
 .guide-overlay.open{display:flex;animation:guideFade .25s ease;}
@@ -161,6 +165,16 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 <?php elseif(isset($_GET['pending'])): ?><div class="page-notice"><div class="notice info"><i class="fas fa-clock"></i><span>Your official account is awaiting administrator approval. Government portals have their own sign-in page.</span></div></div>
 <?php endif; ?>
 
+<div class="auth-split">
+<aside class="auth-media">
+ <div class="media-frame">
+  <video class="media-video" src="assets/media/community-tutorial.mp4" poster="assets/media/community-tutorial-poster.jpg" controls preload="metadata" playsinline></video>
+ </div>
+ <div class="media-caption">
+  <h3>How SenTri Works</h3>
+  <p>Watch how to report an incident, pin it on the map, and follow it through to resolution.</p>
+ </div>
+</aside>
 <div class="form-wrap">
  <div class="form-card">
  <div class="portal-header">
@@ -175,9 +189,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  <div class="forgot-row"><a href="forgot_password.php">Forgot Password?</a></div>
  <button type="submit" class="btn-login sentri-btn-primary" id="loginBtn"><i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Sign In to Community Portal</span></button>
  </form>
- <div class="tutorial-row">
- <button type="button" class="btn-tutorial" onclick="openTutorial()"><i class="fas fa-circle-play"></i> Watch: How SenTri Works</button>
- </div>
  <div id="otpSection" style="display:none;">
  <form id="otpForm" novalidate>
  <input type="hidden" name="action" value="verify_otp">
@@ -195,6 +206,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
  </div>
  <div class="signup-row" id="signupRow">Don't have an account? <a href="signup.php">Register here</a></div>
  </div>
+</div>
 </div>
 <footer class="site-footer"><p>SenTri Community Safety Incident Reporting System - For community use.</p></footer>
 
@@ -319,10 +331,6 @@ async function resend(){
  catch{btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Resend';}
 }
 function showMsg(type,text){const el=document.getElementById('loginMsg');el.className='msg '+type;el.textContent=text;el.style.display='block';}
-function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
-function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
-document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeTutorial();finishGuide();}});
 
 /* ── First-login guide popup ── */
 const GUIDE_SRC='assets/video/GuideVideoTutorial.mp4';
@@ -358,19 +366,11 @@ function finishGuide(){
  if(url)window.location.href=url;
 }
 
+document.addEventListener('keydown',function(e){if(e.key==='Escape')finishGuide();});
 document.getElementById('guideSkip').addEventListener('click',finishGuide);
 document.getElementById('guideClose').addEventListener('click',finishGuide);
 document.getElementById('guideVideo').addEventListener('ended',finishGuide);
 document.getElementById('guideVideo').addEventListener('error',finishGuide); // video missing -> never block sign-in
 </script>
-<div class="video-modal" id="tutorialModal" role="dialog" aria-modal="true">
- <div class="video-card">
- <div class="video-head">
- <div class="video-title"><i class="fas fa-circle-play"></i> SenTri — How It Works (Community)</div>
- <button type="button" class="video-close" onclick="closeTutorial()" aria-label="Close"><i class="fas fa-xmark"></i></button>
- </div>
- <video id="tutorialVideo" src="assets/media/community-tutorial.mp4" controls preload="none" playsinline></video>
- </div>
-</div>
 </body>
 </html>
