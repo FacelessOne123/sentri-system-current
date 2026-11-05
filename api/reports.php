@@ -406,7 +406,7 @@ switch ($action) {
  $prof_brgy = (string)$prof_brgy;
 
  if (sentri_geo_norm_brgy($prof_brgy) === '') {
- echo json_encode(['status'=>'error','message'=>'Set your barangay in My Profile before posting.']); exit;
+ echo json_encode(['status'=>'error','message'=>'Assign your barangay in My Profile before posting a report.']); exit;
  }
  if ($lat === null || $lng === null) {
  echo json_encode(['status'=>'error','message'=>'Please pin the incident location on the map.']); exit;
