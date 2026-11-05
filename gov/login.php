@@ -115,12 +115,12 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 </head>
 <body>
 <header class="gov-bar">
- <a href="../index.php" class="gov-brand">
+ <a href="index.php" class="gov-brand">
  <div class="gov-seal"><i class="fas fa-shield-halved"></i></div>
  <div class="gov-text"><h1>SenTri</h1><p>Government Access - Official Use Only</p></div>
  </a>
  <nav class="gov-links">
- <a href="../index.php">Home</a>
+ <a href="index.php">Home</a>
  <a href="forgot_password.php">Forgot Password</a>
  </nav>
 </header>
@@ -214,6 +214,16 @@ function selectPortal(key,el){
  if(lbl){lbl.textContent=p.label;}else{btn.innerHTML=`<i class="fas fa-right-to-bracket" id="loginBtnIcon"></i> <span id="loginBtnLabel">${p.label}</span>`;}
  document.getElementById('loginMsg').style.display='none';
 }
+
+(function(){
+ const params = new URLSearchParams(window.location.search);
+ const p = params.get('portal');
+ if (p && portals[p]) {
+  const cardMap = {barangay:'.p-barangay', lgu:'.p-lgu', first_responder:'.p-responder'};
+  const el = document.querySelector(cardMap[p] || ('.p-' + p));
+  if (el) selectPortal(p, el);
+ }
+})();
 
 function togglePw(){const f=document.getElementById('pwField');const b=f.nextElementSibling;const s=f.type==='password';f.type=s?'text':'password';b.textContent=s?'HIDE':'SHOW';}
 

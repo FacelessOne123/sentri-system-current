@@ -110,7 +110,7 @@ p.sub{font-size:0.9rem;color:var(--muted);line-height:1.7;margin-bottom:24px;}
 <body>
 <div class="bg-canvas"><div id="particles" style="position:absolute;inset:0;overflow:hidden;"></div></div>
 <div class="card">
- <a href="login.php" class="brand">
+ <a href="index.php" class="brand">
  <div class="brand-icon"><i class="fas fa-shield-halved"></i></div>
  <div><div class="brand-name">SenTri</div><div style="font-size:0.72rem;color:var(--muted);font-weight:600;">Government Access - Official Use Only</div></div>
  </a>

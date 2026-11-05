@@ -21,8 +21,11 @@ sentri-system/
 ├── install.php # One-time DB installer - delete after use
 │
 ├── gov/
-│ └── login.php # Government portal sign-in (barangay / LGU / first responder);
-│ # no self-registration - officials are provisioned by the admin
+│   ├── index.php             # Government portal homepage (barangay / LGU / first responder)
+│   ├── login.php             # Government portal sign-in; no self-registration
+│   ├── forgot_password.php   # Government password reset request
+│   ├── reset_password.php    # Government password reset token handler
+│   └── logout.php            # Government realm session logout
 │
 ├── config/
 │ ├── db.php # Database connection (MySQLi, socket + TCP fallback)
@@ -94,7 +97,7 @@ sentri-system/
 
 5. Access the system:
  - Community: `http://localhost/sentri-system/`
- - Government portal (barangay / LGU / first responder): `http://localhost/sentri-system/gov/login.php`
+ - Government portal (barangay / LGU / first responder): `http://localhost/sentri-system/gov/` (or `gov/login.php`)
  - Admin panel (renders its own sign-in; not linked from any other page): `http://localhost/sentri-system/admin.php`
  - Default admin: set via `install.php` on first run - change immediately after setup
  ⚠️ Change the admin password immediately after first login.
@@ -236,6 +239,7 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-11-05 | **feat(gov):** Dedicated government portal homepage (`gov/index.php`) and home navigation isolation - added dedicated landing page for the government portal (`/gov/`) highlighting the 3 official branches (Barangay, LGU, First Responders), infrastructure capabilities, and official provisioning notices. Fixed the "Home" and brand links in `gov/login.php`, `gov/forgot_password.php`, and `gov/reset_password.php` to point to `index.php` within `gov/` instead of `../index.php`, preventing foreign community realm redirects to citizen portal accounts when logged in |
 | 2026-11-05 | **fix(auth):** Fix 404 on community portal logout and isolate government portal links - updated `portal/community.php` to link to `../logout.php` instead of relative `logout.php` (which resolved to nonexistent `/portal/logout.php`), and added a fallback forwarder at `portal/logout.php`. Stripped all community portal cross-links from `gov/login.php` (top navigation link and bottom "Community member? Sign in" card row) and fixed its "Forgot Password?" card link to stay within `gov/forgot_password.php` |
 | 2026-11-05 | **feat(login):** Community sign-in page two-column layout with autoplay video and no media controls (`to_analyze_implement_scribbled.png`) - the "How SenTri Works" tutorial video sits on the left with `autoplay`, `muted`, `loop`, `playsinline` and media controls stripped away, directly beside the sign-in card on the right. Clicking the video toggles audio mute/unmute so visitors can hear the narration if desired. Below 1000px the columns stack with the form retaining top priority. Dead modal markup and handlers removed |
 | 2026-11-04 | **fix(map):** Barangay labels made readable - the name chips were faint at city zoom, too small up close, and the big barangays had the text off-centre. Names now sit on a white chip with a border and shadow instead of bare navy text on a light tile, and the type scales with the zoom (11px at z13 -> 14px at z17). The anchor is now the **pole of inaccessibility** of the barangay polygon (the point furthest from the boundary, i.e. the visual middle) instead of the geojson's stored `center` - that property sat up to 940 m from the true middle and left the name visibly off-centre in the largest barangays (Anabu I-G was only 7 m from its own boundary). Leaflet's GeometryUtil is not in the build, so `polylabel` is implemented in `assets/js/sentri-geo.js`; all 95 anchors are verified to fall inside their own polygon and to be deeper than the old centre. Names and report pins cluster in the same places, so labels are now **placed greedily**: the biggest barangays pick their spot first, then each name is nudged to the nearest free spot that clears the report pins and the names already placed - and a candidate is only accepted if it is still inside its own barangay, so a name never crosses a boundary |
