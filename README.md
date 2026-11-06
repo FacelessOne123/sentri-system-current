@@ -127,6 +127,21 @@ build the correct base URL automatically:
 | Live domain (subdir) | `https://example.com/sentri` |
 | Reverse proxy | Reads `X-Forwarded-Proto` / `X-Forwarded-Host` |
 
+### Loopback hosts always follow the live request
+
+When the browser is on a loopback host (`localhost`, `127.0.0.1`, `[::1]`,
+`*.localhost`), the detected live origin wins **even if `APP_URL` is pinned to
+a different local port**. This means switching between `http://localhost`,
+`http://localhost:4446`, `http://127.0.0.1:8081`, etc. needs no config change.
+
+Production domains are unaffected: if `APP_URL` is a non-loopback URL, it stays
+authoritative (so a reverse proxy without forwarding headers still gets the
+right public URL).
+
+`debug.php` renders old outbox messages on the current host too: it rebuilds
+each link from its `verify_email.php` / `reset_password.php` tail, so links
+stored with a dead port or stale subdirectory still work.
+
 ### When to set APP_URL manually
 
 You only need to set `APP_URL` explicitly when:
@@ -241,6 +256,8 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-11-06 | **feat(barangay):** Barangay Incident Map is now locked to the Imus perimeter (`SentriGeo.lockToImus` + hard max-bounds), rejects pins outside Imus, and draws community-style labels on all 95 barangay outlines (`labels: true`) with pin-overlap avoidance. Old outbox verification/reset links are rebuilt on the current host, and loopback hosts always follow the live request origin even when `APP_URL` is pinned to a stale local port |
+| 2026-11-06 | **fix(debug):** Debug console verification/reset links now follow the host you are actually browsing (`sentri_app_url()`) instead of the `APP_URL` placeholder or a stale port baked into old outbox messages (e.g. `127.0.0.1:4446`). Historical `.eml` links have their origin rewritten at render time, so they still work after switching to `http://localhost` (port 80). Added an "Effective base URL" row to the Environment panel |
 | 2026-11-05 | **fix(barangay):** Strictly scope barangay portal reports and actions to the assigned barangay territory - fixed query in `portal/barangay.php` and `api/reports.php` which previously queried `(r.barangay = ? OR u.barangay_name = ?)`, leaking incidents to other barangay portals whenever a resident's home address differed from the incident location (e.g. Palico IV officials receiving Pasong Buaya II reports). Scoped stats, dashboard lists, exports, and map markers strictly to `r.barangay`. Added server-side authorization guards to `update_report_status`, `resolve_report`, `escalate_report`, and `get_lifecycle` ensuring barangay officials can only access and update reports within their own assigned jurisdiction |
 | 2026-11-05 | **feat(community):** Mandatory barangay assignment for community reporting + portal gating - unassigned members are guided to assign their barangay in My Profile (via a dismissible welcome modal and persistent banner). Unassigned members can view the Incidents Map and Emergency Contacts, but the Community Feed, My Reports, and report creation are locked. Added a 30-day anti-abuse lock on barangay changes (`sql/migrations/009_barangay_lock.sql`) and validated barangay selections against the 95 canonical Imus barangays |
 | 2026-11-05 | **feat(report):** Auto-detecting suggestions and bidirectional address-map synchronization for community create-report - added smart autocomplete for City, Barangay (all 95 Imus barangays), and specific Street/location. Street suggestions are dynamically scoped to the selected barangay to prevent cluttering; entering/selecting a manual address automatically drops a pin and centers the map; conversely, dropping or dragging a pin automatically reverse-geocodes and populates the street, city, and barangay fields |
