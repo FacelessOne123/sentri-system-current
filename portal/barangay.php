@@ -32,9 +32,8 @@ function cq($conn,$sql,$types='',$params=[]){
 }
 
 
-// Normalized barangay match. Community users type the barangay as free text (or it comes from
-// reverse geocoding), so "Brgy. San Jose", "san jose" and "Barangay San Jose" must all match.
-// Reports with no barangay fall back to the reporter's profile barangay.
+// Normalized barangay match. Reports are strictly scoped to the official's assigned
+// barangay territory based on the incident's location (r.barangay).
 function brgy_norm($v){
  $v = mb_strtolower(trim((string)$v), 'UTF-8');
  $v = strtr($v, ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
@@ -45,19 +44,17 @@ function brgy_sql($col){
  return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE($col,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
 }
 $brgy_key = brgy_norm($brgy);
-$BRGY_COND = "(".brgy_sql('r.barangay')."=? OR ".brgy_sql('u.barangay_name')."=?)";
+$BRGY_COND = brgy_sql('r.barangay') . " = ?";
 
-// Stats - scoped to this barangay official's assigned barangay (falls back to community-wide if none set)
+// Stats - strictly scoped to this barangay official's assigned territory.
+// If no barangay is assigned, stats remain 0 to prevent unauthorized citywide data leak.
 if ($brgy) {
- $total = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $danger = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $caution = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $safe = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
+ $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $danger = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $caution = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
 } else {
- $total = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
- $danger = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
- $caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0");
- $safe = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
+ $total = 0; $danger = 0; $caution = 0; $safe = 0;
 }
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
@@ -74,54 +71,56 @@ if (in_array($view, ['overview','reports'])) {
  $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
  $has_esc_col = ($bc && $bc->num_rows > 0);
  $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- $brgy_where = $brgy ? " AND $BRGY_COND" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
- if ($brgy) { $s->bind_param("ss", $brgy_key, $brgy_key); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $reports[]=$row;
- $s->close();
+ if ($brgy) {
+  $brgy_where = " AND $BRGY_COND";
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+  $s->bind_param("s", $brgy_key);
+  $s->execute(); $res=$s->get_result();
+  while($row=$res->fetch_assoc()) $reports[]=$row;
+  $s->close();
+ } else {
+  $reports = [];
+ }
 }
 
 if ($view === 'contacts') {
- $q = $brgy
- ? "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name"
- : "SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name";
  if ($brgy) {
- $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
+  $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $res=$s->get_result();
+  while($r=$res->fetch_assoc()) $contacts[]=$r;
+  $s->close();
  } else {
- $s = $conn->prepare($q); $s->execute();
+  $contacts = [];
  }
- $res=$s->get_result();
- while($r=$res->fetch_assoc()) $contacts[]=$r;
- $s->close();
 }
 
 if ($view === 'residents') {
- $q = $brgy
- ? "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') AND barangay_name=? ORDER BY last_name"
- : "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') ORDER BY last_name LIMIT 100";
  if ($brgy) {
- $s=$conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $q = "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
+  $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
+  $res=$s->get_result();
+  while($r=$res->fetch_assoc()) $residents[]=$r;
+  $s->close();
  } else {
- $s=$conn->prepare($q); $s->execute();
+  $residents = [];
  }
- $res=$s->get_result();
- while($r=$res->fetch_assoc()) $residents[]=$r;
- $s->close();
 }
 
 $map_reports = [];
 if ($view === 'map') {
- $brgy_where = $brgy ? " AND $BRGY_COND" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
- if ($brgy) { $s->bind_param("ss", $brgy_key, $brgy_key); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
+ if ($brgy) {
+  $brgy_where = " AND $BRGY_COND";
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+  $s->bind_param("s", $brgy_key);
+  $s->execute(); $res=$s->get_result();
+  while($row=$res->fetch_assoc()) $map_reports[]=$row;
+  $s->close();
+ }
 }
 $map_total_all = $brgy
- ? cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key])
- : cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+ ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key])
+ : 0;
 
 $nav_items = [
  'overview' => ['icon'=>'fa-gauge', 'label'=>'Dashboard'],
@@ -398,6 +397,16 @@ tr:hover td{background:#fafafa;}
 
  <div class="content">
 
+ <?php if(!$brgy): ?>
+ <div style="background:#fef2f2;border:1.5px solid #fecaca;border-left:5px solid #dc2626;border-radius:12px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+  <i class="fas fa-triangle-exclamation" style="font-size:1.3rem;color:#dc2626;"></i>
+  <div style="font-size:0.85rem;color:#991b1b;line-height:1.5;">
+   <b>No barangay assigned to your official account.</b><br>
+   Official access is strictly scoped per barangay. Please contact your system administrator to assign your jurisdiction.
+  </div>
+ </div>
+ <?php endif; ?>
+
  <?php if($view === 'overview'): ?>
  <div class="stat-grid">
  <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="stat-num"><?= $total ?></div><div class="stat-lbl">Total Reports</div></div></div>
@@ -536,39 +545,71 @@ tr:hover td{background:#fafafa;}
  return L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:'+color+';border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>',iconSize:[14,14],iconAnchor:[7,7]});
  }
  var lmap = L.map('incidentMap');
+ // Hard-lock the viewport to the Imus perimeter (same rule as the community
+ // incidents map). fit:false keeps the existing "frame my barangay" behavior
+ // below; the max-bounds viscosity stops drags from leaving the city.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.lockToImus){
+  SentriGeo.lockToImus(lmap, { fit:false, pad:0 });
+  lmap.options.maxBoundsViscosity = 1;
+ }
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(lmap);
  var allMapMarkers = [];
  var hazardCircles = [];
  var showHazardRings = false;
  var currentMapStatus = 'all';
  var currentMapQuery = '';
+ var mapPinPts = [];
 
+ function renderReportMarkers(){
+ // Only plot pins that fall inside the Imus perimeter. Wait for the GeoJSON
+ // cache (geoReady) so isInImus() can actually answer; before it loads every
+ // point reports false and would be hidden.
+ var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
  mapReports.forEach(function(r){
- var color = markerColors[r.status]||'#888';
- var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
- m.reportData = r;
- m.bindPopup(
- '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
- '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
- '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
- (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
- '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
- {maxWidth:260}
- );
- m.addTo(lmap);
- allMapMarkers.push(m);
+  if(!isFinite(r.lat) || !isFinite(r.lng)) return;
+  if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return; // outside Imus
+  mapPinPts.push([r.lat, r.lng]);
+  var color = markerColors[r.status]||'#888';
+  var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
+  m.reportData = r;
+  m.bindPopup(
+  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
+  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
+  '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
+  '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
+  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
+  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
+  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
+  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
+  {maxWidth:260}
+  );
+  m.addTo(lmap);
+  allMapMarkers.push(m);
  });
  if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
  else{lmap.setView([14.4240,120.9215],12);}
+ // Keep barangay labels clear of the report pins once both are on the map.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.avoidLabelOverlap){
+  SentriGeo.avoidLabelOverlap(lmap, mapPinPts);
+ }
+ }
+
+ // Render pins only after the Imus geometry is available so out-of-city
+ // coordinates can be rejected instead of shown.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.loadBarangays){
+  // Second argument handles load failure only; a render error must not rerun
+  // the renderer and duplicate markers.
+  SentriGeo.loadBarangays().then(renderReportMarkers, renderReportMarkers);
+ } else {
+  renderReportMarkers();
+ }
 
  // ── Official barangay perimeters (Imus City GeoJSON) ──
- // All 95 outlines are drawn; this barangay official's own village is highlighted
- // (filled) by the shared library via onlyName. Cross-barangay drill-down is NOT
- // offered: clicking another polygon only shows a scoping notice.
+ // All 95 outlines are drawn and labelled; this barangay official's own
+ // village is highlighted (filled) by the shared library via onlyName.
+ // Cross-barangay drill-down is NOT offered: clicking another polygon only
+ // shows a scoping notice.
  var BRGY_OWN = <?= json_encode($brgy ?: '', JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>;
  function brgyKey(v){
   v = String(v||'').toLowerCase();
@@ -597,11 +638,12 @@ tr:hover td{background:#fafafa;}
   }).catch(function(){ return BRGY_OWN; })
   : Promise.resolve(BRGY_OWN || undefined);
   resolveOwnName.then(function(ownName){
-  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy }).then(function(gjLayer){
+  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy, labels: true }).then(function(gjLayer){
   // Frame the official barangay perimeter as the map's subject
   var ownL = window.__ownBrgyLayer;
   var fitLayer = (ownL && ownL.getBounds && ownL.getBounds().isValid()) ? ownL : (gjLayer && gjLayer.getBounds && gjLayer.getBounds().isValid() ? gjLayer : null);
   if(fitLayer){ lmap.fitBounds(fitLayer.getBounds(), { padding: [40, 40], maxZoom: 16 }); }
+  if(typeof SentriGeo.avoidLabelOverlap === 'function'){ SentriGeo.avoidLabelOverlap(lmap, mapPinPts); }
   return gjLayer;
   });
   }).catch(function(){ /* boundary data unavailable — pins still render */ });

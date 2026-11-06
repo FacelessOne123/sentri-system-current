@@ -26,6 +26,7 @@ $PREFERRED_ACTION_ROLES = [
  'assign_report'        => ['first_responder','admin'],
  'report_responded'     => ['first_responder','admin'],
  'export'               => ['admin','lgu','barangay'],
+ 'poll_report_alerts'   => ['first_responder','lgu'],
  // Community portal
  'post_report'          => ['community','user'],
  'delete_report'        => ['community','user','admin'],
@@ -255,14 +256,28 @@ function sentri_geo_is_osm_name(string $name): bool {
  return false;
 }
 
-// Shared WHERE fragment (uses reports r / users u aliases): matches either the
-// report's barangay or the poster's home barangay against a barangay filter.
+// Shared WHERE fragment: matches strictly the report's incident location (r.barangay)
+// against a barangay filter. Never bleeds into the reporter's home barangay.
 function sentri_geo_brgy_where(mysqli $conn, string $filter): string {
  $key = sentri_geo_norm_brgy($filter);
  if ($key === '') return '';
  $val = "'" . $conn->real_escape_string($key) . "'";
- return "(".sentri_geo_brgy_sql_expr('r.barangay')." = $val OR "
- .sentri_geo_brgy_sql_expr('u.barangay_name')." = $val)";
+ return sentri_geo_brgy_sql_expr('r.barangay') . " = $val";
+}
+
+// Check if a barangay official has jurisdiction over a specific report
+function sentri_verify_barangay_jurisdiction(mysqli $conn, int $user_id, int $report_id, ?string $ident_brgy = null): bool {
+ $off_brgy = trim((string)($ident_brgy ?? ''));
+ if ($off_brgy === '') {
+  $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+  $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
+ }
+ $off_brgy = trim((string)$off_brgy);
+ if ($off_brgy === '') return false;
+ $rb = $conn->prepare("SELECT barangay FROM reports WHERE id=? AND is_archived=0 LIMIT 1");
+ $rb->bind_param("i", $report_id); $rb->execute(); $rb->bind_result($rpt_brgy); $rb->fetch(); $rb->close();
+ if ($rpt_brgy === null) return false;
+ return sentri_geo_norm_brgy((string)$rpt_brgy) === sentri_geo_norm_brgy($off_brgy);
 }
 // ── GEO-BLOCK-END ────────────────────────────────────────────────────────────
 
@@ -355,6 +370,96 @@ switch ($action) {
  echo json_encode(['status'=>'success','reports'=>$reports]);
  break;
 
+ // ── Lightweight alert poll for responder + LGU portals ────────────────
+ // Returns only alert-worthy reports (new rows, status upgrades and LGU
+ // escalations). No images / votes, so it is cheap enough to poll.
+ case 'poll_report_alerts':
+ if (!in_array($role, ['first_responder','lgu'], true)) {
+  echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit;
+ }
+
+ $prime = !empty($_GET['prime']);
+ $since_id = isset($_GET['since_id']) ? max(0, (int)$_GET['since_id']) : 0;
+ $since_time = trim((string)($_GET['since_time'] ?? ''));
+ if ($since_time !== '' && !preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $since_time)) {
+  $since_time = '';
+ }
+
+ $has_esc_col = sentri_table_has_column($conn, 'reports', 'escalated_to_lgu');
+ $esc_select = $has_esc_col ? ', r.escalated_to_lgu' : ', 0 AS escalated_to_lgu';
+ $where = ["r.is_archived = 0"];
+ $responder_type = '';
+
+ if ($role === 'first_responder') {
+  $rt_stmt = $conn->prepare("SELECT responder_type FROM users WHERE id=? LIMIT 1");
+  if ($rt_stmt) {
+   $rt_stmt->bind_param("i", $user_id);
+   $rt_stmt->execute();
+   $rt_stmt->bind_result($rt_val);
+   $rt_stmt->fetch();
+   $rt_stmt->close();
+   $responder_type = strtolower(trim((string)$rt_val));
+  }
+  if ($responder_type === 'bfp') {
+   $where[] = "r.status IN ('dangerous','caution')";
+  } else {
+   $where[] = "r.status = 'dangerous'";
+  }
+ } else {
+  $where[] = $has_esc_col
+   ? "(r.status = 'dangerous' OR r.escalated_to_lgu = 1)"
+   : "r.status = 'dangerous'";
+ }
+
+ if ($prime) {
+  $limit = 200;
+ } else {
+  $changing = [];
+  if ($since_id > 0) $changing[] = "r.id > $since_id";
+  // Responders only care about genuinely new reports. LGU also needs to see
+  // reports that were escalated (an UPDATE on an existing row).
+  if ($role === 'lgu' && $since_time !== '') {
+   $changing[] = "r.updated_at >= '" . $conn->real_escape_string($since_time) . "'";
+  }
+  // No watermark yet: return nothing rather than the whole table.
+  $where[] = $changing ? '(' . implode(' OR ', $changing) . ')' : '1 = 0';
+  $limit = 50;
+ }
+
+ // Read the watermark BEFORE the alert query so a report inserted between the
+ // two statements is not accidentally skipped by the next poll.
+ $meta = $conn->query("SELECT NOW() AS server_time, COALESCE(MAX(id),0) AS latest_id FROM reports");
+ $meta = $meta ? $meta->fetch_assoc() : null;
+ $server_time = $meta['server_time'] ?? date('Y-m-d H:i:s');
+ $latest_id = (int)($meta['latest_id'] ?? 0);
+
+ $sql = "SELECT r.id, r.title, r.status, r.category, r.barangay, r.city, r.description,
+  r.created_at, r.updated_at{$esc_select}
+  FROM reports r
+  WHERE " . implode(' AND ', $where) . "
+  ORDER BY r.id DESC
+  LIMIT $limit";
+ $stmt = $conn->prepare($sql);
+ if (!$stmt) { echo json_encode(['status'=>'error','message'=>'DB error: '.$conn->error]); exit; }
+ $stmt->execute();
+ $res = $stmt->get_result();
+ $alerts = [];
+ while ($row = $res->fetch_assoc()) {
+  $row['id'] = (int)$row['id'];
+  $row['escalated_to_lgu'] = (int)($row['escalated_to_lgu'] ?? 0);
+  $alerts[] = $row;
+ }
+ $stmt->close();
+
+ echo json_encode([
+  'status' => 'success',
+  'reports' => $alerts,
+  'server_time' => $server_time,
+  'latest_id' => $latest_id,
+  'responder_type' => $responder_type,
+ ]);
+ break;
+
  case 'post_report':
  if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
  $title = trim($_POST['title'] ?? '');
@@ -396,6 +501,26 @@ switch ($action) {
  $barangay = $detected;
  }
  }
+ }
+
+  // ── Residents may only report inside their own profile barangay ──
+ if (in_array($role, ['community','user'], true)) {
+ $pb = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+ $pb->bind_param("i", $user_id); $pb->execute();
+ $pb->bind_result($prof_brgy); $pb->fetch(); $pb->close();
+ $prof_brgy = (string)$prof_brgy;
+
+ if (sentri_geo_norm_brgy($prof_brgy) === '') {
+ echo json_encode(['status'=>'error','message'=>'Assign your barangay in My Profile before posting a report.']); exit;
+ }
+ if ($lat === null || $lng === null) {
+ echo json_encode(['status'=>'error','message'=>'Please pin the incident location on the map.']); exit;
+ }
+ $pin_brgy = sentri_geo_detect((float)$lat, (float)$lng);
+ if (!$pin_brgy || sentri_geo_norm_brgy($pin_brgy) !== sentri_geo_norm_brgy($prof_brgy)) {
+ echo json_encode(['status'=>'error','message'=>'You can only report incidents inside your own barangay ('.$prof_brgy.').']); exit;
+ }
+ $barangay = $pin_brgy; // canonical OSM name, never the client value
  }
 
  $rate = $conn->prepare("SELECT COUNT(*) FROM reports WHERE user_id=? AND created_at>DATE_SUB(NOW(),INTERVAL 1 HOUR)");
@@ -951,6 +1076,12 @@ switch ($action) {
  if (!in_array($role, ['first_responder', 'barangay', 'lgu', 'admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
  $report_id = (int)($_POST['report_id'] ?? 0);
  if (!$report_id) { echo json_encode(['status'=>'error','message'=>'Invalid report ID.']); exit; }
+ if ($role === 'barangay') {
+  if (!sentri_verify_barangay_jurisdiction($conn, $user_id, $report_id, $ident['barangay_name'] ?? null)) {
+   echo json_encode(['status'=>'error','message'=>'Unauthorized: You can only resolve reports in your assigned barangay.']);
+   exit;
+  }
+ }
  if ($role === 'first_responder') {
  $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous'");
  $stmt->bind_param("ii", $report_id, $user_id);
@@ -991,6 +1122,12 @@ switch ($action) {
  if (!in_array($role, ['barangay','lgu','admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
  $report_id = (int)($_POST['report_id'] ?? 0);
  if (!$report_id) { echo json_encode(['status'=>'error','message'=>'Invalid report ID.']); exit; }
+ if ($role === 'barangay') {
+  if (!sentri_verify_barangay_jurisdiction($conn, $user_id, $report_id, $ident['barangay_name'] ?? null)) {
+   echo json_encode(['status'=>'error','message'=>'Unauthorized: You can only escalate reports in your assigned barangay.']);
+   exit;
+  }
+ }
  // Ensure escalated_to_lgu column exists
  $db_esc = $conn->query("SELECT DATABASE()")->fetch_row()[0];
  $esc_cols = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_esc' AND TABLE_NAME='reports'");
@@ -1057,6 +1194,12 @@ switch ($action) {
  $new_status = trim($_POST['status'] ?? '');
  $allowed_statuses = ['dangerous','caution','safe'];
  if (!$report_id || !in_array($new_status, $allowed_statuses)) { echo json_encode(['status'=>'error','message'=>'Invalid parameters.']); exit; }
+ if ($role === 'barangay') {
+  if (!sentri_verify_barangay_jurisdiction($conn, $user_id, $report_id, $ident['barangay_name'] ?? null)) {
+   echo json_encode(['status'=>'error','message'=>'Unauthorized: You can only update reports in your assigned barangay.']);
+   exit;
+  }
+ }
  $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL';
  $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0");
  $s_upd->bind_param("si", $new_status, $report_id);
@@ -1109,6 +1252,18 @@ switch ($action) {
  $s->close();
 
  if (!$rep) { echo json_encode(['status'=>'error','message'=>'Report not found.']); exit; }
+
+ if ($role === 'barangay') {
+  $off_brgy = trim((string)($ident['barangay_name'] ?? ''));
+  if ($off_brgy === '') {
+   $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+   $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
+  }
+  if ($off_brgy === '' || sentri_geo_norm_brgy((string)($rep['barangay'] ?? '')) !== sentri_geo_norm_brgy($off_brgy)) {
+   echo json_encode(['status'=>'error','message'=>'Unauthorized: This report is outside your barangay jurisdiction.']);
+   exit;
+  }
+ }
 
  // Fetch audit trail
  $audits = [];
@@ -1169,6 +1324,15 @@ switch ($action) {
  $filter_brgy = $_GET['barangay'] ?? '';
  $filter_city = $_GET['city'] ?? '';
 
+ if ($role === 'barangay') {
+  $off_brgy = trim((string)($ident['barangay_name'] ?? ''));
+  if ($off_brgy === '') {
+   $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+   $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
+  }
+  $filter_brgy = trim((string)$off_brgy); // Strictly enforce assigned barangay export
+ }
+
  $where_clauses = ["r.is_archived = 0"];
  if ($filter_status && in_array($filter_status, ['dangerous','caution','safe'])) {
  $where_clauses[] = "r.status = '".$conn->real_escape_string($filter_status)."'";
@@ -1180,7 +1344,7 @@ switch ($action) {
  $bk = strtr(mb_strtolower(trim($filter_brgy),'UTF-8'), ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
 $bk = preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',$bk));
 $bexpr = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(%s,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
- $where_clauses[] = "(".sprintf($bexpr,'r.barangay')." = '".$conn->real_escape_string($bk)."' OR ".sprintf($bexpr,'u.barangay_name')." = '".$conn->real_escape_string($bk)."')";
+ $where_clauses[] = sprintf($bexpr,'r.barangay')." = '".$conn->real_escape_string($bk)."'";
  }
  if ($filter_city) {
  $where_clauses[] = "r.city = '".$conn->real_escape_string($filter_city)."'";

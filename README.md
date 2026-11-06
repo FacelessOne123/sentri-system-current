@@ -21,8 +21,11 @@ sentri-system/
 ├── install.php # One-time DB installer - delete after use
 │
 ├── gov/
-│ └── login.php # Government portal sign-in (barangay / LGU / first responder);
-│ # no self-registration - officials are provisioned by the admin
+│   ├── index.php             # Government portal homepage (barangay / LGU / first responder)
+│   ├── login.php             # Government portal sign-in; no self-registration
+│   ├── forgot_password.php   # Government password reset request
+│   ├── reset_password.php    # Government password reset token handler
+│   └── logout.php            # Government realm session logout
 │
 ├── config/
 │ ├── db.php # Database connection (MySQLi, socket + TCP fallback)
@@ -61,7 +64,9 @@ sentri-system/
  ├── 004_report_images.sql # Photo upload table
  ├── 005_emergency_contacts.sql # LGU/Hospital/Traffic contacts
  ├── 006_roles.sql # Expanded role ENUM + community columns
- └── 007_force_password_reset.sql # Force password change on provisioned accounts
+ ├── 007_force_password_reset.sql # Force password change on provisioned accounts
+ ├── 008_guide_seen.sql # First-login guide video seen flag
+ └── 009_barangay_lock.sql # Anti-abuse barangay change lock timestamp
 ```
 
 ---
@@ -94,7 +99,7 @@ sentri-system/
 
 5. Access the system:
  - Community: `http://localhost/sentri-system/`
- - Government portal (barangay / LGU / first responder): `http://localhost/sentri-system/gov/login.php`
+ - Government portal (barangay / LGU / first responder): `http://localhost/sentri-system/gov/` (or `gov/login.php`)
  - Admin panel (renders its own sign-in; not linked from any other page): `http://localhost/sentri-system/admin.php`
  - Default admin: set via `install.php` on first run - change immediately after setup
  ⚠️ Change the admin password immediately after first login.
@@ -121,6 +126,21 @@ build the correct base URL automatically:
 | Live domain (root) | `https://sentri.example.com` |
 | Live domain (subdir) | `https://example.com/sentri` |
 | Reverse proxy | Reads `X-Forwarded-Proto` / `X-Forwarded-Host` |
+
+### Loopback hosts always follow the live request
+
+When the browser is on a loopback host (`localhost`, `127.0.0.1`, `[::1]`,
+`*.localhost`), the detected live origin wins **even if `APP_URL` is pinned to
+a different local port**. This means switching between `http://localhost`,
+`http://localhost:4446`, `http://127.0.0.1:8081`, etc. needs no config change.
+
+Production domains are unaffected: if `APP_URL` is a non-loopback URL, it stays
+authoritative (so a reverse proxy without forwarding headers still gets the
+right public URL).
+
+`debug.php` renders old outbox messages on the current host too: it rebuilds
+each link from its `verify_email.php` / `reset_password.php` tail, so links
+stored with a dead port or stale subdirectory still work.
 
 ### When to set APP_URL manually
 
@@ -236,6 +256,15 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-11-06 | **feat(barangay):** Barangay Incident Map is now locked to the Imus perimeter (`SentriGeo.lockToImus` + hard max-bounds), rejects pins outside Imus, and draws community-style labels on all 95 barangay outlines (`labels: true`) with pin-overlap avoidance. Old outbox verification/reset links are rebuilt on the current host, and loopback hosts always follow the live request origin even when `APP_URL` is pinned to a stale local port |
+| 2026-11-06 | **fix(debug):** Debug console verification/reset links now follow the host you are actually browsing (`sentri_app_url()`) instead of the `APP_URL` placeholder or a stale port baked into old outbox messages (e.g. `127.0.0.1:4446`). Historical `.eml` links have their origin rewritten at render time, so they still work after switching to `http://localhost` (port 80). Added an "Effective base URL" row to the Environment panel |
+| 2026-11-05 | **fix(barangay):** Strictly scope barangay portal reports and actions to the assigned barangay territory - fixed query in `portal/barangay.php` and `api/reports.php` which previously queried `(r.barangay = ? OR u.barangay_name = ?)`, leaking incidents to other barangay portals whenever a resident's home address differed from the incident location (e.g. Palico IV officials receiving Pasong Buaya II reports). Scoped stats, dashboard lists, exports, and map markers strictly to `r.barangay`. Added server-side authorization guards to `update_report_status`, `resolve_report`, `escalate_report`, and `get_lifecycle` ensuring barangay officials can only access and update reports within their own assigned jurisdiction |
+| 2026-11-05 | **feat(community):** Mandatory barangay assignment for community reporting + portal gating - unassigned members are guided to assign their barangay in My Profile (via a dismissible welcome modal and persistent banner). Unassigned members can view the Incidents Map and Emergency Contacts, but the Community Feed, My Reports, and report creation are locked. Added a 30-day anti-abuse lock on barangay changes (`sql/migrations/009_barangay_lock.sql`) and validated barangay selections against the 95 canonical Imus barangays |
+| 2026-11-05 | **feat(report):** Auto-detecting suggestions and bidirectional address-map synchronization for community create-report - added smart autocomplete for City, Barangay (all 95 Imus barangays), and specific Street/location. Street suggestions are dynamically scoped to the selected barangay to prevent cluttering; entering/selecting a manual address automatically drops a pin and centers the map; conversely, dropping or dragging a pin automatically reverse-geocodes and populates the street, city, and barangay fields |
+| 2026-11-05 | **feat(map):** Highlight barangays and limit community report pin drop map to Imus only - integrated `SentriGeo.addBarangayOverlay` into `pickerMap` with progressive labels, interactive hover states, and dynamic highlighting of the active/auto-detected barangay. Applied `SentriGeo.lockToImus(pickerMap, {fit: true})` and strictly restricted pin drops, marker drags, and report submissions to valid coordinates within the 95 Imus City barangay perimeters |
+| 2026-11-05 | **feat(gov):** Dedicated government portal homepage (`gov/index.php`) and home navigation isolation - added dedicated landing page for the government portal (`/gov/`) highlighting the 3 official branches (Barangay, LGU, First Responders), infrastructure capabilities, and official provisioning notices. Fixed the "Home" and brand links in `gov/login.php`, `gov/forgot_password.php`, and `gov/reset_password.php` to point to `index.php` within `gov/` instead of `../index.php`, preventing foreign community realm redirects to citizen portal accounts when logged in |
+| 2026-11-05 | **fix(auth):** Fix 404 on community portal logout and isolate government portal links - updated `portal/community.php` to link to `../logout.php` instead of relative `logout.php` (which resolved to nonexistent `/portal/logout.php`), and added a fallback forwarder at `portal/logout.php`. Stripped all community portal cross-links from `gov/login.php` (top navigation link and bottom "Community member? Sign in" card row) and fixed its "Forgot Password?" card link to stay within `gov/forgot_password.php` |
+| 2026-11-05 | **feat(login):** Community sign-in page two-column layout with autoplay video and no media controls (`to_analyze_implement_scribbled.png`) - the "How SenTri Works" tutorial video sits on the left with `autoplay`, `muted`, `loop`, `playsinline` and media controls stripped away, directly beside the sign-in card on the right. Clicking the video toggles audio mute/unmute so visitors can hear the narration if desired. Below 1000px the columns stack with the form retaining top priority. Dead modal markup and handlers removed |
 | 2026-11-04 | **fix(map):** Barangay labels made readable - the name chips were faint at city zoom, too small up close, and the big barangays had the text off-centre. Names now sit on a white chip with a border and shadow instead of bare navy text on a light tile, and the type scales with the zoom (11px at z13 -> 14px at z17). The anchor is now the **pole of inaccessibility** of the barangay polygon (the point furthest from the boundary, i.e. the visual middle) instead of the geojson's stored `center` - that property sat up to 940 m from the true middle and left the name visibly off-centre in the largest barangays (Anabu I-G was only 7 m from its own boundary). Leaflet's GeometryUtil is not in the build, so `polylabel` is implemented in `assets/js/sentri-geo.js`; all 95 anchors are verified to fall inside their own polygon and to be deeper than the old centre. Names and report pins cluster in the same places, so labels are now **placed greedily**: the biggest barangays pick their spot first, then each name is nudged to the nearest free spot that clears the report pins and the names already placed - and a candidate is only accepted if it is still inside its own barangay, so a name never crosses a boundary |
 | 2026-11-04 | **feat:** Barangay name labels on the community map - the Imus barangay boundaries are now labelled in place, anchored on the geojson's own `center` property (verified to fall inside the matching polygon for all 95 barangays, so a name always sits on its own area). Labels are drawn as non-interactive markers in the marker pane with `zIndexOffset` below the report pins, so they never intercept a click meant for the boundary underneath and never hide an incident; the boundary click still opens the "Brgy X - N reports here" popup. Because Imus has 95 barangays, many of them slivers in the Poblacion / Bayan Luma core, labelling every one at the city-wide zoom turned the map into a wall of text - so the names appear progressively with the zoom: the largest barangays at z12-13 (9 names), then 24 at z14, 45 at z15, 80 at z16 and all 95 by z17. `SentriGeo.addBarangayOverlay()` takes the new `labels` option (object form: `onlyName`, `opacity`, `fontSize`, `allAt`) |
 | 2026-11-04 | **feat:** Community incident map isolated to Imus City - every Leaflet map on the community portal (Incidents Map, the overview map toggle, the "Drop a Pin on Map" picker and the per-report mini map) is now locked to the Imus perimeter set. `SentriGeo.lockToImus()` applies `maxBounds` (the viewport can no longer be panned outside the city) plus a `minZoom` cap derived from the container size (the user can no longer zoom out past the city), and the maps open centred on Imus instead of the old Manila default. Only reports falling inside one of the 95 Imus barangay polygons are pinned - an exact polygon test rather than the bounding box, so sea area and neighbouring municipalities are excluded - and the counter now reads e.g. "19 pinned reports in Imus · 5 outside the city", so nothing silently disappears. The location picker flags a pin dropped outside Imus ("outside Imus"), so a report is never filed against an area the map cannot show. New helpers in `assets/js/sentri-geo.js`: `imusBounds()`, `imusLatLngBounds()`, `isInImus()`, `geoReady()`, `lockToImus()`, `applyImusZoomLimit()` |

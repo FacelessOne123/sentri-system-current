@@ -4,13 +4,28 @@
  *
  * Loads settings from .env file in root directory if present.
  * Copy .env.example to .env and adjust your settings.
+ *
+ * Two files are read, in this order:
+ *   .env       - the tracked defaults (safe to commit: no real credentials)
+ *   .env.local - per-host overrides, git-ignored (e.g. APP_DEBUG=1 and a
+ *                local APP_URL while developing)
+ * A real environment variable (Apache/FPM/systemd) always beats both files.
  */
 
 // Simple lightweight .env loader
 (function() {
- $envPath = dirname(__DIR__) . '/.env';
- if (file_exists($envPath)) {
- $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+ $root = dirname(__DIR__);
+
+ // Keys that already exist in the real process environment (set by the web
+ // server or the shell) must never be overridden by a file.
+ $preexisting = array_fill_keys(
+  array_merge(array_keys($_ENV), array_keys($_SERVER)),
+  true
+ );
+
+ $load = function (string $path, bool $isOverride) use ($preexisting): void {
+ if (!file_exists($path)) return;
+ $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
  foreach ($lines as $line) {
  $line = trim($line);
  if ($line === '' || $line[0] === '#') continue;
@@ -18,14 +33,19 @@
  list($name, $value) = explode('=', $line, 2);
  $name = trim($name);
  $value = trim($value, " \t\n\r\0\x0B\"'");
- if (!array_key_exists($name, $_SERVER) && !array_key_exists($name, $_ENV)) {
+ if ($name === '') continue;
+ if (isset($preexisting[$name])) continue; // real env var wins
+ // .env.local is an explicit per-host override of .env.
+ if (!$isOverride && array_key_exists($name, $_ENV)) continue;
  putenv("{$name}={$value}");
  $_ENV[$name] = $value;
  $_SERVER[$name] = $value;
  }
  }
- }
- }
+ };
+
+ $load($root . '/.env', false);
+ $load($root . '/.env.local', true);
 })();
 
 if (!function_exists('get_env_var')) {

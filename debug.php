@@ -28,6 +28,12 @@ if (PHP_SAPI !== 'cli') {
 }
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/session.php'; // realm session inspector uses sentri_boot_candidate()
+require_once __DIR__ . '/core/SenTriMailer.php'; // live base-URL detection (sentri_app_url())
+
+// Base URL for every link on this page: follows the host/port/subdir you are
+// actually browsing now, instead of the APP_URL placeholder or a stale port
+// baked into an old outbox message (e.g. 127.0.0.1:4446 vs http://localhost).
+$debugBase = sentri_app_url();
 
 $ok = fn(string $s) => '<span style="color:#4ade80;font-weight:700;">PASS</span>';
 $bad = fn(string $s) => '<span style="color:#f87171;font-weight:700;">FAIL</span>' . ($s ? " — " . htmlspecialchars($s) : '');
@@ -97,6 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'wipe_
  <div class="kv"><span>mysqli / curl / pdo</span><span><?= (extension_loaded('mysqli')?'y':'<b style="color:#f87171">n</b>') ?> / <?= (extension_loaded('curl')?'y':'n') ?> / <?= (extension_loaded('pdo')?'y':'n') ?></span></div>
  <div class="kv"><span>SMTP</span><span><?= MAIL_DEBUG_OUTBOX ? '<b style="color:#4ade80">OFFLINE OUTBOX</b> (' . htmlspecialchars(MAIL_DEBUG_DIR) . ')' : '<b style="color:#fbbf24">LIVE SMTP</b>' . htmlspecialchars(MAIL_HOST . ':' . MAIL_PORT) ?></span></div>
  <div class="kv"><span>APP_URL</span><span><?= htmlspecialchars(APP_URL) ?></span></div>
+ <div class="kv"><span>Effective base URL</span><span><b style="color:#4ade80"><?= htmlspecialchars($debugBase) ?></b> (live request)</span></div>
  <?php
  $dbInfo = 'connected';
  $connReady = $conn instanceof mysqli && !$conn->connect_error;
@@ -148,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'wipe_
  if ($rows) {
  echo '<table><tr><th>account</th><th>email</th><th>one-click verify</th></tr>';
  foreach ($rows as $r) {
- $link = rtrim(APP_URL,'/') . '/verify_email.php?token=' . urlencode($r['verification_token']);
+ $link = $debugBase . '/verify_email.php?token=' . urlencode($r['verification_token']);
  echo '<tr><td>#' . (int)$r['id'] . ' ' . htmlspecialchars($r['first_name']) . '</td><td>' . htmlspecialchars($r['email']) . '</td><td><a href="' . htmlspecialchars($link) . '">VERIFY NOW →</a></td></tr>';
  }
  echo '</table>';
@@ -161,7 +168,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'wipe_
  foreach (array_slice($files, 0, 6) as $f) {
  $c = file_get_contents($f);
  $links = [];
- if (preg_match_all('#(https?://[^\"<\s]+(?:verify_email|reset_password)\.php[^\"<\s]*)#', $c, $m)) $links = $m[1];
+ if (preg_match_all('#(https?://[^\"<\s]+(?:verify_email|reset_password)\.php[^\"<\s]*)#', $c, $m)) {
+  // Rebuild each link on the base the developer is browsing right now. Old
+  // outbox files keep the origin (and possibly subdirectory) that was live
+  // when the mail was sent, e.g. 127.0.0.1:4446/sentri-system.
+  $links = array_map(function ($u) use ($debugBase) {
+   if (preg_match('#((?:gov/|admin/)?(?:verify_email|reset_password)\.php(?:\?[^"<\s]*)?)$#', $u, $mm)) {
+    return $debugBase . '/' . $mm[1];
+   }
+   return preg_replace('#^https?://[^/]+#', $debugBase, $u);
+  }, $m[1]);
+ }
  preg_match('/^Subject: (.*)$/mi', $c, $s);
  preg_match('/^To: (.*)$/mi', $c, $t);
  echo '<div class="link"><div style="font-size:.74rem;color:var(--info,#8b95b5);">' . htmlspecialchars(date('H:i:s', filemtime($f))) . ' → ' . htmlspecialchars($t[1] ?? '?') . ' · ' . htmlspecialchars($s[1] ?? '?') . '</div>';

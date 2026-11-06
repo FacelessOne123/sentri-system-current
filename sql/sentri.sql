@@ -22,6 +22,7 @@ CREATE TABLE `users` (
  `org_name` VARCHAR(255) DEFAULT NULL,
  `position` VARCHAR(150) DEFAULT NULL,
  `barangay_name` VARCHAR(150) DEFAULT NULL,
+ `barangay_changed_at` DATETIME DEFAULT NULL,
  `municipality` VARCHAR(150) DEFAULT NULL,
  `responder_type` VARCHAR(30) DEFAULT NULL,
  `is_approved` TINYINT(1) NOT NULL DEFAULT 0,
