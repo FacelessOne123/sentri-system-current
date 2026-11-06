@@ -169,10 +169,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'wipe_
  $c = file_get_contents($f);
  $links = [];
  if (preg_match_all('#(https?://[^\"<\s]+(?:verify_email|reset_password)\.php[^\"<\s]*)#', $c, $m)) {
-  // Old outbox files keep the origin that was live when the mail was sent.
-  // Swap only scheme://host[:port] for the current one so historical links
-  // (e.g. 127.0.0.1:4446) still work while hosting on localhost:80.
-  $links = array_map(fn($u) => preg_replace('#^https?://[^/]+#', $debugBase, $u), $m[1]);
+  // Rebuild each link on the base the developer is browsing right now. Old
+  // outbox files keep the origin (and possibly subdirectory) that was live
+  // when the mail was sent, e.g. 127.0.0.1:4446/sentri-system.
+  $links = array_map(function ($u) use ($debugBase) {
+   if (preg_match('#((?:gov/|admin/)?(?:verify_email|reset_password)\.php(?:\?[^"<\s]*)?)$#', $u, $mm)) {
+    return $debugBase . '/' . $mm[1];
+   }
+   return preg_replace('#^https?://[^/]+#', $debugBase, $u);
+  }, $m[1]);
  }
  preg_match('/^Subject: (.*)$/mi', $c, $s);
  preg_match('/^To: (.*)$/mi', $c, $t);

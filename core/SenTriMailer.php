@@ -9,17 +9,24 @@
 require_once __DIR__ . '/../config/email.php';
 
 // ── Dynamic APP_URL detection ─────────────────────────────────────────────────
-// If APP_URL is still the default placeholder ("http://localhost"), auto-detect
-// the real base URL from the live HTTP request so verification and password-reset
-// links work correctly on:
+// Verification and password-reset links must work on whatever host/port the
+// user is actually browsing:
 // • localhost with a custom port (e.g. http://localhost:8080/sentri-system)
 // • a live domain root (e.g. https://sentri.example.com)
 // • a live domain in a subdir (e.g. https://example.com/sentri)
 // • behind a reverse proxy (reads X-Forwarded-Proto / X-Forwarded-Host)
 //
-// To pin a specific URL, just set APP_URL to something other than "http://localhost"
-// in config/email.php and this entire block is skipped.
-if (!defined('APP_URL') || APP_URL === 'http://localhost' || APP_URL === 'http://localhost/' || APP_URL === '') {
+// The live request wins when:
+// • APP_URL is still the default placeholder ("http://localhost"), or
+// • the browser is on a loopback host. This keeps local dev adaptive even if
+//   APP_URL was pinned to a stale port (e.g. http://127.0.0.1:4446) earlier.
+// A non-loopback deployment with a pinned APP_URL stays authoritative.
+$sentri_request_host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? '');
+$sentri_live_loopback = PHP_SAPI !== 'cli' && sentri_is_loopback_host((string)$sentri_request_host);
+$sentri_url_placeholder = !defined('APP_URL')
+ || APP_URL === 'http://localhost' || APP_URL === 'http://localhost/' || APP_URL === '';
+
+if ($sentri_live_loopback || $sentri_url_placeholder) {
  $sentri_detected = sentri_detect_app_url();
  if (!defined('APP_URL')) {
  define('APP_URL', $sentri_detected);
@@ -28,6 +35,25 @@ if (!defined('APP_URL') || APP_URL === 'http://localhost' || APP_URL === 'http:/
  // that sentri_app_url() prefers over the constant.
  $GLOBALS['_sentri_app_url_override'] = $sentri_detected;
  }
+}
+
+/**
+ * Is this host a local-development loopback name?
+ * Accepts an optional port, IPv6 brackets and *.localhost aliases.
+ */
+function sentri_is_loopback_host(string $host): bool
+{
+ $host = strtolower(trim($host));
+ if ($host === '') return false;
+ if ($host[0] === '[') {
+ $host = preg_replace('/^\[([^\]]+)\].*$/', '$1', $host);
+ } else {
+ $host = preg_replace('/:\d+$/', '', $host);
+ }
+ if ($host === 'localhost' || $host === '::1') return true;
+ if (substr($host, 0, 4) === '127.') return true;
+ if (substr($host, -10) === '.localhost') return true;
+ return false;
 }
 
 /**

@@ -545,39 +545,69 @@ tr:hover td{background:#fafafa;}
  return L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:'+color+';border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>',iconSize:[14,14],iconAnchor:[7,7]});
  }
  var lmap = L.map('incidentMap');
+ // Hard-lock the viewport to the Imus perimeter (same rule as the community
+ // incidents map). fit:false keeps the existing "frame my barangay" behavior
+ // below; the max-bounds viscosity stops drags from leaving the city.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.lockToImus){
+  SentriGeo.lockToImus(lmap, { fit:false, pad:0 });
+  lmap.options.maxBoundsViscosity = 1;
+ }
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(lmap);
  var allMapMarkers = [];
  var hazardCircles = [];
  var showHazardRings = false;
  var currentMapStatus = 'all';
  var currentMapQuery = '';
+ var mapPinPts = [];
 
+ function renderReportMarkers(){
+ // Only plot pins that fall inside the Imus perimeter. Wait for the GeoJSON
+ // cache (geoReady) so isInImus() can actually answer; before it loads every
+ // point reports false and would be hidden.
+ var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
  mapReports.forEach(function(r){
- var color = markerColors[r.status]||'#888';
- var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
- m.reportData = r;
- m.bindPopup(
- '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
- '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
- '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
- (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
- '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
- {maxWidth:260}
- );
- m.addTo(lmap);
- allMapMarkers.push(m);
+  if(!isFinite(r.lat) || !isFinite(r.lng)) return;
+  if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return; // outside Imus
+  mapPinPts.push([r.lat, r.lng]);
+  var color = markerColors[r.status]||'#888';
+  var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
+  m.reportData = r;
+  m.bindPopup(
+  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
+  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
+  '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
+  '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
+  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
+  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
+  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
+  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
+  {maxWidth:260}
+  );
+  m.addTo(lmap);
+  allMapMarkers.push(m);
  });
  if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
  else{lmap.setView([14.4240,120.9215],12);}
+ // Keep barangay labels clear of the report pins once both are on the map.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.avoidLabelOverlap){
+  SentriGeo.avoidLabelOverlap(lmap, mapPinPts);
+ }
+ }
+
+ // Render pins only after the Imus geometry is available so out-of-city
+ // coordinates can be rejected instead of shown.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.loadBarangays){
+  SentriGeo.loadBarangays().then(renderReportMarkers).catch(renderReportMarkers);
+ } else {
+  renderReportMarkers();
+ }
 
  // ── Official barangay perimeters (Imus City GeoJSON) ──
- // All 95 outlines are drawn; this barangay official's own village is highlighted
- // (filled) by the shared library via onlyName. Cross-barangay drill-down is NOT
- // offered: clicking another polygon only shows a scoping notice.
+ // All 95 outlines are drawn and labelled; this barangay official's own
+ // village is highlighted (filled) by the shared library via onlyName.
+ // Cross-barangay drill-down is NOT offered: clicking another polygon only
+ // shows a scoping notice.
  var BRGY_OWN = <?= json_encode($brgy ?: '', JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>;
  function brgyKey(v){
   v = String(v||'').toLowerCase();
@@ -606,11 +636,12 @@ tr:hover td{background:#fafafa;}
   }).catch(function(){ return BRGY_OWN; })
   : Promise.resolve(BRGY_OWN || undefined);
   resolveOwnName.then(function(ownName){
-  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy }).then(function(gjLayer){
+  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy, labels: true }).then(function(gjLayer){
   // Frame the official barangay perimeter as the map's subject
   var ownL = window.__ownBrgyLayer;
   var fitLayer = (ownL && ownL.getBounds && ownL.getBounds().isValid()) ? ownL : (gjLayer && gjLayer.getBounds && gjLayer.getBounds().isValid() ? gjLayer : null);
   if(fitLayer){ lmap.fitBounds(fitLayer.getBounds(), { padding: [40, 40], maxZoom: 16 }); }
+  if(typeof SentriGeo.avoidLabelOverlap === 'function'){ SentriGeo.avoidLabelOverlap(lmap, mapPinPts); }
   return gjLayer;
   });
   }).catch(function(){ /* boundary data unavailable — pins still render */ });
