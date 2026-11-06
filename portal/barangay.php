@@ -598,7 +598,9 @@ tr:hover td{background:#fafafa;}
  // Render pins only after the Imus geometry is available so out-of-city
  // coordinates can be rejected instead of shown.
  if(typeof SentriGeo !== 'undefined' && SentriGeo.loadBarangays){
-  SentriGeo.loadBarangays().then(renderReportMarkers).catch(renderReportMarkers);
+  // Second argument handles load failure only; a render error must not rerun
+  // the renderer and duplicate markers.
+  SentriGeo.loadBarangays().then(renderReportMarkers, renderReportMarkers);
  } else {
   renderReportMarkers();
  }
