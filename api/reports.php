@@ -26,6 +26,7 @@ $PREFERRED_ACTION_ROLES = [
  'assign_report'        => ['first_responder','admin'],
  'report_responded'     => ['first_responder','admin'],
  'export'               => ['admin','lgu','barangay'],
+ 'poll_report_alerts'   => ['first_responder','lgu'],
  // Community portal
  'post_report'          => ['community','user'],
  'delete_report'        => ['community','user','admin'],
@@ -367,6 +368,96 @@ switch ($action) {
  }
 
  echo json_encode(['status'=>'success','reports'=>$reports]);
+ break;
+
+ // ── Lightweight alert poll for responder + LGU portals ────────────────
+ // Returns only alert-worthy reports (new rows, status upgrades and LGU
+ // escalations). No images / votes, so it is cheap enough to poll.
+ case 'poll_report_alerts':
+ if (!in_array($role, ['first_responder','lgu'], true)) {
+  echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit;
+ }
+
+ $prime = !empty($_GET['prime']);
+ $since_id = isset($_GET['since_id']) ? max(0, (int)$_GET['since_id']) : 0;
+ $since_time = trim((string)($_GET['since_time'] ?? ''));
+ if ($since_time !== '' && !preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $since_time)) {
+  $since_time = '';
+ }
+
+ $has_esc_col = sentri_table_has_column($conn, 'reports', 'escalated_to_lgu');
+ $esc_select = $has_esc_col ? ', r.escalated_to_lgu' : ', 0 AS escalated_to_lgu';
+ $where = ["r.is_archived = 0"];
+ $responder_type = '';
+
+ if ($role === 'first_responder') {
+  $rt_stmt = $conn->prepare("SELECT responder_type FROM users WHERE id=? LIMIT 1");
+  if ($rt_stmt) {
+   $rt_stmt->bind_param("i", $user_id);
+   $rt_stmt->execute();
+   $rt_stmt->bind_result($rt_val);
+   $rt_stmt->fetch();
+   $rt_stmt->close();
+   $responder_type = strtolower(trim((string)$rt_val));
+  }
+  if ($responder_type === 'bfp') {
+   $where[] = "r.status IN ('dangerous','caution')";
+  } else {
+   $where[] = "r.status = 'dangerous'";
+  }
+ } else {
+  $where[] = $has_esc_col
+   ? "(r.status = 'dangerous' OR r.escalated_to_lgu = 1)"
+   : "r.status = 'dangerous'";
+ }
+
+ if ($prime) {
+  $limit = 200;
+ } else {
+  $changing = [];
+  if ($since_id > 0) $changing[] = "r.id > $since_id";
+  // Responders only care about genuinely new reports. LGU also needs to see
+  // reports that were escalated (an UPDATE on an existing row).
+  if ($role === 'lgu' && $since_time !== '') {
+   $changing[] = "r.updated_at >= '" . $conn->real_escape_string($since_time) . "'";
+  }
+  // No watermark yet: return nothing rather than the whole table.
+  $where[] = $changing ? '(' . implode(' OR ', $changing) . ')' : '1 = 0';
+  $limit = 50;
+ }
+
+ // Read the watermark BEFORE the alert query so a report inserted between the
+ // two statements is not accidentally skipped by the next poll.
+ $meta = $conn->query("SELECT NOW() AS server_time, COALESCE(MAX(id),0) AS latest_id FROM reports");
+ $meta = $meta ? $meta->fetch_assoc() : null;
+ $server_time = $meta['server_time'] ?? date('Y-m-d H:i:s');
+ $latest_id = (int)($meta['latest_id'] ?? 0);
+
+ $sql = "SELECT r.id, r.title, r.status, r.category, r.barangay, r.city, r.description,
+  r.created_at, r.updated_at{$esc_select}
+  FROM reports r
+  WHERE " . implode(' AND ', $where) . "
+  ORDER BY r.id DESC
+  LIMIT $limit";
+ $stmt = $conn->prepare($sql);
+ if (!$stmt) { echo json_encode(['status'=>'error','message'=>'DB error: '.$conn->error]); exit; }
+ $stmt->execute();
+ $res = $stmt->get_result();
+ $alerts = [];
+ while ($row = $res->fetch_assoc()) {
+  $row['id'] = (int)$row['id'];
+  $row['escalated_to_lgu'] = (int)($row['escalated_to_lgu'] ?? 0);
+  $alerts[] = $row;
+ }
+ $stmt->close();
+
+ echo json_encode([
+  'status' => 'success',
+  'reports' => $alerts,
+  'server_time' => $server_time,
+  'latest_id' => $latest_id,
+  'responder_type' => $responder_type,
+ ]);
  break;
 
  case 'post_report':

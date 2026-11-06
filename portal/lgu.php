@@ -541,6 +541,33 @@ tr:hover td{background:#fafafa;}
 .toast i{font-size:1rem;flex-shrink:0;}
 @keyframes toastIn{from{opacity:0;transform:translateY(16px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);}}
 
+/* New-report popup alert — matches the Community portal action toast */
+.alert-toast{position:relative;display:flex;align-items:flex-start;gap:12px;background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:0 8px 32px rgba(0,0,0,0.15);border-left:5px solid #ccc;pointer-events:auto;min-width:300px;max-width:340px;overflow:hidden;animation:alertToastSlide 0.4s cubic-bezier(0.34,1.56,0.64,1) both;}
+.alert-toast.alert-dangerous{border-left-color:#dc2626;}
+.alert-toast.alert-caution{border-left-color:#d97706;}
+.alert-toast.alert-escalated{border-left-color:#2563eb;}
+.alert-toast.alert-info{border-left-color:#64748b;}
+.alert-toast.alert-out{animation:alertToastFade 0.4s ease both;}
+.alert-toast-icon{font-size:1.3rem;flex-shrink:0;margin-top:2px;color:#dc2626;}
+.alert-toast.alert-dangerous .alert-toast-icon{color:#dc2626;}
+.alert-toast.alert-caution .alert-toast-icon{color:#d97706;}
+.alert-toast.alert-escalated .alert-toast-icon{color:#2563eb;}
+.alert-toast.alert-info .alert-toast-icon{color:#64748b;}
+.alert-toast-body{min-width:0;flex:1;padding-right:14px;}
+.alert-toast-title{font-size:0.83rem;font-weight:700;color:var(--text);margin-bottom:3px;}
+.alert-toast-text{display:flex;flex-direction:column;gap:2px;font-size:0.76rem;color:var(--muted);line-height:1.55;}
+.alert-toast-text strong{color:var(--text);font-weight:700;}
+.alert-toast-desc{font-size:0.74rem;color:var(--muted);}
+.alert-toast-link{display:inline-flex;align-items:center;gap:5px;margin-top:6px;font-size:0.75rem;font-weight:700;color:#1d4ed8;text-decoration:none;}
+.alert-toast-link:hover{text-decoration:underline;}
+.alert-toast-close{position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.78rem;padding:2px 5px;border-radius:5px;}
+.alert-toast-close:hover{background:#f1f5f9;color:var(--text);}
+.alert-toast-progress{position:absolute;bottom:0;left:0;height:3px;width:100%;background:rgba(0,0,0,0.1);animation-name:alertToastProgress;animation-timing-function:linear;animation-fill-mode:both;}
+@keyframes alertToastSlide{from{opacity:0;transform:translateX(120%);}to{opacity:1;transform:translateX(0);}}
+@keyframes alertToastFade{from{opacity:1;transform:translateX(0);}to{opacity:0;transform:translateX(120%);}}
+@keyframes alertToastProgress{from{width:100%;}to{width:0%;}}
+@media(max-width:480px){.alert-toast{min-width:0;max-width:calc(100vw - 48px);}}
+
 /* ── RESPONSIVE ── */
 @media(max-width:1100px){
  .stat-grid{grid-template-columns:repeat(3,1fr);}
@@ -580,6 +607,7 @@ tr:hover td{background:#fafafa;}
  .resp-stats{grid-template-columns:1fr 1fr;}
 }
 </style>
+<script src="../assets/js/sentri-report-alerts.js?v=3"></script>
 </head>
 <body>
 
@@ -1979,6 +2007,21 @@ function broadcastAlertDirective(){
  closeAlertLevelModal();
  showToast('DRRM Alert Directive broadcasted to all 5 Barangay Operations Centers and community feeds.', 'success');
 }
+
+// ── New-report popup alerts ─────────────────────────────────────────────────
+// LGU is alerted for new dangerous reports and reports escalated to LGU.
+(function(){
+ if (!window.SentriReportAlerts) return;
+ SentriReportAlerts.create({
+  api: '../api/reports.php',
+  seenKey: 'sentri_lgu_alert_seen_v2',
+  containerId: 'toastContainer',
+  viewUrl: 'lgu.php?view=all_reports',
+  viewLabel: 'View reports',
+  escalation: true,
+  interval: 15000
+ }).start();
+})();
 </script>
 <?= csrf_script() ?>
 </body>
