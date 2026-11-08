@@ -56,8 +56,8 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .hero-badge span{font-size:0.68rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;}
 .form-wrap{max-width:480px;width:100%;margin:0 auto;padding:0 16px 28px;position:relative;z-index:2;}
 /* Two-column sign-in: the tutorial video on the left, the form on the right. */
-.auth-split{max-width:1500px;margin:auto;padding:22px 28px 30px;display:flex;gap:44px;align-items:center;justify-content:center;}
-.auth-media{flex:1 1 0;min-width:0;max-width:920px;}
+.auth-split{max-width:1180px;margin:auto;padding:22px 28px 28px;display:flex;gap:44px;align-items:center;justify-content:center;}
+.auth-media{flex:1 1 0;min-width:0;max-width:560px;}
 .media-frame{background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
 .media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:contain;cursor:pointer;}
 .media-caption{margin-top:14px;}
