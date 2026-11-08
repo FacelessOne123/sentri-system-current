@@ -32,9 +32,8 @@ function cq($conn,$sql,$types='',$params=[]){
 }
 
 
-// Normalized barangay match. Community users type the barangay as free text (or it comes from
-// reverse geocoding), so "Brgy. San Jose", "san jose" and "Barangay San Jose" must all match.
-// Reports with no barangay fall back to the reporter's profile barangay.
+// Normalized barangay match. Reports are strictly scoped to the official's assigned
+// barangay territory based on the incident's location (r.barangay).
 function brgy_norm($v){
  $v = mb_strtolower(trim((string)$v), 'UTF-8');
  $v = strtr($v, ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
@@ -45,19 +44,17 @@ function brgy_sql($col){
  return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE($col,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
 }
 $brgy_key = brgy_norm($brgy);
-$BRGY_COND = "(".brgy_sql('r.barangay')."=? OR ".brgy_sql('u.barangay_name')."=?)";
+$BRGY_COND = brgy_sql('r.barangay') . " = ?";
 
-// Stats - scoped to this barangay official's assigned barangay (falls back to community-wide if none set)
+// Stats - strictly scoped to this barangay official's assigned territory.
+// If no barangay is assigned, stats remain 0 to prevent unauthorized citywide data leak.
 if ($brgy) {
- $total = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $danger = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $caution = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
- $safe = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key]);
+ $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $danger = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $caution = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
 } else {
- $total = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
- $danger = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
- $caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0");
- $safe = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
+ $total = 0; $danger = 0; $caution = 0; $safe = 0;
 }
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
@@ -74,54 +71,56 @@ if (in_array($view, ['overview','reports'])) {
  $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
  $has_esc_col = ($bc && $bc->num_rows > 0);
  $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- $brgy_where = $brgy ? " AND $BRGY_COND" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
- if ($brgy) { $s->bind_param("ss", $brgy_key, $brgy_key); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $reports[]=$row;
- $s->close();
+ if ($brgy) {
+  $brgy_where = " AND $BRGY_COND";
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+  $s->bind_param("s", $brgy_key);
+  $s->execute(); $res=$s->get_result();
+  while($row=$res->fetch_assoc()) $reports[]=$row;
+  $s->close();
+ } else {
+  $reports = [];
+ }
 }
 
 if ($view === 'contacts') {
- $q = $brgy
- ? "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name"
- : "SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name";
  if ($brgy) {
- $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
+  $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $res=$s->get_result();
+  while($r=$res->fetch_assoc()) $contacts[]=$r;
+  $s->close();
  } else {
- $s = $conn->prepare($q); $s->execute();
+  $contacts = [];
  }
- $res=$s->get_result();
- while($r=$res->fetch_assoc()) $contacts[]=$r;
- $s->close();
 }
 
 if ($view === 'residents') {
- $q = $brgy
- ? "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') AND barangay_name=? ORDER BY last_name"
- : "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') ORDER BY last_name LIMIT 100";
  if ($brgy) {
- $s=$conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+  $q = "SELECT id,first_name,last_name,email,phone_number,resident_address,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
+  $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
+  $res=$s->get_result();
+  while($r=$res->fetch_assoc()) $residents[]=$r;
+  $s->close();
  } else {
- $s=$conn->prepare($q); $s->execute();
+  $residents = [];
  }
- $res=$s->get_result();
- while($r=$res->fetch_assoc()) $residents[]=$r;
- $s->close();
 }
 
 $map_reports = [];
 if ($view === 'map') {
- $brgy_where = $brgy ? " AND $BRGY_COND" : "";
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
- if ($brgy) { $s->bind_param("ss", $brgy_key, $brgy_key); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
+ if ($brgy) {
+  $brgy_where = " AND $BRGY_COND";
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+  $s->bind_param("s", $brgy_key);
+  $s->execute(); $res=$s->get_result();
+  while($row=$res->fetch_assoc()) $map_reports[]=$row;
+  $s->close();
+ }
 }
 $map_total_all = $brgy
- ? cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND $BRGY_COND","ss",[$brgy_key,$brgy_key])
- : cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+ ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key])
+ : 0;
 
 $nav_items = [
  'overview' => ['icon'=>'fa-gauge', 'label'=>'Dashboard'],
@@ -398,6 +397,16 @@ tr:hover td{background:#fafafa;}
 
  <div class="content">
 
+ <?php if(!$brgy): ?>
+ <div style="background:#fef2f2;border:1.5px solid #fecaca;border-left:5px solid #dc2626;border-radius:12px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+  <i class="fas fa-triangle-exclamation" style="font-size:1.3rem;color:#dc2626;"></i>
+  <div style="font-size:0.85rem;color:#991b1b;line-height:1.5;">
+   <b>No barangay assigned to your official account.</b><br>
+   Official access is strictly scoped per barangay. Please contact your system administrator to assign your jurisdiction.
+  </div>
+ </div>
+ <?php endif; ?>
+
  <?php if($view === 'overview'): ?>
  <div class="stat-grid">
  <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="stat-num"><?= $total ?></div><div class="stat-lbl">Total Reports</div></div></div>
@@ -468,6 +477,7 @@ tr:hover td{background:#fafafa;}
  <div style="flex:1;min-width:0;">
  <div class="resident-name"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?></div>
  <div class="resident-email"><?= htmlspecialchars($r['email']) ?><?= $r['phone_number'] ? ' &nbsp;&middot;&nbsp; '.$r['phone_number'] : '' ?></div>
+ <?php if(!empty($r['resident_address'])): ?><div class="resident-email"><i class="fas fa-location-dot" style="margin-right:4px;color:var(--green);"></i><?= htmlspecialchars($r['resident_address']) ?></div><?php endif; ?>
  </div>
  <span style="font-size:0.73rem;color:var(--muted);"><?= date('M j, Y',strtotime($r['created_at'])) ?></span>
  </div>
@@ -528,6 +538,8 @@ tr:hover td{background:#fafafa;}
  'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),
  'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
  'reporter'=>htmlspecialchars(trim($r['first_name'].' '.$r['last_name']),ENT_QUOTES),
+ 'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),
+ 'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),
  'date'=>date('M j, Y g:i A',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)];
  }, $map_reports)) ?>;
  var markerColors = {dangerous:'#dc2626',caution:'#d97706',safe:'#16a34a'};
@@ -536,39 +548,72 @@ tr:hover td{background:#fafafa;}
  return L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:'+color+';border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>',iconSize:[14,14],iconAnchor:[7,7]});
  }
  var lmap = L.map('incidentMap');
+ // Hard-lock the viewport to the Imus perimeter (same rule as the community
+ // incidents map). fit:false keeps the existing "frame my barangay" behavior
+ // below; the max-bounds viscosity stops drags from leaving the city.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.lockToImus){
+  SentriGeo.lockToImus(lmap, { fit:false, pad:0 });
+  lmap.options.maxBoundsViscosity = 1;
+ }
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(lmap);
  var allMapMarkers = [];
  var hazardCircles = [];
  var showHazardRings = false;
  var currentMapStatus = 'all';
  var currentMapQuery = '';
+ var mapPinPts = [];
 
+ function renderReportMarkers(){
+ // Only plot pins that fall inside the Imus perimeter. Wait for the GeoJSON
+ // cache (geoReady) so isInImus() can actually answer; before it loads every
+ // point reports false and would be hidden.
+ var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
  mapReports.forEach(function(r){
- var color = markerColors[r.status]||'#888';
- var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
- m.reportData = r;
- m.bindPopup(
- '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
- '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
- '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
- (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
- '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
- {maxWidth:260}
- );
- m.addTo(lmap);
- allMapMarkers.push(m);
+  if(!isFinite(r.lat) || !isFinite(r.lng)) return;
+  if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return; // outside Imus
+  mapPinPts.push([r.lat, r.lng]);
+  var color = markerColors[r.status]||'#888';
+  var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
+  m.reportData = r;
+  m.bindPopup(
+  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
+  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
+  '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
+  '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
+  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
+  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
+  (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
+  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
+  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
+  {maxWidth:260}
+  );
+  m.addTo(lmap);
+  allMapMarkers.push(m);
  });
  if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
  else{lmap.setView([14.4240,120.9215],12);}
+ // Keep barangay labels clear of the report pins once both are on the map.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.avoidLabelOverlap){
+  SentriGeo.avoidLabelOverlap(lmap, mapPinPts);
+ }
+ }
+
+ // Render pins only after the Imus geometry is available so out-of-city
+ // coordinates can be rejected instead of shown.
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.loadBarangays){
+  // Second argument handles load failure only; a render error must not rerun
+  // the renderer and duplicate markers.
+  SentriGeo.loadBarangays().then(renderReportMarkers, renderReportMarkers);
+ } else {
+  renderReportMarkers();
+ }
 
  // ── Official barangay perimeters (Imus City GeoJSON) ──
- // All 95 outlines are drawn; this barangay official's own village is highlighted
- // (filled) by the shared library via onlyName. Cross-barangay drill-down is NOT
- // offered: clicking another polygon only shows a scoping notice.
+ // All 95 outlines are drawn and labelled; this barangay official's own
+ // village is highlighted (filled) by the shared library via onlyName.
+ // Cross-barangay drill-down is NOT offered: clicking another polygon only
+ // shows a scoping notice.
  var BRGY_OWN = <?= json_encode($brgy ?: '', JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>;
  function brgyKey(v){
   v = String(v||'').toLowerCase();
@@ -597,11 +642,12 @@ tr:hover td{background:#fafafa;}
   }).catch(function(){ return BRGY_OWN; })
   : Promise.resolve(BRGY_OWN || undefined);
   resolveOwnName.then(function(ownName){
-  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy }).then(function(gjLayer){
+  return SentriGeo.addBarangayOverlay(lmap, { onlyName: ownName || undefined, onEach: onEachOwnBrgy, labels: true }).then(function(gjLayer){
   // Frame the official barangay perimeter as the map's subject
   var ownL = window.__ownBrgyLayer;
   var fitLayer = (ownL && ownL.getBounds && ownL.getBounds().isValid()) ? ownL : (gjLayer && gjLayer.getBounds && gjLayer.getBounds().isValid() ? gjLayer : null);
   if(fitLayer){ lmap.fitBounds(fitLayer.getBounds(), { padding: [40, 40], maxZoom: 16 }); }
+  if(typeof SentriGeo.avoidLabelOverlap === 'function'){ SentriGeo.avoidLabelOverlap(lmap, mapPinPts); }
   return gjLayer;
   });
   }).catch(function(){ /* boundary data unavailable — pins still render */ });
@@ -768,11 +814,13 @@ function showToast(message, type) {
 var currentReportId = null;
 var currentReportStatus = null;
 var currentEscalated = false;
+var currentResponderPending = false;
 
-async function viewReport(id, title, category, status, barangay, reporter, date, desc, escalated) {
+async function viewReport(id, title, category, status, barangay, reporter, date, desc, escalated, residence, responderPending) {
  currentReportId = id;
  currentReportStatus = status;
  currentEscalated = !!escalated;
+ currentResponderPending = !!responderPending;
  document.getElementById('modalTitle').textContent = title;
 
  // Status colour
@@ -787,6 +835,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
+ (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+residence+'</div></div>':'')+
  '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
  (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'')+
  '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
@@ -840,6 +889,17 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  actions.innerHTML = '';
 
  if (!isResolved) {
+ if (responderPending) {
+ // A dispatched responder must clear the incident first.
+ var waitBtn = document.createElement('button');
+ waitBtn.className = 'btn-action btn-done';
+ waitBtn.id = 'modalResolveBtn';
+ waitBtn.disabled = true;
+ waitBtn.title = 'The assigned first responder must resolve this incident first';
+ waitBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
+ waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:not-allowed;';
+ actions.appendChild(waitBtn);
+ } else {
  // Resolve button
  var resolveBtn = document.createElement('button');
  resolveBtn.className = 'btn-action btn-resolve-full';
@@ -847,6 +907,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  resolveBtn.innerHTML = '<i class="fas fa-circle-check"></i> Mark Resolved';
  resolveBtn.onclick = function() { doResolve(resolveBtn); };
  actions.appendChild(resolveBtn);
+ }
 
  // Escalate button - show greyed "Already Escalated" if already escalated
  var escBtn = document.createElement('button');
@@ -874,7 +935,9 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  var sel = document.createElement('select');
  sel.id = 'modalStatusSelect';
  sel.style.cssText = 'padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:\'Inter\',sans-serif;cursor:pointer;background:#fff;';
- sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe">✅ Mark Safe</option>';
+ sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (responderPending ? ' disabled title="Waiting for the assigned responder to resolve this incident"' : '') + '>✅ Mark Safe</option>';
+ var safeOpt = sel.querySelector('option[value="safe"]');
+ if (safeOpt && responderPending) safeOpt.textContent = '✅ Mark Safe (awaiting responder)';
  sel.onchange = function() { changeStatus(this.value); };
  actions.appendChild(sel);
  }
@@ -889,6 +952,10 @@ function closeModal() { document.getElementById('reportModal').classList.remove(
 // ── Resolve ───────────────────────────────────────────────────────────────
 async function doResolve(btn) {
  if (!currentReportId) return;
+ if (currentResponderPending) {
+ showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ return;
+ }
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resolving…';
  try {
@@ -956,6 +1023,11 @@ async function doEscalate(btn) {
 // ── Change Status (dropdown) ───────────────────────────────────────────────
 async function changeStatus(newStatus) {
  if (!newStatus || !currentReportId) return;
+ if (newStatus === 'safe' && currentResponderPending) {
+ showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ var s0 = document.getElementById('modalStatusSelect'); if (s0) s0.value = '';
+ return;
+ }
  var sel = document.getElementById('modalStatusSelect');
  sel.disabled = true;
  try {
@@ -981,6 +1053,11 @@ async function changeStatus(newStatus) {
 
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
+ var row = btn && btn.closest ? btn.closest('tr') : null;
+ if (row && row.getAttribute('data-responder-pending') === '1') {
+ showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ return;
+ }
  if (!confirm('Mark this report as resolved?')) return;
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
@@ -1052,13 +1129,19 @@ function refreshReportRow(id, newStatus, escalated) {
  pill.className = 'pill pill-' + newStatus;
  pill.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
  }
+ if (newStatus === 'safe') {
+ row.removeAttribute('data-responder-pending');
+ var pendingChip = row.querySelector('.responder-pending-chip');
+ if (pendingChip) pendingChip.remove();
+ }
+ var rowPending = row.getAttribute('data-responder-pending') === '1';
 
  // Remove or update action buttons
  var actionsCell = row.querySelector('td:last-child div');
  if (actionsCell) {
  // Remove old resolve/escalate buttons, leave view button
- actionsCell.querySelectorAll('.btn-resolve, .btn-escalate').forEach(function(b) { b.remove(); });
- if (newStatus !== 'safe') {
+ actionsCell.querySelectorAll('.btn-resolve, .btn-escalate, .btn-resolve-pending').forEach(function(b) { b.remove(); });
+ if (newStatus !== 'safe' && !rowPending) {
  // Re-add resolve button
  var rb = document.createElement('button');
  rb.className = 'btn-icon btn-resolve';

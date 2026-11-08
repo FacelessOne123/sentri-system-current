@@ -71,7 +71,7 @@ if ($view === 'overview' || $view === 'all_reports') {
  $bind_brgy = true;
  }
  }
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
+ $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
  if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) {
@@ -100,7 +100,7 @@ $active_deployed_units = (int)cq($conn, "SELECT COUNT(DISTINCT assigned_to) FROM
 // ── MAP ──────────────────────────────────────────────────────────────────
 $map_reports = [];
 if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description FROM reports r WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
+ $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) $map_reports[]=$row;
  $s->close();
@@ -192,7 +192,7 @@ if ($view === 'responders' && $_SERVER['REQUEST_METHOD']==='POST') {
 
 $map_reports = [];
 if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description FROM reports r WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
+ $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) $map_reports[]=$row;
  $s->close();
@@ -541,6 +541,33 @@ tr:hover td{background:#fafafa;}
 .toast i{font-size:1rem;flex-shrink:0;}
 @keyframes toastIn{from{opacity:0;transform:translateY(16px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);}}
 
+/* New-report popup alert — matches the Community portal action toast */
+.alert-toast{position:relative;display:flex;align-items:flex-start;gap:12px;background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:0 8px 32px rgba(0,0,0,0.15);border-left:5px solid #ccc;pointer-events:auto;min-width:300px;max-width:340px;overflow:hidden;animation:alertToastSlide 0.4s cubic-bezier(0.34,1.56,0.64,1) both;}
+.alert-toast.alert-dangerous{border-left-color:#dc2626;}
+.alert-toast.alert-caution{border-left-color:#d97706;}
+.alert-toast.alert-escalated{border-left-color:#2563eb;}
+.alert-toast.alert-info{border-left-color:#64748b;}
+.alert-toast.alert-out{animation:alertToastFade 0.4s ease both;}
+.alert-toast-icon{font-size:1.3rem;flex-shrink:0;margin-top:2px;color:#dc2626;}
+.alert-toast.alert-dangerous .alert-toast-icon{color:#dc2626;}
+.alert-toast.alert-caution .alert-toast-icon{color:#d97706;}
+.alert-toast.alert-escalated .alert-toast-icon{color:#2563eb;}
+.alert-toast.alert-info .alert-toast-icon{color:#64748b;}
+.alert-toast-body{min-width:0;flex:1;padding-right:14px;}
+.alert-toast-title{font-size:0.83rem;font-weight:700;color:var(--text);margin-bottom:3px;}
+.alert-toast-text{display:flex;flex-direction:column;gap:2px;font-size:0.76rem;color:var(--muted);line-height:1.55;}
+.alert-toast-text strong{color:var(--text);font-weight:700;}
+.alert-toast-desc{font-size:0.74rem;color:var(--muted);}
+.alert-toast-link{display:inline-flex;align-items:center;gap:5px;margin-top:6px;font-size:0.75rem;font-weight:700;color:#1d4ed8;text-decoration:none;}
+.alert-toast-link:hover{text-decoration:underline;}
+.alert-toast-close{position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.78rem;padding:2px 5px;border-radius:5px;}
+.alert-toast-close:hover{background:#f1f5f9;color:var(--text);}
+.alert-toast-progress{position:absolute;bottom:0;left:0;height:3px;width:100%;background:rgba(0,0,0,0.1);animation-name:alertToastProgress;animation-timing-function:linear;animation-fill-mode:both;}
+@keyframes alertToastSlide{from{opacity:0;transform:translateX(120%);}to{opacity:1;transform:translateX(0);}}
+@keyframes alertToastFade{from{opacity:1;transform:translateX(0);}to{opacity:0;transform:translateX(120%);}}
+@keyframes alertToastProgress{from{width:100%;}to{width:0%;}}
+@media(max-width:480px){.alert-toast{min-width:0;max-width:calc(100vw - 48px);}}
+
 /* ── RESPONSIVE ── */
 @media(max-width:1100px){
  .stat-grid{grid-template-columns:repeat(3,1fr);}
@@ -580,6 +607,7 @@ tr:hover td{background:#fafafa;}
  .resp-stats{grid-template-columns:1fr 1fr;}
 }
 </style>
+<script src="../assets/js/sentri-report-alerts.js?v=4"></script>
 </head>
 <body>
 
@@ -775,10 +803,15 @@ tr:hover td{background:#fafafa;}
  $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_esc_js = !empty($r['escalated_to_lgu']) ? 1 : 0;
+ $rep_brgy = trim((string)($r['barangay_name'] ?? ''));
+ $rep_addr = trim((string)($r['resident_address'] ?? ''));
+ $residence_full = $rep_brgy !== '' ? ('Brgy ' . $rep_brgy . ($rep_addr !== '' ? ', ' . $rep_addr : '')) : '';
+ $r_res_js = htmlspecialchars(json_encode($residence_full), ENT_QUOTES, 'UTF-8');
+ $responder_pending = !empty($r['assigned_to']) && empty($r['resolved_at']);
  ?>
- <tr style="cursor:pointer;" onclick="lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>)">
+ <tr style="cursor:pointer;" onclick="lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>, <?= $r_res_js ?>, <?= $responder_pending ? 1 : 0 ?>)">
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
- <td style="font-weight:600;max-width:180px;"><?= htmlspecialchars(mb_strimwidth($r['title'],0,50,'…')) ?></td>
+ <td style="font-weight:600;max-width:180px;"><?= htmlspecialchars(mb_strimwidth($r['title'],0,50,'…')) ?><?php if($responder_pending): ?><span class="responder-pending-chip" title="A first responder has been dispatched and must resolve this incident" style="margin-left:5px;display:inline-flex;align-items:center;gap:3px;font-size:0.64rem;font-weight:700;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a;white-space:nowrap;vertical-align:middle;"><i class="fas fa-hourglass-half"></i> Responder pending</span><?php endif; ?></td>
  <td><span class="cat-chip"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i> <?= ucfirst($r['category']) ?></span></td>
  <td style="font-size:0.78rem;"><?= htmlspecialchars($r['barangay'] ?? $r['city']) ?></td>
  <td style="font-size:0.74rem;color:var(--muted);"><?= date('M j', strtotime($r['created_at'])) ?></td>
@@ -856,17 +889,22 @@ tr:hover td{background:#fafafa;}
  $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_esc_js = !empty($r['escalated_to_lgu']) ? 1 : 0;
+ $rep_brgy = trim((string)($r['barangay_name'] ?? ''));
+ $rep_addr = trim((string)($r['resident_address'] ?? ''));
+ $residence_full = $rep_brgy !== '' ? ('Brgy ' . $rep_brgy . ($rep_addr !== '' ? ', ' . $rep_addr : '')) : '';
+ $r_res_js = htmlspecialchars(json_encode($residence_full), ENT_QUOTES, 'UTF-8');
+ $responder_pending = !empty($r['assigned_to']) && empty($r['resolved_at']);
  ?>
  <tr data-status="<?= htmlspecialchars($r['status']) ?>">
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
- <td style="font-weight:600;max-width:200px;"><?= htmlspecialchars(mb_strimwidth($r['title'],0,55,'…')) ?></td>
+ <td style="font-weight:600;max-width:200px;"><?= htmlspecialchars(mb_strimwidth($r['title'],0,55,'…')) ?><?php if($responder_pending): ?><span class="responder-pending-chip" title="A first responder has been dispatched and must resolve this incident" style="margin-left:5px;display:inline-flex;align-items:center;gap:3px;font-size:0.64rem;font-weight:700;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a;white-space:nowrap;vertical-align:middle;"><i class="fas fa-hourglass-half"></i> Responder pending</span><?php endif; ?></td>
  <td><span class="cat-chip"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i> <?= ucfirst($r['category']) ?></span></td>
  <td><span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span></td>
  <td style="font-size:0.78rem;"><?= htmlspecialchars($r['barangay'] ?? $r['city']) ?></td>
- <td style="font-size:0.78rem;color:var(--muted);"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?></td>
+ <td style="font-size:0.78rem;color:var(--muted);"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?><?php if($residence_full !== ''): ?><div style="font-size:0.7rem;color:#94a3b8;margin-top:2px;"><i class="fas fa-house-user" style="margin-right:3px;"></i><?= htmlspecialchars($residence_full) ?></div><?php endif; ?></td>
  <td style="font-size:0.74rem;color:var(--muted);white-space:nowrap;"><?= date('M j, Y', strtotime($r['created_at'])) ?></td>
  <td>
- <button onclick="event.stopPropagation();lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>)" style="background:#eff6ff;color:#2563eb;border:none;padding:5px 10px;border-radius:7px;font-size:0.76rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-pen-to-square"></i> Manage</button>
+ <button onclick="event.stopPropagation();lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>, <?= $r_res_js ?>, <?= $responder_pending ? 1 : 0 ?>)" style="background:#eff6ff;color:#2563eb;border:none;padding:5px 10px;border-radius:7px;font-size:0.76rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-pen-to-square"></i> Manage</button>
  </td>
  </tr>
  <?php endforeach; ?>
@@ -1015,7 +1053,7 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
  <script>
- var reports = <?= json_encode(array_map(function($r){ return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],'date'=>date('M j, Y',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)]; }, $map_reports)) ?>;
+ var reports = <?= json_encode(array_map(function($r){ return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],'reporter'=>htmlspecialchars(trim(($r['first_name']??'').' '.($r['last_name']??'')),ENT_QUOTES),'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),'date'=>date('M j, Y',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)]; }, $map_reports)) ?>;
  var markerColors = {dangerous:'#dc2626',caution:'#d97706',safe:'#16a34a'};
  var catLabels = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
 
@@ -1047,6 +1085,8 @@ tr:hover td{background:#fafafa;}
  '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
  '<span style="background:#eff6ff;color:#1e40af;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>' +
  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
+ (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>':'')+
+ (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
  {maxWidth:260}
@@ -1450,9 +1490,11 @@ function showToast(message, type) {
 // ── Report Actions ──────────────────────────────────────────────────────────
 var _lguRptId = null;
 var _lguEscalated = false;
-async function lguViewReport(id,title,category,status,barangay,reporter,date,desc,escalated){
+var _lguResponderPending = false;
+async function lguViewReport(id,title,category,status,barangay,reporter,date,desc,escalated,residence,responderPending){
  _lguRptId = id;
  _lguEscalated = !!escalated;
+ _lguResponderPending = !!responderPending;
  document.getElementById('lguModalTitle').textContent = title;
  var pill = {dangerous:'<span class="pill pill-dangerous">Dangerous</span>',caution:'<span class="pill pill-caution">Caution</span>',safe:'<span class="pill pill-safe">Safe</span>'};
  var baseHtml =
@@ -1460,12 +1502,42 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
+ (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+residence+'</div></div>':'')+
  '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
  (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'')+
  '<div id="lguModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
  
  document.getElementById('lguModalBody').innerHTML = baseHtml;
  document.getElementById('lguRptStatusSel').value = status;
+
+ // Resolve lock: a dispatched responder must clear the incident first, and an
+ // already-resolved report can never be resolved again.
+ var lguResolveBtn = document.getElementById('lguModalResolveBtn');
+ var isResolved = (status === 'safe');
+ var safeOpt = document.querySelector('#lguRptStatusSel option[value="safe"]');
+ if (lguResolveBtn) {
+  if (isResolved) {
+   lguResolveBtn.disabled = true;
+   lguResolveBtn.title = 'This incident is already resolved';
+   lguResolveBtn.innerHTML = '<i class="fas fa-circle-check"></i> Resolved';
+   lguResolveBtn.style.cssText = 'background:#f0fdf4;color:#166534;border:1.5px solid #bbf7d0;cursor:not-allowed;opacity:.9;';
+  } else if (_lguResponderPending) {
+   lguResolveBtn.disabled = true;
+   lguResolveBtn.title = 'The assigned first responder must resolve this incident first';
+   lguResolveBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
+   lguResolveBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:not-allowed;opacity:.9;';
+  } else {
+   lguResolveBtn.disabled = false;
+   lguResolveBtn.title = '';
+   lguResolveBtn.innerHTML = '<i class="fas fa-circle-check"></i> Resolve';
+   lguResolveBtn.style.cssText = '';
+  }
+ }
+ if (safeOpt) {
+  safeOpt.disabled = isResolved || _lguResponderPending;
+  safeOpt.title = _lguResponderPending ? 'Waiting for the assigned responder to resolve this incident' : '';
+  safeOpt.textContent = (_lguResponderPending && !isResolved) ? '✅ Safe (awaiting responder)' : '✅ Safe';
+ }
  // Reflect escalation state on the Escalate button
  var escBtn = document.getElementById('lguModalEscalateBtn');
  if (escBtn) {
@@ -1535,6 +1607,8 @@ document.addEventListener('DOMContentLoaded',function(){
 document.addEventListener('DOMContentLoaded',function(){
  document.getElementById('lguModalResolveBtn').onclick = async function(){
  if(!_lguRptId) return;
+ if(this.disabled) return;
+ if(_lguResponderPending){showToast('A first responder is handling this incident. The responder must resolve it first.','error');return;}
  if(!confirm('Mark this report as resolved?')) return;
  var fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',_lguRptId);
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
@@ -1544,6 +1618,7 @@ document.addEventListener('DOMContentLoaded',function(){
  document.getElementById('lguModalStatusBtn').onclick = async function(){
  var newStatus = document.getElementById('lguRptStatusSel').value;
  if(!newStatus||!_lguRptId) return;
+ if(newStatus==='safe' && _lguResponderPending){showToast('A first responder is handling this incident. The responder must resolve it first.','error');document.getElementById('lguRptStatusSel').value='';return;}
  if(!confirm('Change status to '+newStatus+'?')) return;
  var fd=new FormData(); fd.append('action','update_report_status'); fd.append('report_id',_lguRptId); fd.append('status',newStatus);
  var res=await fetch('../api/reports.php',{method:'POST',body:fd});
@@ -1979,6 +2054,21 @@ function broadcastAlertDirective(){
  closeAlertLevelModal();
  showToast('DRRM Alert Directive broadcasted to all 5 Barangay Operations Centers and community feeds.', 'success');
 }
+
+// ── New-report popup alerts ─────────────────────────────────────────────────
+// LGU is alerted for new dangerous reports and reports escalated to LGU.
+(function(){
+ if (!window.SentriReportAlerts) return;
+ SentriReportAlerts.create({
+  api: '../api/reports.php',
+  seenKey: 'sentri_lgu_alert_seen_v2',
+  containerId: 'toastContainer',
+  viewUrl: 'lgu.php?view=all_reports',
+  viewLabel: 'View reports',
+  escalation: true,
+  interval: 15000
+ }).start();
+})();
 </script>
 <?= csrf_script() ?>
 </body>

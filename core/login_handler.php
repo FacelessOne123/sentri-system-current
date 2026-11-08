@@ -212,6 +212,7 @@ $migrations = [
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS `position` VARCHAR(150) DEFAULT NULL",
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS barangay_name VARCHAR(150) DEFAULT NULL",
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS municipality VARCHAR(150) DEFAULT NULL",
+ "ALTER TABLE users ADD COLUMN IF NOT EXISTS resident_address VARCHAR(255) DEFAULT NULL",
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS responder_type VARCHAR(30) DEFAULT NULL",
 ];
 foreach ($migrations as $q) $conn->query($q);

@@ -5,25 +5,8 @@ require_once __DIR__ . '/../config/auth.php';
 require_role(['community','user']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/geo.php';
 
-
-define('BRGY_LOCK_MINUTES', 1);   // <-- raise this later (60, 1440 = 1 day, 43200 = 30 days)
-
-// Add the column once if it doesn't exist
-$cc = $conn->query("SHOW COLUMNS FROM users LIKE 'barangay_changed_at'");
-if ($cc && $cc->num_rows === 0) {
- $conn->query("ALTER TABLE users ADD COLUMN barangay_changed_at DATETIME NULL DEFAULT NULL");
-}
-
-// Returns [current barangay, seconds of lock remaining]. Uses DB time so there are no PHP/MySQL timezone mismatches.
-function brgy_lock_state($conn, $uid){
- $m = BRGY_LOCK_MINUTES;
- $s = $conn->prepare("SELECT COALESCE(barangay_name,''),
-   COALESCE(GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), DATE_ADD(barangay_changed_at, INTERVAL ? MINUTE))), 0)
-   FROM users WHERE id=? LIMIT 1");
- $s->bind_param("ii", $m, $uid); $s->execute(); $s->bind_result($b, $secs); $s->fetch(); $s->close();
- return [$b, (int)$secs];
-}
 
 $identity = sentri_identity();
 $uid = (int)$identity['user_id'];
@@ -33,16 +16,27 @@ $view = $_GET['view'] ?? 'overview';
 
 /* ── Profile ─────────────────────────────────────────────────── */
 $avatar_color = '#1c57b2';
-$user_email = $user_phone = $user_brgy = $user_muni = '';
-$saved_gps_lat = $saved_gps_lng = null;
+$user_email = $user_phone = '';
+$user_barangay = $user_address = '';
 
-$s = $conn->prepare("SELECT email, phone_number, barangay_name, municipality FROM users WHERE id=? LIMIT 1");
+// Residence columns are created by the login/signup migrations; ensure they
+// exist before selecting so an older session does not break the portal.
+$rc = $conn->query("SHOW COLUMNS FROM users LIKE 'resident_address'");
+if ($rc && $rc->num_rows === 0) {
+ $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
+}
+
+$s = $conn->prepare("SELECT email, phone_number, barangay_name, resident_address FROM users WHERE id=? LIMIT 1");
 $s->bind_param("i",$uid);$s->execute();$row=$s->get_result()->fetch_assoc();$s->close();
-if($row){$user_email=$row['email']??'';$user_phone=$row['phone_number']??'';$user_brgy=$row['barangay_name']??'';$user_muni=$row['municipality']??'';}
+if($row){
+ $user_email=$row['email']??'';
+ $user_phone=$row['phone_number']??'';
+ $user_barangay=trim((string)($row['barangay_name']??''));
+ $user_address=trim((string)($row['resident_address']??''));
+}
+$needs_residence = ($user_barangay === '' || $user_address === '');
 $avRes=$conn->query("SHOW COLUMNS FROM users LIKE 'avatar_color'");
 if($avRes&&$avRes->num_rows>0){$as=$conn->prepare("SELECT avatar_color FROM users WHERE id=? LIMIT 1");$as->bind_param("i",$uid);$as->execute();$as->bind_result($av);$as->fetch();$as->close();if($av)$avatar_color=$av;}
-$gpsRes=$conn->query("SHOW COLUMNS FROM users LIKE 'gps_lat'");
-if($gpsRes&&$gpsRes->num_rows>0){$gs=$conn->prepare("SELECT gps_lat,gps_lng FROM users WHERE id=? LIMIT 1");$gs->bind_param("i",$uid);$gs->execute();$gs->bind_result($saved_gps_lat,$saved_gps_lng);$gs->fetch();$gs->close();}
 
 /* ── Stats ────────────────────────────────────────────────────── */
 function cq($conn,$sql,$t='',$p=[]){$s=$conn->prepare($sql);if($t&&$p){$refs=[];foreach($p as &$v)$refs[]=&$v;array_unshift($refs,$t);call_user_func_array([$s,'bind_param'],$refs);}$s->execute();$s->bind_result($n);$s->fetch();$s->close();return(int)$n;}
@@ -58,27 +52,19 @@ if($view==='contacts'){$cs=$conn->query("SELECT * FROM emergency_contacts WHERE 
 $profile_msg = '';
 if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_profile'])){
  $pf=trim($_POST['first_name']??'');$pl=trim($_POST['last_name']??'');
- $pp=trim($_POST['phone']??'');$pm=trim($_POST['municipality']??'');$pb=trim($_POST['barangay_name']??'');
+ $pp=trim($_POST['phone']??'');
  $pw=$_POST['new_password']??'';$pw2=$_POST['confirm_password']??'';
+ $rb_in=trim($_POST['barangay_name']??'');
+ $ra_in=trim($_POST['resident_address']??'');
+ $rb_val=sentri_barangay_canonical($rb_in);
  if($pw&&$pw!==$pw2) {$profile_msg='error:Passwords do not match.';}
  elseif(!$pf||!$pl) {$profile_msg='error:Name fields are required.';}
+ elseif($rb_val===null) {$profile_msg='error:Please select a valid Imus barangay.';}
+ elseif(mb_strlen($ra_in)<5||mb_strlen($ra_in)>255) {$profile_msg='error:Please enter a complete home address (5-255 characters).';}
  else{
-  // Barangay lock: a change is only allowed when the lock has expired (or none was ever set)
-  [$cur_brgy, $lock_left] = brgy_lock_state($conn, $uid);
-  $norm = function($v){ return preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',strtr(mb_strtolower(trim($v),'UTF-8'),['ñ'=>'n']))); };
-  $wants_change = ($norm($pb) !== $norm($cur_brgy));
-  $brgy_changed = false; $lock_note = '';
-  if($wants_change && $cur_brgy !== '' && $lock_left > 0){
-   $pb = $cur_brgy;   // reject the change, keep the old value
-   $lock_note = ' Barangay was not changed: locked for '.ceil($lock_left/60).' more min.';
-  } elseif($wants_change){
-   $brgy_changed = true;
-  }
-
-  $sets="first_name=?,last_name=?,phone_number=?,municipality=?,barangay_name=?";
-  $types="sssss"; $vals=[$pf,$pl,$pp,$pm,$pb];
+  $sets="first_name=?,last_name=?,phone_number=?,barangay_name=?,resident_address=?";
+  $types="sssss"; $vals=[$pf,$pl,$pp,$rb_val,$ra_in];
   if($pw){ $sets.=",password=?"; $types.="s"; $vals[]=password_hash($pw,PASSWORD_BCRYPT,['cost'=>12]); }
-  if($brgy_changed){ $sets.=",barangay_changed_at=NOW()"; }
   $types.="i"; $vals[]=$uid;
   $su=$conn->prepare("UPDATE users SET $sets WHERE id=?");
   $su->bind_param($types, ...$vals);
@@ -87,14 +73,13 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
   $pf_safe=htmlspecialchars($pf,ENT_QUOTES,'UTF-8');$pl_safe=htmlspecialchars($pl,ENT_QUOTES,'UTF-8');
   if(isset($_SESSION['identity'])&&is_array($_SESSION['identity'])){$_SESSION['identity']['first_name']=$pf_safe;$_SESSION['identity']['last_name']=$pl_safe;}
   $fname=$pf_safe;$lname=$pl_safe;
-  $user_phone=$pp;$user_muni=$pm;$user_brgy=$pb;
-  $profile_msg='success:Profile updated.'.$lock_note;
+  $user_phone=$pp;
+  $user_barangay=$rb_val;
+  $user_address=$ra_in;
+  $needs_residence=false;
+  $profile_msg='success:Profile updated.';
  }
 }
-
-// State used by the form
-[, $brgy_lock_secs] = brgy_lock_state($conn, $uid);
-$brgy_locked = ($user_brgy !== '' && $brgy_lock_secs > 0);
 
 /* ── Lookup maps ──────────────────────────────────────────────── */
 $type_icons =['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
@@ -309,23 +294,13 @@ body.dark .role-badge{background:#1f3a5f;color:var(--blue-accent);}
 .form-group{margin-bottom:14px;}
 .form-group label{display:block;font-size:.82rem;font-weight:600;color:#444;margin-bottom:5px;}
 body.dark .form-group label{color:#8b949e;}
-.form-group input{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;background:var(--input-bg);color:var(--text);font-family:'Poppins',sans-serif;transition:all .2s;}
-.form-group input:focus{border-color:var(--blue-accent);background:var(--input-focus);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
+.form-group input,.form-group select{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;background:var(--input-bg);color:var(--text);font-family:'Poppins',sans-serif;transition:all .2s;}
+.form-group input:focus,.form-group select:focus{border-color:var(--blue-accent);background:var(--input-focus);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .btn-save{background:linear-gradient(135deg,var(--blue-accent),var(--blue));color:#fff;border:none;padding:12px 28px;border-radius:10px;font-size:.93rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;transition:all .25s;}
 .btn-save:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(58,141,255,.4);}
 .pf-msg{padding:10px 14px;border-radius:9px;font-size:.84rem;margin-bottom:14px;display:none;}
 .pf-msg.success{background:#e8f5e9;color:#2e7d32;}.pf-msg.error{background:#ffebee;color:#c62828;}
-.gps-section{border:1.5px solid var(--border);border-radius:12px;padding:16px;background:var(--input-bg);}
-body.dark .gps-section{background:#0d1117;}
-.gps-section-hdr{display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:700;color:var(--blue);margin-bottom:10px;}
-.gps-coords{font-size:.79rem;color:var(--muted);margin-bottom:10px;padding:8px 12px;background:var(--bg);border-radius:8px;display:flex;align-items:center;gap:6px;min-height:34px;}
-.gps-coords.has-gps{color:var(--green);font-weight:600;}
-.btn-gps{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border:1.5px solid var(--green);border-radius:9px;font-size:.84rem;font-weight:700;color:var(--green);background:#f0fff4;cursor:pointer;font-family:'Poppins',sans-serif;transition:all .2s;}
-.btn-gps:hover{background:#dcfce7;transform:translateY(-1px);}
-.btn-gps:disabled{opacity:.6;cursor:not-allowed;transform:none;}
-body.dark .btn-gps{background:#1a2e24;}
-.gps-help{font-size:.76rem;color:var(--muted);margin-bottom:10px;line-height:1.6;}
 
 /* ── Modals ── */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1200;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(3px);}
@@ -779,18 +754,7 @@ function actionToast(message,type){
  <div class="profile-info-rows">
  <div class="profile-info-row"><i class="fas fa-envelope"></i><span><?= htmlspecialchars($user_email) ?></span></div>
  <?php if($user_phone): ?><div class="profile-info-row"><i class="fas fa-phone"></i><span><?= htmlspecialchars($user_phone) ?></span></div><?php endif; ?>
- <?php if($user_brgy): ?><div class="profile-info-row"><i class="fas fa-map-pin"></i><span><?= htmlspecialchars($user_brgy) ?></span></div><?php endif; ?>
- <?php if($user_muni): ?><div class="profile-info-row"><i class="fas fa-city"></i><span><?= htmlspecialchars($user_muni) ?></span></div><?php endif; ?>
- </div>
- <div class="pf-divider"></div>
- <div class="pf-section-label"><i class="fas fa-satellite-dish" style="margin-right:5px;color:var(--green);"></i>GPS Location</div>
- <div class="gps-section">
- <div class="gps-section-hdr"><i class="fas fa-crosshairs"></i>Saved Location</div>
- <div class="gps-coords <?= !is_null($saved_gps_lat)?'has-gps':'' ?>" id="gpsCoordsDisplay">
- <?php if(!is_null($saved_gps_lat)): ?><i class="fas fa-circle-check"></i> <?= number_format((float)$saved_gps_lat,6) ?>, <?= number_format((float)$saved_gps_lng,6) ?><?php else: ?><i class="fas fa-circle-info"></i> No GPS saved yet<?php endif; ?>
- </div>
- <p class="gps-help">Unlocks the <strong>Incidents Map</strong> and proximity alerts. Not shared publicly.</p>
- <button class="btn-gps" id="getGpsBtn" onclick="saveGPS()"><i class="fas fa-location-crosshairs"></i> Get GPS Data</button>
+ <?php if($user_barangay): ?><div class="profile-info-row"><i class="fas fa-location-dot"></i><span>Brgy <?= htmlspecialchars($user_barangay) ?><?= $user_address ? ' · '.htmlspecialchars($user_address) : '' ?></span></div><?php endif; ?>
  </div>
  </div>
  <div class="profile-card">
@@ -804,13 +768,21 @@ function actionToast(message,type){
  <div class="form-group"><label>Last Name</label><input name="last_name" value="<?= htmlspecialchars($lname) ?>" maxlength="100" required></div>
  </div>
  <div class="form-group"><label>Phone Number</label><input name="phone" value="<?= htmlspecialchars($user_phone) ?>" placeholder="e.g. 09XX-XXX-XXXX" maxlength="30"></div>
+ <div class="pf-divider"></div>
+ <div class="pf-section-label">Residence</div>
  <div class="form-row">
  <div class="form-group">
- <label>Barangay <?php if($brgy_locked): ?><i class="fas fa-lock" style="color:var(--muted);font-size:.75rem;"></i><?php endif; ?></label>
- <input id="pfBrgy" name="barangay_name" value="<?= htmlspecialchars($user_brgy) ?>" placeholder="Your barangay" maxlength="150" <?= $brgy_locked?'readonly style="opacity:.7;cursor:not-allowed;"':'' ?>>
- <div id="pfBrgyHint" style="font-size:.74rem;color:var(--muted);margin-top:4px;<?= $brgy_locked?'':'display:none;' ?>"></div></div>
- <div class="form-group"><label>City / Municipality</label><input name="municipality" value="<?= htmlspecialchars($user_muni) ?>" placeholder="e.g. Imus, Cavite" maxlength="150"></div>
+ <label>Barangay</label>
+ <select name="barangay_name" required>
+ <option value="">Select your barangay</option>
+ <?php foreach (sentri_barangay_names() as $brgyName): ?>
+ <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"<?= $brgyName === $user_barangay ? ' selected' : '' ?>><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
+ <?php endforeach; ?>
+ </select>
  </div>
+ <div class="form-group"><label>City / Municipality</label><input value="Imus City" readonly style="opacity:.7;cursor:not-allowed;"></div>
+ </div>
+ <div class="form-group"><label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label><input name="resident_address" value="<?= htmlspecialchars($user_address) ?>" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required></div>
  <div class="pf-divider"></div>
  <div class="pf-section-label">Change Password <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;">(leave blank to keep current)</span></div>
  <div class="form-row">
@@ -1047,10 +1019,6 @@ function actionToast(message,type){
 <script>
 const MY_USER_ID = <?= $uid ?>;
 const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
-const SAVED_LAT = <?= is_null($saved_gps_lat)?'null':(float)$saved_gps_lat ?>;
-const SAVED_LNG = <?= is_null($saved_gps_lng)?'null':(float)$saved_gps_lng ?>;
-const USER_BRGY = <?= json_encode((string)$user_brgy) ?>;
-const USER_MUNI = <?= json_encode((string)$user_muni) ?>;
 const INIT_COLOR = '<?= htmlspecialchars($avatar_color) ?>';
 const DM_KEY = `sentri_dm_${MY_USER_ID}`;
 
@@ -1061,7 +1029,7 @@ const CL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',he
 const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#ea580c','#d97706','#16a34a','#0891b2','#374151','#be185d','#0f766e','#7c2d12','#1d4ed8'];
 
 let allReports=[], curView='feed';
-let userLat=SAVED_LAT, userLng=SAVED_LNG, hasGPS=SAVED_LAT!==null, liveGPS=false;
+let userLat=null, userLng=null, hasGPS=false, liveGPS=false;
 const alertTimes={};
 
 /* Dark mode */
@@ -1076,10 +1044,10 @@ function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.
 window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
 
 /* GPS */
-function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent=liveGPS?'GPS Live':'GPS Saved';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
+function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent='GPS Live';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
 function setGPSAccuracy(m){const el=document.getElementById('gpsAcc');if(!el)return;if(m==null||!isFinite(m)||m<=0){el.style.display='none';return;}const good=m<12,ok=m<50;el.style.display='inline';el.style.color=good?'#16a34a':ok?'#d97706':'#dc2626';el.textContent=`±${Math.round(m)}m ${good?'good':ok?'ok':'weak'}`;}
 function gpsErrorMessage(err){if(!err)return'Could not get your location — set it on the map instead.';if(typeof err.code==='number'){const t={1:'Location access denied — allow location for this site in your browser settings, or pick your spot on the map.',2:'Location services unavailable — drag the pin on the map to set it manually.',3:'Location fix timed out (no GPS/Wi-Fi source) — drag the pin on the map to set it manually.'};return t[err.code]||'Could not get your location.';}return err.message||'Could not get your location — set it on the map instead.';}
-function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;SentriGeo.watchUserLocation(pos=>{if(pos.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){userLat=SAVED_LAT;userLng=SAVED_LNG;hasGPS=true;liveGPS=false;setGPSAccuracy(null);updateChip();checkProximity();return;}userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();},()=>{setGPSAccuracy(null);updateChip();});}
+function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;SentriGeo.watchUserLocation(pos=>{userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();},()=>{setGPSAccuracy(null);updateChip();});}
 function haversine(a,b,c,d){return SentriGeo.haversine(a,b,c,d);}
 function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now();allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const d=haversine(userLat,userLng,r.latitude,r.longitude);if(d<=(r.radius_m||200)){if(now-(alertTimes[r.id]||0)<300000)return;alertTimes[r.id]=now;showToast(r,Math.round(d));}});}
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
@@ -1130,6 +1098,7 @@ function renderFeed(mineOnly=false){
  <span><i class="fas fa-city"></i>${esc(r.city)}${r.province?', '+esc(r.province):''}</span>
  <span><i class="fas fa-clock"></i>${date}</span>
  <span><i class="fas fa-user"></i>${esc(r.poster_name)}</span>
+ ${r.poster_barangay?`<span title="Reporter residence"><i class="fas fa-house-user"></i>Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</span>`:''}
  ${hasPh?`<span><i class="fas fa-camera" style="color:var(--blue-accent);"></i>${r.images.length} photo${r.images.length>1?'s':''}</span>`:''}
  </div>
  <div class="card-body"><p>${esc((r.description||'').substring(0,200))}${(r.description||'').length>200?'…':''}</p></div>
@@ -1198,11 +1167,11 @@ function watchMapResize(getMap,el){
 /* Inline map (overview toggle) */
 let inlineMap=null,inlineLayers=[];
 function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(inlineMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);SentriGeo.addBarangayOverlay(inlineMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!inlineLayers.length)inlineMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderInlineMap();}).catch(()=>{});watchMapResize(()=>inlineMap,document.getElementById('inlineMap'));setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
-function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
+function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}${r.poster_barangay?` · Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}`:''}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
 
 /* Full incidents map */
 let mainMap=null,mainLayers=[];
-function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
+function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div>${r.poster_barangay?`<div style="color:#888;margin-top:2px;">Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</div>`:''}<div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
@@ -1273,11 +1242,11 @@ function initPickerMap(){
  if(pickerMap){setTimeout(()=>pickerMap.invalidateSize(),60);return;}
  const curLat=parseFloat(document.getElementById('r_latitude').value)||null;
  const curLng=parseFloat(document.getElementById('r_longitude').value)||null;
- const lat=curLat!==null?curLat:(SAVED_LAT!==null?SAVED_LAT:14.4240);
- const lng=curLng!==null?curLng:(SAVED_LNG!==null?SAVED_LNG:120.9215);
- const zoom=(curLat!==null||SAVED_LAT!==null)?15:13;
+ const lat=curLat!==null?curLat:14.4240;
+ const lng=curLng!==null?curLng:120.9215;
+ const zoom=curLat!==null?15:13;
  pickerMap=L.map('pickerMap').setView([lat,lng],zoom);
- SentriGeo.lockToImus(pickerMap,{fit:(!curLat&&!SAVED_LAT)});
+ SentriGeo.lockToImus(pickerMap,{fit:curLat===null});
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(pickerMap);
  SentriGeo.addBarangayOverlay(pickerMap,{
   labels:true,
@@ -1306,10 +1275,10 @@ function initPickerMap(){
   }
  }).then(l=>{
   pickerGeoLayer=l;
-  if(!curLat&&!SAVED_LAT){
+  if(curLat===null){
    try{pickerMap.fitBounds(l.getBounds(),{padding:[15,15]});}catch(e){}
   }
-  const curB=document.getElementById('r_barangay').value.trim()||USER_BRGY;
+  const curB=document.getElementById('r_barangay').value.trim();
   if(curB)highlightPickerBarangay(curB);
  }).catch(()=>{});
  pickerMap.on('click',e=>placePin(e.latlng.lat,e.latlng.lng,true));
@@ -1317,24 +1286,16 @@ function initPickerMap(){
  setTimeout(()=>{
   pickerMap.invalidateSize();
   if(curLat!==null)placePin(curLat,curLng,false);
-  else if(SAVED_LAT!==null)placePin(SAVED_LAT,SAVED_LNG,false);
  },150);
 }
 
-/* ── Pin must stay inside the user's own profile barangay ── */
-function normBrgy(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/barangay|brgy/g,'').replace(/[^a-z0-9]/g,'');}
-const USER_BRGY_KEY = normBrgy(USER_BRGY);
+/* ── The dropped pin is the only source of a community report's location ── */
 let _lastPin = null;
 
 let _pinChecking=false;
 async function pinAllowed(lat,lng){
- if(!USER_BRGY_KEY){actionToast('Set your barangay in My Profile before posting a report.','error');return false;}
  const b = await SentriGeo.findBarangay(lat,lng);
  if(!b){actionToast('That spot is not inside any Imus barangay.','error');return false;}
- if(normBrgy(b.name)!==USER_BRGY_KEY){
-  actionToast(`You can only report inside your barangay (${USER_BRGY}). That spot is in ${b.name}.`,'error');
-  return false;
- }
  return true;
 }
 
@@ -1396,7 +1357,7 @@ function clearPin(){
  highlightPickerBarangay(null);
  document.getElementById('r_latitude').value='';
  document.getElementById('r_longitude').value='';
- const bEl=document.getElementById('r_barangay');if(bEl)bEl.value=USER_BRGY||'';
+ const bEl=document.getElementById('r_barangay');if(bEl)bEl.value='';
  const lEl=document.getElementById('r_location');if(lEl)lEl.value='';
  document.getElementById('r_radius_m').value='200';
  const rs=document.getElementById('radiusSlider');if(rs)rs.value=200;
@@ -1425,7 +1386,7 @@ async function reverseGeocode(lat,lng){
    if(cityEl) cityEl.value='Imus';
    if(provEl) provEl.value='Cavite';
    if(brgyEl&&!brgyEl.value.trim()){
-    const brgy=a.quarter||a.neighbourhood||a.suburb||a.village||a.hamlet||USER_BRGY||'';
+    const brgy=a.quarter||a.neighbourhood||a.suburb||a.village||a.hamlet||'';
     if(brgy) brgyEl.value=brgy;
    }
   }
@@ -1708,7 +1669,7 @@ function initAddressSuggestions(){
 }
 function useMyLocation(){
  const btn=document.getElementById('locateBtn');
- const fallback=()=>{if(SAVED_LAT!==null&&SAVED_LNG!==null&&(!SentriGeo.geoReady()||SentriGeo.isInImus(SAVED_LAT,SAVED_LNG))){placePin(SAVED_LAT,SAVED_LNG,true);return;}const cf=document.getElementById('r_city');if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}};
+ const fallback=()=>{const cf=document.getElementById('r_city');if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}};
  if(!navigator.geolocation){fallback();return;}
  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating…';
  btn.disabled=true;
@@ -1717,16 +1678,7 @@ function useMyLocation(){
  btn.disabled=false;
  if(SentriGeo.geoReady()&&!SentriGeo.isInImus(pos.lat,pos.lng)){
   actionToast('Your detected location is outside Imus City. Reports can only be filed within Imus.','error');
-  if(SAVED_LAT!==null&&SAVED_LNG!==null&&SentriGeo.isInImus(SAVED_LAT,SAVED_LNG)){
-   placePin(SAVED_LAT,SAVED_LNG,true);
-  }
   return;
- }
- if(pos.accuracy>1500&&SAVED_LAT!==null&&SAVED_LNG!==null){
-  if(!SentriGeo.geoReady()||SentriGeo.isInImus(SAVED_LAT,SAVED_LNG)){
-   placePin(SAVED_LAT,SAVED_LNG,true);
-   return;
-  }
  }
  userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();
  placePin(pos.lat,pos.lng,true);
@@ -1742,16 +1694,7 @@ function useMyLocation(){
 function openModal(){
  document.getElementById('modalOverlay').classList.add('open');
  initAddressSuggestions();
- if(USER_BRGY&&!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=USER_BRGY;
- if(USER_MUNI&&!document.getElementById('r_city').value)document.getElementById('r_city').value=USER_MUNI;
- else if(!document.getElementById('r_city').value)document.getElementById('r_city').value='Imus';
- const initLat=liveGPS&&userLat!==null?userLat:SAVED_LAT;
- const initLng=liveGPS&&userLng!==null?userLng:SAVED_LNG;
- if(initLat!==null&&initLng!==null){
-  if(!SentriGeo.geoReady()||SentriGeo.isInImus(initLat,initLng)){
-   setTimeout(()=>placePin(initLat,initLng,true),250);
-  }
- }
+ if(!document.getElementById('r_city').value)document.getElementById('r_city').value='Imus';
 }
 function closeModal(){
  document.getElementById('modalOverlay').classList.remove('open');
@@ -1855,15 +1798,19 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  }
  const la=parseFloat(document.getElementById('r_latitude').value);
  const ln=parseFloat(document.getElementById('r_longitude').value);
-  if(!isNaN(la)&&!isNaN(ln)&&!(await pinAllowed(la,ln))){
-  showMsg(msgEl,'error','Pin must be inside your own barangay ('+USER_BRGY+').');
+ if(isNaN(la)||isNaN(ln)){
+  showMsg(msgEl,'error','Drop a pin on the map to set the incident location.');
+  return;
+ }
+ if(!(await pinAllowed(la,ln))){
+  showMsg(msgEl,'error','Pin must be inside an Imus barangay.');
   return;
  }
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
  fd.append('incident_type',incType);
- fd.append('location_name',loc);fd.append('barangay', USER_BRGY);   // replaces the r_barangay.value line
+ fd.append('location_name',loc);fd.append('barangay', document.getElementById('r_barangay').value.trim());
  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);
  fd.append('longitude',document.getElementById('r_longitude').value);fd.append('radius_m',document.getElementById('r_radius_m').value);
@@ -1882,7 +1829,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span>${r.poster_barangay?`<br><span>Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</span>`:''} - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -1967,8 +1914,6 @@ let selColor=INIT_COLOR;
 function buildPalette(){const pal=document.getElementById('colorPalette');if(!pal)return;pal.innerHTML=SWATCHES.map(c=>`<div class="color-swatch${c===selColor?' selected':''}" style="background:${c}" onclick="pickColor('${c}')"></div>`).join('');}
 function pickColor(c){selColor=c;const prev=document.getElementById('avatarPreview');if(prev)prev.style.background=c;buildPalette();const fn='<?= htmlspecialchars($fname,ENT_QUOTES) ?>';const ln='<?= htmlspecialchars($lname,ENT_QUOTES) ?>';const em='<?= htmlspecialchars($user_email,ENT_QUOTES) ?>';const fd=new FormData();fd.append('action','update_profile');fd.append('avatar_color',c);fd.append('first_name',fn);fd.append('last_name',ln);fd.append('email',em);fetch('../api/reports.php',{method:'POST',body:fd}).catch(()=>{});}
 
-/* Profile: GPS */
-async function saveGPS(){if(!navigator.geolocation){alert('Geolocation not supported.');return;}const btn=document.getElementById('getGpsBtn');const disp=document.getElementById('gpsCoordsDisplay');btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Acquiring…';try{const pos=await SentriGeo.getUserLocation({enableHighAccuracy:true});const lat=pos.lat,lng=pos.lng;const acc=pos.accuracy&&isFinite(pos.accuracy)?` · ±${Math.round(pos.accuracy)}m ${pos.accuracy<12?'good':pos.accuracy<50?'ok':'weak'}`:'';const fd=new FormData();fd.append('action','save_gps');fd.append('latitude',lat);fd.append('longitude',lng);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){if(disp){disp.className='gps-coords has-gps';disp.innerHTML=`<i class="fas fa-circle-check"></i> ${lat.toFixed(6)}, ${lng.toFixed(6)}${acc}`;}const pfMsg=document.getElementById('pfMsg');if(pfMsg)showMsg(pfMsg,'success','GPS saved! Map and alerts unlocked.');userLat=lat;userLng=lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();}}catch{}btn.disabled=false;btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Get GPS Data';}catch(err){alert(gpsErrorMessage(err));btn.disabled=false;btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Get GPS Data';}}
 
 /* Safety Guide */
 const GUIDE_TABS = {
@@ -2647,6 +2592,67 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
 </div>
 
 <?= csrf_script() ?>
+<?php if($needs_residence): ?>
+<!-- Mandatory resident-profile gate: existing accounts must supply a barangay
+     and home address before they can use the portal or file a report. -->
+<div id="residenceGate" role="dialog" aria-modal="true" aria-labelledby="residenceGateTitle" style="position:fixed;inset:0;z-index:100000;background:rgba(6,24,44,.72);display:flex;align-items:center;justify-content:center;padding:18px;">
+ <div style="background:var(--card,#fff);border-radius:16px;max-width:480px;width:100%;padding:26px 26px 22px;box-shadow:0 24px 60px rgba(0,0,0,.35);max-height:90vh;overflow:auto;">
+ <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+ <div style="width:44px;height:44px;border-radius:12px;background:#eff6ff;color:#2563eb;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;"><i class="fas fa-location-dot"></i></div>
+ <div>
+ <h2 id="residenceGateTitle" style="font-size:1.05rem;font-weight:800;color:var(--text);margin:0;">Complete your resident profile</h2>
+ <p style="font-size:.78rem;color:var(--muted);margin:2px 0 0;">Required before you can report incidents.</p>
+ </div>
+ </div>
+ <p style="font-size:.8rem;color:var(--muted);line-height:1.55;margin:12px 0 16px;">Your barangay and home address are shown to Barangay and LGU officials on every report you file. This helps verify legitimate reports and prevent fake ones.</p>
+ <div id="residenceGateMsg" style="display:none;padding:9px 12px;border-radius:9px;font-size:.8rem;font-weight:600;margin-bottom:12px;"></div>
+ <form id="residenceGateForm">
+ <input type="hidden" name="action" value="update_profile">
+ <input type="hidden" name="first_name" value="<?= htmlspecialchars($fname, ENT_QUOTES, 'UTF-8') ?>">
+ <input type="hidden" name="last_name" value="<?= htmlspecialchars($lname, ENT_QUOTES, 'UTF-8') ?>">
+ <input type="hidden" name="email" value="<?= htmlspecialchars($user_email, ENT_QUOTES, 'UTF-8') ?>">
+ <input type="hidden" name="avatar_color" value="<?= htmlspecialchars($avatar_color, ENT_QUOTES, 'UTF-8') ?>">
+ <div class="form-group">
+ <label>Barangay</label>
+ <select name="barangay_name" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
+ <option value="">Select your barangay</option>
+ <?php foreach (sentri_barangay_names() as $brgyName): ?>
+ <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+ <div class="form-group">
+ <label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label>
+ <input type="text" name="resident_address" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
+ </div>
+ <button type="submit" id="residenceGateBtn" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,var(--blue-accent,#3a8dff),var(--blue,#1c57b2));color:#fff;font-size:.92rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;"><i class="fas fa-floppy-disk" style="margin-right:7px;"></i><span>Save and continue</span></button>
+ </form>
+ </div>
+</div>
+<script>
+(function(){
+ var f=document.getElementById('residenceGateForm'); if(!f) return;
+ f.addEventListener('submit',async function(e){
+  e.preventDefault();
+  var btn=document.getElementById('residenceGateBtn');
+  var msg=document.getElementById('residenceGateMsg');
+  btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin" style="margin-right:7px;"></i><span>Saving...</span>';
+  msg.style.display='none';
+  try{
+   var res=await fetch('../api/reports.php',{method:'POST',body:new FormData(f)});
+   var d=await res.json();
+   if(d.status==='success'){ location.reload(); return; }
+   msg.textContent=d.message||'Could not save your profile.';
+   msg.style.cssText='display:block;padding:9px 12px;border-radius:9px;font-size:.8rem;font-weight:600;margin-bottom:12px;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;';
+  }catch(err){
+   msg.textContent='Error: '+err.message;
+   msg.style.cssText='display:block;padding:9px 12px;border-radius:9px;font-size:.8rem;font-weight:600;margin-bottom:12px;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;';
+  }
+  btn.disabled=false; btn.innerHTML='<i class="fas fa-floppy-disk" style="margin-right:7px;"></i><span>Save and continue</span>';
+ });
+})();
+</script>
+<?php endif; ?>
 <div class="video-modal" id="tutorialModal" role="dialog" aria-modal="true">
  <div class="video-card">
  <div class="video-head">
@@ -2657,18 +2663,6 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  </div>
 </div>
 <script>
-(function(){
- let left = <?= (int)($brgy_lock_secs ?? 0) ?>;
- const inp = document.getElementById('pfBrgy'), hint = document.getElementById('pfBrgyHint');
- if(!inp || !hint || left <= 0) return;
- const fmt = s => Math.floor(s/60) + 'm ' + String(s%60).padStart(2,'0') + 's';
- const tick = () => {
-  if(left <= 0){ inp.readOnly = false; inp.style.opacity = ''; inp.style.cursor = ''; hint.style.display = 'none'; return; }
-  hint.textContent = 'Locked to prevent report abuse. You can change it again in ' + fmt(left);
-  left--; setTimeout(tick, 1000);
- };
- tick();
-})();
 function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
