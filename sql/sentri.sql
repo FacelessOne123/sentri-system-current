@@ -24,6 +24,7 @@ CREATE TABLE `users` (
  `barangay_name` VARCHAR(150) DEFAULT NULL,
  `barangay_changed_at` DATETIME DEFAULT NULL,
  `municipality` VARCHAR(150) DEFAULT NULL,
+ `resident_address` VARCHAR(255) DEFAULT NULL,
  `responder_type` VARCHAR(30) DEFAULT NULL,
  `is_approved` TINYINT(1) NOT NULL DEFAULT 0,
  `email_verified` TINYINT(1) NOT NULL DEFAULT 0,
