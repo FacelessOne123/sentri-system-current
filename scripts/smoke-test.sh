@@ -61,20 +61,16 @@ LS=$(login lgu lgu lgu@demo.ph Demo@1234)            && p "lgu (sentri-gov)"    
 AS=$(login admin admin admin@sentri.ph Admin@1234)     && p "admin (sentri-admin)"    || f "admin"
 
 say "2. Full cross-realm transaction chain (community → barangay → LGU → responder → admin)"
-# Ensure community demo fixture is assigned to Bucandala I
-curl -s -b "$JDIR/community.jar" -X POST "$BASE/portal/community.php?view=profile" \
-  -d "save_profile=1&first_name=Demo&last_name=Community&phone=09123456789&municipality=Imus&barangay_name=Bucandala+I" > /dev/null
-p "community barangay fixture ensured (Bucandala I)"
 TC=$(csrf_for "$JDIR/community.jar" "$BASE/portal/community.php")
 
-# Resident boundary rule: submitting outside assigned barangay must be rejected
-OUT_BRGY=$(curl -s -b "$JDIR/community.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
-  -F "action=post_report" -F "csrf_token=$TC" -F "title=[SMOKE] Out-of-bounds" \
-  -F "description=smoke-test fixture" -F "location_name=Alapan site" \
+# Pins outside Imus must be rejected — the pin is the only location source
+OUT_IMUS=$(curl -s -b "$JDIR/community.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+  -F "action=post_report" -F "csrf_token=$TC" -F "title=[SMOKE] Outside Imus" \
+  -F "description=smoke-test fixture" -F "location_name=Manila site" \
   -F "city=Imus" -F "category=infrastructure" -F "status=dangerous" \
-  -F "latitude=14.421881" -F "longitude=120.916066" -F "radius_m=120")
-echo "$OUT_BRGY" | grep -q "You can only report incidents inside your own barangay" \
-  && p "out-of-barangay report rejected by server rule" || f "out-of-barangay expected reject: $OUT_BRGY"
+  -F "latitude=14.5995" -F "longitude=120.9842" -F "radius_m=120")
+echo "$OUT_IMUS" | grep -q "Pin the incident inside an Imus barangay" \
+  && p "outside-Imus report rejected by server rule" || f "outside-Imus expected reject: $OUT_IMUS"
 
 CENTER=$(node -e 'const fs=require("fs");const fc=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const b=fc.features.find(f=>f.properties.name==="Bucandala I");console.log(b.properties.center.join(" "))' "$PWD/assets/geo/imus-barangays.geojson" 2>/dev/null)
 if [[ -z $CENTER ]]; then s "geojson/node not available for center lookup"
@@ -163,14 +159,15 @@ if [[ -n $LV ]]; then
     curl -s -b "$UJ" -c "$UJ" -X POST "$BASE/login.php" \
       --data-urlencode "email=smoke.t$STAMP@demo.ph" --data-urlencode "password=Smoke@1234" > /dev/null
     UN_REDIR=$(curl -s -b "$UJ" -o /dev/null -w '%{redirect_url}' "$BASE/portal/community.php?view=overview")
-    [[ $UN_REDIR == *"view=map&locked=1"* ]] && p "unassigned member overview redirected to locked map" || f "overview redirect expected map&locked=1 got '$UN_REDIR'"
-    UN_TC=$(csrf_for "$UJ" "$BASE/portal/community.php?view=map")
+    [[ -z $UN_REDIR || $UN_REDIR != *"view=map&locked=1"* ]] && p "member with no profile location reaches overview" || f "unexpected locked redirect: $UN_REDIR"
+    UN_TC=$(csrf_for "$UJ" "$BASE/portal/community.php?view=overview")
     UN_POST=$(curl -s -b "$UJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
-      -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] Blocked" \
+      -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] Pin-based" \
       -F "description=fixture" -F "location_name=site" -F "city=Imus" \
-      -F "category=infrastructure" -F "status=dangerous" -F "latitude=14.4087" -F "longitude=120.9299")
-    echo "$UN_POST" | grep -q "Assign your barangay in My Profile before posting a report." \
-      && p "unassigned member cannot report" || f "unassigned report post expected reject: $UN_POST"
+      -F "category=infrastructure" -F "status=dangerous" -F "latitude=14.421881" -F "longitude=120.916066")
+    echo "$UN_POST" | grep -q '"status":"success"' \
+      && p "member with no profile location can report from the pin" || f "pin-based report expected success: $UN_POST"
+    $MYSQL_CMD -e "DELETE FROM reports WHERE title='[SMOKE] Pin-based';" >/dev/null 2>&1 || true
   fi
 else
   s "no outbox mail (live SMTP expected; add APP_DEBUG=1 to .env for offline)"

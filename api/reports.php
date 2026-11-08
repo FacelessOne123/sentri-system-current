@@ -509,22 +509,14 @@ switch ($action) {
  }
  }
 
-  // ── Residents may only report inside their own profile barangay ──
+  // ── Community location comes from the dropped pin, never a profile default ──
  if (in_array($role, ['community','user'], true)) {
- $pb = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
- $pb->bind_param("i", $user_id); $pb->execute();
- $pb->bind_result($prof_brgy); $pb->fetch(); $pb->close();
- $prof_brgy = (string)$prof_brgy;
-
- if (sentri_geo_norm_brgy($prof_brgy) === '') {
- echo json_encode(['status'=>'error','message'=>'Assign your barangay in My Profile before posting a report.']); exit;
- }
  if ($lat === null || $lng === null) {
  echo json_encode(['status'=>'error','message'=>'Please pin the incident location on the map.']); exit;
  }
  $pin_brgy = sentri_geo_detect((float)$lat, (float)$lng);
- if (!$pin_brgy || sentri_geo_norm_brgy($pin_brgy) !== sentri_geo_norm_brgy($prof_brgy)) {
- echo json_encode(['status'=>'error','message'=>'You can only report incidents inside your own barangay ('.$prof_brgy.').']); exit;
+ if (!$pin_brgy) {
+ echo json_encode(['status'=>'error','message'=>'Pin the incident inside an Imus barangay.']); exit;
  }
  $barangay = $pin_brgy; // canonical OSM name, never the client value
  }
