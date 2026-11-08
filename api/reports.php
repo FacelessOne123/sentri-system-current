@@ -74,6 +74,7 @@ if (!$ident) {
 }
 
 require __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/geo.php';
 require_once __DIR__ . '/../config/csrf.php';
 csrf_validate();
 
@@ -319,6 +320,9 @@ switch ($action) {
  r.city, r.province, r.latitude, r.longitude, r.radius_m,
  r.status, r.category, r.upvotes, r.downvotes, r.created_at,
  CONCAT(u.first_name,' ',u.last_name) AS poster_name,
+ u.barangay_name AS poster_barangay,
+ u.municipality AS poster_city,
+ u.resident_address AS poster_address,
  v.vote AS user_vote
  FROM reports r
  INNER JOIN users u ON r.user_id = u.id
@@ -491,6 +495,20 @@ switch ($action) {
  }
  if (!in_array($status_val,$allowed_s)) { echo json_encode(['status'=>'error','message'=>'Invalid status.']); exit; }
  if (!in_array($category,$allowed_c)) { echo json_encode(['status'=>'error','message'=>'Invalid category.']); exit; }
+
+ // ── Reporter residence is mandatory (anti-abuse) ────────────────────────
+ // Every community report must be attributable to a resident with a known
+ // barangay + home address, so officials can verify who filed it.
+ $uAddrCol = $conn->query("SHOW COLUMNS FROM users LIKE 'resident_address'");
+ if ($uAddrCol && $uAddrCol->num_rows === 0) {
+ $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
+ }
+ $rp = $conn->prepare("SELECT barangay_name, resident_address FROM users WHERE id=? LIMIT 1");
+ $rp->bind_param("i", $user_id); $rp->execute();
+ $rp->bind_result($rep_brgy, $rep_addr); $rp->fetch(); $rp->close();
+ if (trim((string)$rep_brgy) === '' || trim((string)$rep_addr) === '') {
+ echo json_encode(['status'=>'error','message'=>'Please complete your resident profile (barangay and home address) before reporting.']); exit;
+ }
 
  // ── Trusted barangay tagging: authoritative detection from real perimeters ─
  // For Imus reports with GPS, the OSM perimeter set decides the barangay —
@@ -940,7 +958,26 @@ switch ($action) {
  // Validate avatar color (hex)
  if (!preg_match('/^#[0-9a-fA-F]{6}$/', $avatar_color)) $avatar_color = '#1c57b2';
 
- // Ensure avatar_color column exists
+ // Optional residence update (signup prompt / My Profile). Existing callers
+ // that only change the avatar may omit these keys entirely.
+ $has_residence = array_key_exists('barangay_name', $_POST) || array_key_exists('resident_address', $_POST);
+ $barangay_val = null; $address_val = null;
+ if ($has_residence) {
+ $barangay_in = trim($_POST['barangay_name'] ?? '');
+ $address_val = trim($_POST['resident_address'] ?? '');
+ if ($barangay_in === '' || $address_val === '') {
+ echo json_encode(['status'=>'error','message'=>'Barangay and home address are required.']); exit;
+ }
+ $barangay_val = sentri_barangay_canonical($barangay_in);
+ if ($barangay_val === null) {
+ echo json_encode(['status'=>'error','message'=>'Please select a valid Imus barangay.']); exit;
+ }
+ if (mb_strlen($address_val) < 5 || mb_strlen($address_val) > 255) {
+ echo json_encode(['status'=>'error','message'=>'Please enter a complete home address (5-255 characters).']); exit;
+ }
+ }
+
+ // Ensure avatar_color / resident_address columns exist
  $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
  $chkCols = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
  $existCols = [];
@@ -948,12 +985,26 @@ switch ($action) {
  if (!in_array('avatar_color', $existCols)) {
  $conn->query("ALTER TABLE users ADD COLUMN avatar_color VARCHAR(7) NOT NULL DEFAULT '#1c57b2'");
  }
+ if (!in_array('resident_address', $existCols)) {
+ $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
+ }
 
  // Check email uniqueness (exclude current user)
  $ck = $conn->prepare("SELECT id FROM users WHERE email=? AND id!=? LIMIT 1");
  $ck->bind_param("si", $email, $user_id); $ck->execute(); $ck->store_result();
  if ($ck->num_rows > 0) { echo json_encode(['status'=>'error','message'=>'That email is already in use.']); exit; }
  $ck->close();
+
+ // Build the update dynamically so residence fields stay optional.
+ $sets = "first_name=?, last_name=?, email=?, avatar_color=?";
+ $types = "ssss";
+ $vals = [$first_name, $last_name, $email, $avatar_color];
+ if ($has_residence) {
+ $sets .= ", barangay_name=?, resident_address=?";
+ $types .= "ss";
+ $vals[] = $barangay_val;
+ $vals[] = $address_val;
+ }
 
  // Password change requested?
  if (!empty($new_pw)) {
@@ -964,13 +1015,15 @@ switch ($action) {
  if (!password_verify($current_pw, $hashed)) {
  echo json_encode(['status'=>'error','message'=>'Current password is incorrect.']); exit;
  }
- $new_hash = password_hash($new_pw, PASSWORD_DEFAULT);
- $upd = $conn->prepare("UPDATE users SET first_name=?, last_name=?, email=?, avatar_color=?, password=? WHERE id=?");
- $upd->bind_param("sssssi", $first_name, $last_name, $email, $avatar_color, $new_hash, $user_id);
- } else {
- $upd = $conn->prepare("UPDATE users SET first_name=?, last_name=?, email=?, avatar_color=? WHERE id=?");
- $upd->bind_param("ssssi", $first_name, $last_name, $email, $avatar_color, $user_id);
+ $sets .= ", password=?";
+ $types .= "s";
+ $vals[] = password_hash($new_pw, PASSWORD_DEFAULT);
  }
+
+ $types .= "i";
+ $vals[] = $user_id;
+ $upd = $conn->prepare("UPDATE users SET $sets WHERE id=?");
+ $upd->bind_param($types, ...$vals);
 
  if ($upd->execute()) {
  // Update session
@@ -1078,6 +1131,25 @@ switch ($action) {
   if (!sentri_verify_barangay_jurisdiction($conn, $user_id, $report_id, $ident['barangay_name'] ?? null)) {
    echo json_encode(['status'=>'error','message'=>'Unauthorized: You can only resolve reports in your assigned barangay.']);
    exit;
+  }
+ }
+
+ // A dispatched responder must clear the incident first: while a report has
+ // an assigned responder and no resolved_at yet, Brgy/LGU cannot resolve it.
+ // Admins stay exempt so they can always override a stuck report.
+ $guard = $conn->prepare("SELECT assigned_to, resolved_at, status FROM reports WHERE id=? AND is_archived=0 LIMIT 1");
+ $guard->bind_param("i", $report_id); $guard->execute();
+ $g = $guard->get_result()->fetch_assoc(); $guard->close();
+ if (!$g) { echo json_encode(['status'=>'error','message'=>'Report not found.']); exit; }
+ if ($role !== 'admin') {
+  if ($g['resolved_at'] !== null || $g['status'] === 'safe') {
+   echo json_encode(['status'=>'error','message'=>'This incident is already resolved.']); exit;
+  }
+  if ($role !== 'first_responder' && !empty($g['assigned_to'])) {
+   echo json_encode(['status'=>'error','message'=>'A first responder is handling this incident. The responder must resolve it first.']); exit;
+  }
+  if ($role === 'first_responder' && (int)$g['assigned_to'] !== $user_id) {
+   echo json_encode(['status'=>'error','message'=>'This report is not assigned to you.']); exit;
   }
  }
  if ($role === 'first_responder') {
@@ -1196,6 +1268,22 @@ switch ($action) {
   if (!sentri_verify_barangay_jurisdiction($conn, $user_id, $report_id, $ident['barangay_name'] ?? null)) {
    echo json_encode(['status'=>'error','message'=>'Unauthorized: You can only update reports in your assigned barangay.']);
    exit;
+  }
+ }
+ // Second resolve path: marking a report safe must obey the same responder-first
+ // lock as resolve_report(). Admins stay exempt.
+ if ($role !== 'admin') {
+  $guard = $conn->prepare("SELECT assigned_to, resolved_at, status FROM reports WHERE id=? AND is_archived=0 LIMIT 1");
+  $guard->bind_param("i", $report_id); $guard->execute();
+  $g = $guard->get_result()->fetch_assoc(); $guard->close();
+  if (!$g) { echo json_encode(['status'=>'error','message'=>'Report not found.']); exit; }
+  if ($new_status === 'safe') {
+   if ($g['resolved_at'] !== null || $g['status'] === 'safe') {
+    echo json_encode(['status'=>'error','message'=>'This incident is already resolved.']); exit;
+   }
+   if (!empty($g['assigned_to'])) {
+    echo json_encode(['status'=>'error','message'=>'A first responder is handling this incident. The responder must resolve it first.']); exit;
+   }
   }
  }
  $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL';
