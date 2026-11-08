@@ -5,6 +5,7 @@ require_once __DIR__ . '/../config/auth.php';
 require_role(['community','user']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/geo.php';
 
 
 $identity = sentri_identity();
@@ -16,10 +17,24 @@ $view = $_GET['view'] ?? 'overview';
 /* ── Profile ─────────────────────────────────────────────────── */
 $avatar_color = '#1c57b2';
 $user_email = $user_phone = '';
+$user_barangay = $user_address = '';
 
-$s = $conn->prepare("SELECT email, phone_number FROM users WHERE id=? LIMIT 1");
+// Residence columns are created by the login/signup migrations; ensure they
+// exist before selecting so an older session does not break the portal.
+$rc = $conn->query("SHOW COLUMNS FROM users LIKE 'resident_address'");
+if ($rc && $rc->num_rows === 0) {
+ $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
+}
+
+$s = $conn->prepare("SELECT email, phone_number, barangay_name, resident_address FROM users WHERE id=? LIMIT 1");
 $s->bind_param("i",$uid);$s->execute();$row=$s->get_result()->fetch_assoc();$s->close();
-if($row){$user_email=$row['email']??'';$user_phone=$row['phone_number']??'';}
+if($row){
+ $user_email=$row['email']??'';
+ $user_phone=$row['phone_number']??'';
+ $user_barangay=trim((string)($row['barangay_name']??''));
+ $user_address=trim((string)($row['resident_address']??''));
+}
+$needs_residence = ($user_barangay === '' || $user_address === '');
 $avRes=$conn->query("SHOW COLUMNS FROM users LIKE 'avatar_color'");
 if($avRes&&$avRes->num_rows>0){$as=$conn->prepare("SELECT avatar_color FROM users WHERE id=? LIMIT 1");$as->bind_param("i",$uid);$as->execute();$as->bind_result($av);$as->fetch();$as->close();if($av)$avatar_color=$av;}
 
@@ -39,11 +54,16 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
  $pf=trim($_POST['first_name']??'');$pl=trim($_POST['last_name']??'');
  $pp=trim($_POST['phone']??'');
  $pw=$_POST['new_password']??'';$pw2=$_POST['confirm_password']??'';
+ $rb_in=trim($_POST['barangay_name']??'');
+ $ra_in=trim($_POST['resident_address']??'');
+ $rb_val=sentri_barangay_canonical($rb_in);
  if($pw&&$pw!==$pw2) {$profile_msg='error:Passwords do not match.';}
  elseif(!$pf||!$pl) {$profile_msg='error:Name fields are required.';}
+ elseif($rb_val===null) {$profile_msg='error:Please select a valid Imus barangay.';}
+ elseif(mb_strlen($ra_in)<5||mb_strlen($ra_in)>255) {$profile_msg='error:Please enter a complete home address (5-255 characters).';}
  else{
-  $sets="first_name=?,last_name=?,phone_number=?";
-  $types="sss"; $vals=[$pf,$pl,$pp];
+  $sets="first_name=?,last_name=?,phone_number=?,barangay_name=?,resident_address=?";
+  $types="sssss"; $vals=[$pf,$pl,$pp,$rb_val,$ra_in];
   if($pw){ $sets.=",password=?"; $types.="s"; $vals[]=password_hash($pw,PASSWORD_BCRYPT,['cost'=>12]); }
   $types.="i"; $vals[]=$uid;
   $su=$conn->prepare("UPDATE users SET $sets WHERE id=?");
@@ -54,6 +74,9 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
   if(isset($_SESSION['identity'])&&is_array($_SESSION['identity'])){$_SESSION['identity']['first_name']=$pf_safe;$_SESSION['identity']['last_name']=$pl_safe;}
   $fname=$pf_safe;$lname=$pl_safe;
   $user_phone=$pp;
+  $user_barangay=$rb_val;
+  $user_address=$ra_in;
+  $needs_residence=false;
   $profile_msg='success:Profile updated.';
  }
 }
@@ -271,8 +294,8 @@ body.dark .role-badge{background:#1f3a5f;color:var(--blue-accent);}
 .form-group{margin-bottom:14px;}
 .form-group label{display:block;font-size:.82rem;font-weight:600;color:#444;margin-bottom:5px;}
 body.dark .form-group label{color:#8b949e;}
-.form-group input{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;background:var(--input-bg);color:var(--text);font-family:'Poppins',sans-serif;transition:all .2s;}
-.form-group input:focus{border-color:var(--blue-accent);background:var(--input-focus);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
+.form-group input,.form-group select{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;background:var(--input-bg);color:var(--text);font-family:'Poppins',sans-serif;transition:all .2s;}
+.form-group input:focus,.form-group select:focus{border-color:var(--blue-accent);background:var(--input-focus);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .btn-save{background:linear-gradient(135deg,var(--blue-accent),var(--blue));color:#fff;border:none;padding:12px 28px;border-radius:10px;font-size:.93rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;transition:all .25s;}
 .btn-save:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(58,141,255,.4);}
@@ -731,6 +754,7 @@ function actionToast(message,type){
  <div class="profile-info-rows">
  <div class="profile-info-row"><i class="fas fa-envelope"></i><span><?= htmlspecialchars($user_email) ?></span></div>
  <?php if($user_phone): ?><div class="profile-info-row"><i class="fas fa-phone"></i><span><?= htmlspecialchars($user_phone) ?></span></div><?php endif; ?>
+ <?php if($user_barangay): ?><div class="profile-info-row"><i class="fas fa-location-dot"></i><span>Brgy <?= htmlspecialchars($user_barangay) ?><?= $user_address ? ' · '.htmlspecialchars($user_address) : '' ?></span></div><?php endif; ?>
  </div>
  </div>
  <div class="profile-card">
@@ -744,6 +768,21 @@ function actionToast(message,type){
  <div class="form-group"><label>Last Name</label><input name="last_name" value="<?= htmlspecialchars($lname) ?>" maxlength="100" required></div>
  </div>
  <div class="form-group"><label>Phone Number</label><input name="phone" value="<?= htmlspecialchars($user_phone) ?>" placeholder="e.g. 09XX-XXX-XXXX" maxlength="30"></div>
+ <div class="pf-divider"></div>
+ <div class="pf-section-label">Residence</div>
+ <div class="form-row">
+ <div class="form-group">
+ <label>Barangay</label>
+ <select name="barangay_name" required>
+ <option value="">Select your barangay</option>
+ <?php foreach (sentri_barangay_names() as $brgyName): ?>
+ <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"<?= $brgyName === $user_barangay ? ' selected' : '' ?>><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+ <div class="form-group"><label>City / Municipality</label><input value="Imus City" readonly style="opacity:.7;cursor:not-allowed;"></div>
+ </div>
+ <div class="form-group"><label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label><input name="resident_address" value="<?= htmlspecialchars($user_address) ?>" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required></div>
  <div class="pf-divider"></div>
  <div class="pf-section-label">Change Password <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;">(leave blank to keep current)</span></div>
  <div class="form-row">
@@ -1059,6 +1098,7 @@ function renderFeed(mineOnly=false){
  <span><i class="fas fa-city"></i>${esc(r.city)}${r.province?', '+esc(r.province):''}</span>
  <span><i class="fas fa-clock"></i>${date}</span>
  <span><i class="fas fa-user"></i>${esc(r.poster_name)}</span>
+ ${r.poster_barangay?`<span title="Reporter residence"><i class="fas fa-house-user"></i>Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</span>`:''}
  ${hasPh?`<span><i class="fas fa-camera" style="color:var(--blue-accent);"></i>${r.images.length} photo${r.images.length>1?'s':''}</span>`:''}
  </div>
  <div class="card-body"><p>${esc((r.description||'').substring(0,200))}${(r.description||'').length>200?'…':''}</p></div>
@@ -1127,11 +1167,11 @@ function watchMapResize(getMap,el){
 /* Inline map (overview toggle) */
 let inlineMap=null,inlineLayers=[];
 function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(inlineMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);SentriGeo.addBarangayOverlay(inlineMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!inlineLayers.length)inlineMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderInlineMap();}).catch(()=>{});watchMapResize(()=>inlineMap,document.getElementById('inlineMap'));setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
-function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
+function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}${r.poster_barangay?` · Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}`:''}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
 
 /* Full incidents map */
 let mainMap=null,mainLayers=[];
-function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
+function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div>${r.poster_barangay?`<div style="color:#888;margin-top:2px;">Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</div>`:''}<div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
@@ -1789,7 +1829,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span>${r.poster_barangay?`<br><span>Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</span>`:''} - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -2552,6 +2592,67 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
 </div>
 
 <?= csrf_script() ?>
+<?php if($needs_residence): ?>
+<!-- Mandatory resident-profile gate: existing accounts must supply a barangay
+     and home address before they can use the portal or file a report. -->
+<div id="residenceGate" role="dialog" aria-modal="true" aria-labelledby="residenceGateTitle" style="position:fixed;inset:0;z-index:100000;background:rgba(6,24,44,.72);display:flex;align-items:center;justify-content:center;padding:18px;">
+ <div style="background:var(--card,#fff);border-radius:16px;max-width:480px;width:100%;padding:26px 26px 22px;box-shadow:0 24px 60px rgba(0,0,0,.35);max-height:90vh;overflow:auto;">
+ <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+ <div style="width:44px;height:44px;border-radius:12px;background:#eff6ff;color:#2563eb;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;"><i class="fas fa-location-dot"></i></div>
+ <div>
+ <h2 id="residenceGateTitle" style="font-size:1.05rem;font-weight:800;color:var(--text);margin:0;">Complete your resident profile</h2>
+ <p style="font-size:.78rem;color:var(--muted);margin:2px 0 0;">Required before you can report incidents.</p>
+ </div>
+ </div>
+ <p style="font-size:.8rem;color:var(--muted);line-height:1.55;margin:12px 0 16px;">Your barangay and home address are shown to Barangay and LGU officials on every report you file. This helps verify legitimate reports and prevent fake ones.</p>
+ <div id="residenceGateMsg" style="display:none;padding:9px 12px;border-radius:9px;font-size:.8rem;font-weight:600;margin-bottom:12px;"></div>
+ <form id="residenceGateForm">
+ <input type="hidden" name="action" value="update_profile">
+ <input type="hidden" name="first_name" value="<?= htmlspecialchars($fname, ENT_QUOTES, 'UTF-8') ?>">
+ <input type="hidden" name="last_name" value="<?= htmlspecialchars($lname, ENT_QUOTES, 'UTF-8') ?>">
+ <input type="hidden" name="email" value="<?= htmlspecialchars($user_email, ENT_QUOTES, 'UTF-8') ?>">
+ <input type="hidden" name="avatar_color" value="<?= htmlspecialchars($avatar_color, ENT_QUOTES, 'UTF-8') ?>">
+ <div class="form-group">
+ <label>Barangay</label>
+ <select name="barangay_name" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
+ <option value="">Select your barangay</option>
+ <?php foreach (sentri_barangay_names() as $brgyName): ?>
+ <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+ <div class="form-group">
+ <label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label>
+ <input type="text" name="resident_address" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
+ </div>
+ <button type="submit" id="residenceGateBtn" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,var(--blue-accent,#3a8dff),var(--blue,#1c57b2));color:#fff;font-size:.92rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;"><i class="fas fa-floppy-disk" style="margin-right:7px;"></i><span>Save and continue</span></button>
+ </form>
+ </div>
+</div>
+<script>
+(function(){
+ var f=document.getElementById('residenceGateForm'); if(!f) return;
+ f.addEventListener('submit',async function(e){
+  e.preventDefault();
+  var btn=document.getElementById('residenceGateBtn');
+  var msg=document.getElementById('residenceGateMsg');
+  btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin" style="margin-right:7px;"></i><span>Saving...</span>';
+  msg.style.display='none';
+  try{
+   var res=await fetch('../api/reports.php',{method:'POST',body:new FormData(f)});
+   var d=await res.json();
+   if(d.status==='success'){ location.reload(); return; }
+   msg.textContent=d.message||'Could not save your profile.';
+   msg.style.cssText='display:block;padding:9px 12px;border-radius:9px;font-size:.8rem;font-weight:600;margin-bottom:12px;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;';
+  }catch(err){
+   msg.textContent='Error: '+err.message;
+   msg.style.cssText='display:block;padding:9px 12px;border-radius:9px;font-size:.8rem;font-weight:600;margin-bottom:12px;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;';
+  }
+  btn.disabled=false; btn.innerHTML='<i class="fas fa-floppy-disk" style="margin-right:7px;"></i><span>Save and continue</span>';
+ });
+})();
+</script>
+<?php endif; ?>
 <div class="video-modal" id="tutorialModal" role="dialog" aria-modal="true">
  <div class="video-card">
  <div class="video-head">
