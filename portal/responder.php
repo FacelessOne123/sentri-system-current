@@ -89,7 +89,7 @@ if ($view === 'resolved') {
 }
 
 if ($view === 'community') {
- $s = $conn->prepare("SELECT r.id,r.user_id,r.title,r.description,r.location_name,r.barangay,r.city,r.province,r.latitude,r.longitude,r.radius_m,r.status,r.category,r.upvotes,r.downvotes,r.created_at,r.resolved_at,u.first_name,u.last_name,u.role FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND u.role IN('community','user') ORDER BY FIELD(r.status,'dangerous','caution','safe'), r.created_at DESC LIMIT 120");
+ $s = $conn->prepare("SELECT r.id,r.user_id,r.title,r.description,r.location_name,r.barangay,r.city,r.province,r.latitude,r.longitude,r.radius_m,r.status,r.category,r.upvotes,r.downvotes,r.created_at,r.resolved_at,u.first_name,u.last_name,u.role,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND u.role IN('community','user') ORDER BY FIELD(r.status,'dangerous','caution','safe'), r.created_at DESC LIMIT 120");
  if (!$s) { die("DB Error (community): " . $conn->error); }
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) $community_reports[]=$row;
@@ -110,7 +110,7 @@ $community_count = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id
 // ── MAP DATA ────────────────────────────────────────────────────────────────
 $map_reports = [];
 if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 500");
+ $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 500");
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) $map_reports[]=$row;
  $s->close();
@@ -573,6 +573,8 @@ tr:hover td{background:#fafafa;}
  $ibg = $r['status']==='dangerous' ? '#fef2f2' : ($r['status']==='caution' ? '#fffbeb' : '#f0fdf4');
  $iclr = $r['status']==='dangerous' ? '#dc2626' : ($r['status']==='caution' ? '#d97706' : '#16a34a');
  $reporter = trim(($r['first_name'] ?? '').' '.($r['last_name'] ?? ''));
+ $rep_brgy = trim((string)($r['barangay_name'] ?? ''));
+ $rep_addr = trim((string)($r['resident_address'] ?? ''));
  ?>
  <div class="incident-row" data-status="<?= htmlspecialchars($r['status']) ?>">
  <div class="inc-icon" style="background:<?= $ibg ?>;color:<?= $iclr ?>;"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i></div>
@@ -582,6 +584,7 @@ tr:hover td{background:#fafafa;}
  <span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span>
  <?php if(!empty($r['resolved_at'])): ?><span class="pill" style="background:#f0fdf4;color:#166534;">Resolved</span><?php else: ?><span class="pill" style="background:#fef2f2;color:#991b1b;">Unresolved</span><?php endif; ?>
  <span><i class="fas fa-user"></i> <?= htmlspecialchars($reporter ?: 'Community User') ?></span>
+ <?php if($rep_brgy !== ''): ?><span title="Reporter residence"><i class="fas fa-house-user"></i> Resident of Brgy <?= htmlspecialchars($rep_brgy) ?><?= $rep_addr !== '' ? ', '.htmlspecialchars($rep_addr) : '' ?></span><?php endif; ?>
  <span><i class="fas fa-location-dot"></i> <?= htmlspecialchars($r['barangay'] ?? $r['city'] ?? '') ?></span>
  <span><?= date('M j, g:ia', strtotime($r['created_at'])) ?></span>
  <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
@@ -611,6 +614,7 @@ tr:hover td{background:#fafafa;}
  <?php else: foreach($assigned as $r):
  $ibg = $r['status']==='dangerous' ? '#fef2f2' : ($r['status']==='caution' ? '#fffbeb' : '#f0fdf4');
  $iclr = $r['status']==='dangerous' ? '#dc2626' : ($r['status']==='caution' ? '#d97706' : '#16a34a');
+ $is_resolved = !empty($r['resolved_at']) || $r['status'] === 'safe';
  ?>
  <div class="incident-row">
  <div class="inc-icon" style="background:<?= $ibg ?>;color:<?= $iclr ?>;"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i></div>
@@ -676,7 +680,11 @@ tr:hover td{background:#fafafa;}
  <?php if(empty($r['responded_at'])): ?>
  <button class="btn-resolve-sm" onclick="markResponded(<?= $r['id'] ?>,this)"><i class="fas fa-bell"></i> Responded to LGU</button>
  <?php endif; ?>
+ <?php if($is_resolved): ?>
+ <button class="btn-resolve-sm" type="button" disabled title="This incident has already been resolved" style="background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;opacity:.85;cursor:not-allowed;"><i class="fas fa-circle-check"></i> Resolved</button>
+ <?php else: ?>
  <button class="btn-resolve-sm" onclick="resolve(<?= $r['id'] ?>,this)"><i class="fas fa-circle-check"></i> Resolve</button>
+ <?php endif; ?>
  </div>
  </div>
  <?php endforeach; endif; ?>
@@ -836,6 +844,8 @@ tr:hover td{background:#fafafa;}
  'status'=>$r['status'],'location'=>($r['barangay']??$r['city']??''),
  'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
  'reporter'=>trim($r['first_name'].' '.$r['last_name']),
+ 'reporter_brgy'=>trim((string)($r['barangay_name']??'')),
+ 'reporter_address'=>trim((string)($r['resident_address']??'')),
  'date'=>date('M j, g:ia',strtotime($r['created_at'])),
  'desc'=>$r['description']??''];
  }, $map_reports)) ?>;
@@ -856,6 +866,8 @@ tr:hover td{background:#fafafa;}
  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
  '<div style="margin-bottom:7px;"><span style="background:'+(r.status==='dangerous'?'#fef2f2':'#fffbeb')+';color:'+(r.status==='dangerous'?'#991b1b':'#92400e')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span></div>'+
  (r.location?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Location:</b> '+r.location+'</div>':'')+
+ (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Reported by:</b> '+r.reporter+'</div>':'')+
+ (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Category:</b> '+(catL[r.category]||r.category)+'</div>'+
  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:6px;"><b>Reported:</b> '+r.date+'</div>'+
  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-bottom:8px;">'+r.desc.substring(0,100)+(r.desc.length>100?'…':'')+'</div>':'')+
