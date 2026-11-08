@@ -6,6 +6,7 @@ require_once __DIR__ . '/config/session.php';
 sentri_boot_realm('community');
 if (sentri_identity() !== null) { header("Location: dashboard.php"); exit; }
 require __DIR__ . '/config/db.php';
+require_once __DIR__ . '/config/geo.php';
 
 // ── Auto-migrate: runs on every request (before POST check) ──────────────────
 // Ensures schema is up-to-date before any INSERT attempt.
@@ -43,6 +44,8 @@ try {
  $conn->query("ALTER TABLE users ADD COLUMN barangay_name VARCHAR(150) DEFAULT NULL");
  if (!in_array('municipality', $existingCols))
  $conn->query("ALTER TABLE users ADD COLUMN municipality VARCHAR(150) DEFAULT NULL");
+ if (!in_array('resident_address', $existingCols))
+ $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL AFTER municipality");
  if (!in_array('is_approved', $existingCols)) {
  $conn->query("ALTER TABLE users ADD COLUMN is_approved TINYINT(1) NOT NULL DEFAULT 0");
  $conn->query("UPDATE users SET is_approved=1 WHERE role IN('user','community','admin')");
@@ -83,9 +86,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  $pw = $_POST['password'] ?? '';
  $pw2 = $_POST['confirm_password'] ?? '';
  $phone = trim($_POST['phone'] ?? '');
+ $barangay_in = trim($_POST['barangay_name'] ?? '');
+ $address = trim($_POST['resident_address'] ?? '');
 
  if (empty($first)||empty($last)||empty($email)||empty($pw)) {
  echo json_encode(['status'=>'error','message'=>'All fields are required.']); exit;
+ }
+ if (empty($barangay_in) || empty($address)) {
+ echo json_encode(['status'=>'error','message'=>'Please select your barangay and enter your home address.']); exit;
+ }
+ // Only accept an official Imus barangay name (never a fabricated label).
+ $barangay = sentri_barangay_canonical($barangay_in);
+ if ($barangay === null) {
+ echo json_encode(['status'=>'error','message'=>'Please select a valid Imus barangay.']); exit;
+ }
+ if (mb_strlen($address) < 5 || mb_strlen($address) > 255) {
+ echo json_encode(['status'=>'error','message'=>'Please enter a complete home address (5-255 characters).']); exit;
  }
  if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
  echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
@@ -112,20 +128,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
  $bind_phone = $phone ?: null;
  $bind_role = 'community';
+ $bind_municipality = 'Imus';
 
  $ins = $conn->prepare(
  "INSERT INTO users
  (first_name, last_name, email, password, role, phone_number,
+ barangay_name, municipality, resident_address,
  is_approved, email_verified, verification_token, token_expires_at)
- VALUES (?,?,?,?,?, ?,1,0,?,?)"
+ VALUES (?,?,?,?,?,?, ?,?,?, 1,0,?,?)"
  );
  if (!$ins) {
  echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit;
  }
  $ins->bind_param(
- "ssssssss",
+ "sssssssssss",
  $first, $last, $email, $hash, $bind_role,
- $bind_phone, $token, $expires_at
+ $bind_phone, $barangay, $bind_municipality, $address,
+ $token, $expires_at
  );
  if (!$ins->execute()) {
  echo json_encode(['status'=>'error','message'=>'Registration failed: '.$ins->error]); exit;
@@ -185,8 +204,8 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .form-group{margin-bottom:14px;}
 .form-group label{display:block;font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:5px;}
-.form-group input{width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.9rem;font-family:'Inter',sans-serif;outline:none;background:#fafafa;color:var(--text);transition:all 0.18s;}
-.form-group input:focus{border-color:#93c5fd;background:#fff;box-shadow:0 0 0 3px rgba(59,130,246,0.08);}
+.form-group input,.form-group select{width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-size:0.9rem;font-family:'Inter',sans-serif;outline:none;background:#fafafa;color:var(--text);transition:all 0.18s;}
+.form-group input:focus,.form-group select:focus{border-color:#93c5fd;background:#fff;box-shadow:0 0 0 3px rgba(59,130,246,0.08);}
 .pw-wrap{position:relative;}
 .pw-wrap button{position:absolute;right:11px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.75rem;font-weight:700;color:var(--muted);font-family:'Inter',sans-serif;}
 .btn-register{width:100%;padding:12px;border:none;border-radius:10px;font-size:0.95rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;color:#fff;transition:all 0.2s;background:var(--sentri-primary);display:flex;align-items:center;justify-content:center;gap:8px;margin-top:6px;}
@@ -234,6 +253,29 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
  <div class="form-group"><label>Email Address</label><input type="email" name="email" placeholder="you@example.com" required></div>
  <div class="form-group"><label>Phone Number <span style="color:var(--muted);font-weight:400;">(optional)</span></label><input type="tel" name="phone" placeholder="+63 9XX XXX XXXX"></div>
  </div>
+
+ <div class="section-title" style="margin-top:20px;">Residence</div>
+ <div class="form-row">
+ <div class="form-group">
+ <label>Barangay</label>
+ <select name="barangay_name" id="regBarangay" required>
+ <option value="">Select your barangay</option>
+ <?php foreach (sentri_barangay_names() as $brgyName): ?>
+ <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+ <div class="form-group">
+ <label>City / Municipality</label>
+ <input type="text" value="Imus City" readonly style="background:#f1f5f9;color:var(--muted);cursor:not-allowed;">
+ </div>
+ </div>
+ <div class="form-group">
+ <label>Home Address <span style="color:var(--muted);font-weight:400;">(House No., Street, Purok)</span></label>
+ <input type="text" name="resident_address" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required>
+ </div>
+ <p style="font-size:0.74rem;color:var(--muted);margin:-4px 0 2px;line-height:1.5;"><i class="fas fa-location-dot" style="margin-right:5px;"></i>This address identifies the resident behind each report and is shown to Barangay/LGU officials.</p>
+
  <div class="form-row">
  <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pw1" placeholder="Min. 8 characters" required><button type="button" onclick="togglePw('pw1',this)">SHOW</button></div></div>
  <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input type="password" name="confirm_password" id="pw2" placeholder="Re-enter password" required><button type="button" onclick="togglePw('pw2',this)">SHOW</button></div></div>
