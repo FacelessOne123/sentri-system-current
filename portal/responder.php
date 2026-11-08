@@ -363,7 +363,7 @@ tr:hover td{background:#fafafa;}
 <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
 <script src="../assets/vendor/leaflet/leaflet.js"></script>
 <script src="../assets/js/sentri-geo.js"></script>
-<script src="../assets/js/sentri-report-alerts.js?v=3"></script>
+<script src="../assets/js/sentri-report-alerts.js?v=4"></script>
 </head>
 <body>
 <div class="toast-container" id="toastContainer"></div>
@@ -1393,8 +1393,8 @@ setTimeout(function(){location.reload();}, 90000);
 <?php endif; ?>
 
 // ── New-report popup alerts ─────────────────────────────────────────────────
-// Server-side filtering: BFP gets dangerous + caution; other responder types
-// (PNP, EMS, DRRMO, hospital, etc.) get dangerous only.
+// Server-side filtering: BFP/fire gets dangerous fire incidents, PNP gets
+// dangerous crime incidents, other responder types get any dangerous report.
 (function(){
  if (!window.SentriReportAlerts) return;
  SentriReportAlerts.create({

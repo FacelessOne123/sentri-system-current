@@ -607,7 +607,7 @@ tr:hover td{background:#fafafa;}
  .resp-stats{grid-template-columns:1fr 1fr;}
 }
 </style>
-<script src="../assets/js/sentri-report-alerts.js?v=3"></script>
+<script src="../assets/js/sentri-report-alerts.js?v=4"></script>
 </head>
 <body>
 

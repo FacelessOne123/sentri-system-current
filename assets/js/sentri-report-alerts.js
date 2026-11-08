@@ -95,7 +95,12 @@
   function reasonFor(report, previousKey, isNewId) {
    if (isNewId) return 'new';
    var escalated = Number(report.escalated_to_lgu) ? 1 : 0;
-   if (!previousKey) return escalated ? 'escalated' : 'updated';
+   if (!previousKey) {
+    if (escalated) return 'escalated';
+    // First time this report becomes alert-worthy (e.g. caution -> dangerous).
+    if (report.status === 'dangerous') return 'upgraded';
+    return 'updated';
+   }
    var parts = previousKey.split('|');
    var prevStatus = parts[0] || '';
    var prevEsc = parts[1] || '0';
@@ -259,9 +264,9 @@
 
       var isNewId = Number(report.id) > previousSinceId;
       var reason = reasonFor(report, previousKey, isNewId);
-      var shouldShow = isNewId || !!previousKey || Number(report.escalated_to_lgu) === 1;
-
-      if (shouldShow) renderAlert(report, reason);
+      // The server already filtered this row as alert-worthy; any changed key
+      // is either a new report, a status upgrade or a new escalation.
+      renderAlert(report, reason);
       seen[report.id] = key;
      });
 

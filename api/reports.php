@@ -400,8 +400,13 @@ switch ($action) {
    $rt_stmt->close();
    $responder_type = strtolower(trim((string)$rt_val));
   }
-  if ($responder_type === 'bfp') {
-   $where[] = "r.status IN ('dangerous','caution')";
+  // Match the responder's actual jurisdiction: BFP/fire stations only get
+  // dangerous fire incidents, PNP only dangerous crime, everyone else gets
+  // any dangerous report.
+  if ($responder_type === 'bfp' || $responder_type === 'fire') {
+   $where[] = "r.category = 'fire' AND r.status = 'dangerous'";
+  } elseif ($responder_type === 'pnp') {
+   $where[] = "r.category = 'crime' AND r.status = 'dangerous'";
   } else {
    $where[] = "r.status = 'dangerous'";
   }
@@ -416,9 +421,10 @@ switch ($action) {
  } else {
   $changing = [];
   if ($since_id > 0) $changing[] = "r.id > $since_id";
-  // Responders only care about genuinely new reports. LGU also needs to see
-  // reports that were escalated (an UPDATE on an existing row).
-  if ($role === 'lgu' && $since_time !== '') {
+  // Every role also needs UPDATEs: a report may be upgraded to dangerous or
+  // escalated to LGU after it was first created. The client de-duplicates rows
+  // whose status/escalation key did not actually change.
+  if ($since_time !== '') {
    $changing[] = "r.updated_at >= '" . $conn->real_escape_string($since_time) . "'";
   }
   // No watermark yet: return nothing rather than the whole table.
