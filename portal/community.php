@@ -35,6 +35,12 @@ if($row){
  $user_address=trim((string)($row['resident_address']??''));
 }
 $needs_residence = ($user_barangay === '' || $user_address === '');
+
+// Barangay change lock: current value + seconds remaining, measured with DB
+// time so PHP/MySQL timezone differences cannot skew the countdown.
+[$lock_brgy, $brgy_lock_secs] = sentri_brgy_lock_state($conn, $uid);
+$brgy_locked = ($lock_brgy !== '' && $brgy_lock_secs > 0);
+
 $avRes=$conn->query("SHOW COLUMNS FROM users LIKE 'avatar_color'");
 if($avRes&&$avRes->num_rows>0){$as=$conn->prepare("SELECT avatar_color FROM users WHERE id=? LIMIT 1");$as->bind_param("i",$uid);$as->execute();$as->bind_result($av);$as->fetch();$as->close();if($av)$avatar_color=$av;}
 
@@ -55,16 +61,30 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
  $pp=trim($_POST['phone']??'');
  $pw=$_POST['new_password']??'';$pw2=$_POST['confirm_password']??'';
  $rb_in=trim($_POST['barangay_name']??'');
- $ra_in=trim($_POST['resident_address']??'');
+ $ra_in=sentri_residence_clean($_POST['resident_address']??'');
  $rb_val=sentri_barangay_canonical($rb_in);
  if($pw&&$pw!==$pw2) {$profile_msg='error:Passwords do not match.';}
  elseif(!$pf||!$pl) {$profile_msg='error:Name fields are required.';}
  elseif($rb_val===null) {$profile_msg='error:Please select a valid Imus barangay.';}
  elseif(mb_strlen($ra_in)<5||mb_strlen($ra_in)>255) {$profile_msg='error:Please enter a complete home address (5-255 characters).';}
  else{
+  // Barangay change lock: only allow a change once the review window has
+  // elapsed. Keep the submitted-but-rejected value out of the update.
+  $lock_note=''; $brgy_changed=false;
+  if(sentri_barangay_normalize($rb_val)!==sentri_barangay_normalize($user_barangay)){
+   if($user_barangay!=='' && $brgy_lock_secs>0){
+    $rb_val=$user_barangay;
+    $wait=$brgy_lock_secs>=60?ceil($brgy_lock_secs/60).' more minute(s)':$brgy_lock_secs.' more second(s)';
+    $lock_note=' Barangay was not changed: locked for '.$wait.'.';
+   } else {
+    $brgy_changed=true;
+   }
+  }
+
   $sets="first_name=?,last_name=?,phone_number=?,barangay_name=?,resident_address=?";
   $types="sssss"; $vals=[$pf,$pl,$pp,$rb_val,$ra_in];
   if($pw){ $sets.=",password=?"; $types.="s"; $vals[]=password_hash($pw,PASSWORD_BCRYPT,['cost'=>12]); }
+  if($brgy_changed){ $sets.=",barangay_changed_at=NOW()"; }
   $types.="i"; $vals[]=$uid;
   $su=$conn->prepare("UPDATE users SET $sets WHERE id=?");
   $su->bind_param($types, ...$vals);
@@ -76,8 +96,10 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
   $user_phone=$pp;
   $user_barangay=$rb_val;
   $user_address=$ra_in;
-  $needs_residence=false;
-  $profile_msg='success:Profile updated.';
+  $needs_residence=($user_barangay===''||$user_address==='');
+  [$lock_brgy,$brgy_lock_secs]=sentri_brgy_lock_state($conn,$uid);
+  $brgy_locked=($lock_brgy!==''&&$brgy_lock_secs>0);
+  $profile_msg='success:Profile updated.'.$lock_note;
  }
 }
 
@@ -772,13 +794,21 @@ function actionToast(message,type){
  <div class="pf-section-label">Residence</div>
  <div class="form-row">
  <div class="form-group">
- <label>Barangay</label>
- <select name="barangay_name" required>
+ <label>Barangay <?php if($brgy_locked): ?><i class="fas fa-lock" style="color:var(--muted);font-size:.75rem;"></i><?php endif; ?></label>
+ <?php if($brgy_locked): ?>
+ <select id="pfBrgy" disabled aria-disabled="true" style="opacity:.7;cursor:not-allowed;">
+ <?php else: ?>
+ <select id="pfBrgy" name="barangay_name" required>
+ <?php endif; ?>
  <option value="">Select your barangay</option>
  <?php foreach (sentri_barangay_names() as $brgyName): ?>
  <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"<?= $brgyName === $user_barangay ? ' selected' : '' ?>><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
  <?php endforeach; ?>
  </select>
+ <?php if($brgy_locked): ?>
+ <input type="hidden" name="barangay_name" value="<?= htmlspecialchars($user_barangay, ENT_QUOTES, 'UTF-8') ?>">
+ <?php endif; ?>
+ <div id="pfBrgyHint" style="font-size:.74rem;color:var(--muted);margin-top:4px;"><?php if($brgy_locked): ?>Locked to prevent report abuse. You can change it again in <b id="pfBrgyCountdown"><?= max(0,(int)$brgy_lock_secs) ?>s</b>.<?php endif; ?></div>
  </div>
  <div class="form-group"><label>City / Municipality</label><input value="Imus City" readonly style="opacity:.7;cursor:not-allowed;"></div>
  </div>
@@ -1098,7 +1128,6 @@ function renderFeed(mineOnly=false){
  <span><i class="fas fa-city"></i>${esc(r.city)}${r.province?', '+esc(r.province):''}</span>
  <span><i class="fas fa-clock"></i>${date}</span>
  <span><i class="fas fa-user"></i>${esc(r.poster_name)}</span>
- ${r.poster_barangay?`<span title="Reporter residence"><i class="fas fa-house-user"></i>Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</span>`:''}
  ${hasPh?`<span><i class="fas fa-camera" style="color:var(--blue-accent);"></i>${r.images.length} photo${r.images.length>1?'s':''}</span>`:''}
  </div>
  <div class="card-body"><p>${esc((r.description||'').substring(0,200))}${(r.description||'').length>200?'…':''}</p></div>
@@ -1167,11 +1196,11 @@ function watchMapResize(getMap,el){
 /* Inline map (overview toggle) */
 let inlineMap=null,inlineLayers=[];
 function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(inlineMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);SentriGeo.addBarangayOverlay(inlineMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!inlineLayers.length)inlineMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderInlineMap();}).catch(()=>{});watchMapResize(()=>inlineMap,document.getElementById('inlineMap'));setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
-function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}${r.poster_barangay?` · Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}`:''}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
+function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
 
 /* Full incidents map */
 let mainMap=null,mainLayers=[];
-function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div>${r.poster_barangay?`<div style="color:#888;margin-top:2px;">Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</div>`:''}<div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
+function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
@@ -1829,7 +1858,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span>${r.poster_barangay?`<br><span>Resident of Brgy ${esc(r.poster_barangay)}${r.poster_address?', '+esc(r.poster_address):''}</span>`:''} - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -2219,6 +2248,36 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
 function ucFirst(s){return s?s.charAt(0).toUpperCase()+s.slice(1):'';}
 function showMsg(el,type,text){el.className='pf-msg '+type;el.textContent=text;el.style.display='block';}
 
+/* Barangay lock countdown (profile) */
+(function(){
+ var el=document.getElementById('pfBrgyCountdown');
+ if(!el) return;
+ var left=<?= max(0,(int)$brgy_lock_secs) ?>;
+ var sel=document.getElementById('pfBrgy');
+ var fmt=function(s){
+  var d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);
+  if(d>0)return d+'d '+h+'h';
+  if(h>0)return h+'h '+m+'m';
+  if(m>0)return m+'m '+String(s%60).padStart(2,'0')+'s';
+  return s+'s';
+ };
+ var tick=function(){
+  if(left<=0){
+   el.textContent='0s';
+   var hint=document.getElementById('pfBrgyHint');
+   if(hint)hint.textContent='You can change your barangay again now. Save to apply a new one.';
+   if(sel){sel.disabled=false;sel.removeAttribute('aria-disabled');sel.style.opacity='';sel.style.cursor='';sel.name='barangay_name';}
+   var hidden=document.querySelector('#pfBrgyHint').parentElement.querySelector('input[type=hidden][name=barangay_name]');
+   if(hidden)hidden.remove();
+   return;
+  }
+  el.textContent=fmt(left);
+  left--;
+  setTimeout(tick,1000);
+ };
+ tick();
+})();
+
 /* Boot */
 updateChip();
 startGPS();
@@ -2592,7 +2651,7 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
 </div>
 
 <?= csrf_script() ?>
-<?php if($needs_residence): ?>
+<?php if($needs_residence && $view !== 'profile'): ?>
 <!-- Mandatory resident-profile gate: existing accounts must supply a barangay
      and home address before they can use the portal or file a report. -->
 <div id="residenceGate" role="dialog" aria-modal="true" aria-labelledby="residenceGateTitle" style="position:fixed;inset:0;z-index:100000;background:rgba(6,24,44,.72);display:flex;align-items:center;justify-content:center;padding:18px;">

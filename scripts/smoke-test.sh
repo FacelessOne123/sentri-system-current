@@ -61,6 +61,9 @@ LS=$(login lgu lgu lgu@demo.ph Demo@1234)            && p "lgu (sentri-gov)"    
 AS=$(login admin admin admin@sentri.ph Admin@1234)     && p "admin (sentri-admin)"    || f "admin"
 
 say "2. Full cross-realm transaction chain (community → barangay → LGU → responder → admin)"
+# Residence is required for reporting now; seed the demo community fixture.
+$MYSQL_CMD -e "UPDATE users SET barangay_name='Bucandala I', resident_address='123 Smoke Test St., Purok 1', barangay_changed_at=NULL WHERE email='community@demo.ph';" >/dev/null 2>&1 \
+  && p "community residence fixture ensured" || s "residence fixture needs mysql CLI"
 TC=$(csrf_for "$JDIR/community.jar" "$BASE/portal/community.php")
 
 # Pins outside Imus must be rejected — the pin is the only location source
@@ -85,6 +88,12 @@ else
   [[ -n $RID ]] && p "post_report created id=$RID" || f "post_report: $RESP"
   BRGY=${MYSQL_CMD:+$($MYSQL_CMD -N -e "SELECT barangay FROM reports WHERE id=$RID" 2>/dev/null)}
   [[ $BRGY == "Bucandala I" ]] && p "server tagged barangay=Bucandala I (geometry wins)" || f "barangay tag got '${BRGY:-?}' (expected Bucandala I)"
+  FEED=$(curl -s -b "$JDIR/community.jar" "$BASE/api/reports.php?action=get_reports")
+  if echo "$FEED" | grep -q "poster_address\|poster_barangay"; then
+    f "community feed leaks reporter residence (poster_address/poster_barangay)"
+  else
+    p "community feed omits reporter residence (privacy)"
+  fi
   TV=$(curl -s -b "$JDIR/community.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
     -F "action=vote" -F "csrf_token=$TC" -F "report_id=$RID" -F "vote=up")
   echo "$TV" | grep -q '"status":"success"' && p "vote counted server-side" || f "vote: $TV"
@@ -112,6 +121,11 @@ else
   DISP=$(curl -s -b "$JDIR/lgu.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
     -F "action=lgu_dispatch" -F "csrf_token=$TL" -F "report_id=$RID" -F "responder_id=$TRP")
   echo "$DISP" | grep -q success && p "LGU dispatch ok" || f "dispatch: $DISP"
+  # Responder-first lock: once dispatched, Brgy/LGU cannot resolve it.
+  LOCK_RES=$(curl -s -b "$JDIR/lgu.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+    -F "action=resolve_report" -F "csrf_token=$TL" -F "report_id=$RID")
+  echo "$LOCK_RES" | grep -q "must resolve it first" \
+    && p "LGU resolve blocked while responder is assigned" || f "LGU resolve should be blocked: $LOCK_RES"
   RS2=$(login responder responder responder@demo.ph Demo@1234) && p "re-login responder for chain" || s "responder re-login issue"
   TR=$(csrf_for "$JDIR/responder.jar" "$BASE/portal/responder.php")
   for ACT in accept_assignment report_responded resolve_report; do
@@ -146,7 +160,8 @@ STAMP=$(date +%s)
 SRES=$(curl -s -X POST "$BASE/signup.php" -A "Mozilla/5.0" \
   --data-urlencode "first_name=SmokeT" --data-urlencode "last_name=User" \
   --data-urlencode "email=smoke.t$STAMP@demo.ph" --data-urlencode "password=Smoke@1234" \
-  --data-urlencode "confirm_password=Smoke@1234" --data-urlencode "phone=09171234567")
+  --data-urlencode "confirm_password=Smoke@1234" --data-urlencode "phone=09171234567" \
+  --data-urlencode "barangay_name=Bucandala I" --data-urlencode "resident_address=123 Smoke Test St., Purok 1")
 echo "$SRES" | grep -q '"success"' && p "signup OK" || f "signup: $SRES"
 LV=$(find "$PWD/logs/mail" -maxdepth 1 -name '*.eml' -newermt "@$STAMP" 2>/dev/null | sort | tail -1)
 if [[ -n $LV ]]; then
@@ -159,15 +174,53 @@ if [[ -n $LV ]]; then
     curl -s -b "$UJ" -c "$UJ" -X POST "$BASE/login.php" \
       --data-urlencode "email=smoke.t$STAMP@demo.ph" --data-urlencode "password=Smoke@1234" > /dev/null
     UN_REDIR=$(curl -s -b "$UJ" -o /dev/null -w '%{redirect_url}' "$BASE/portal/community.php?view=overview")
-    [[ -z $UN_REDIR || $UN_REDIR != *"view=map&locked=1"* ]] && p "member with no profile location reaches overview" || f "unexpected locked redirect: $UN_REDIR"
+    [[ -z $UN_REDIR || $UN_REDIR != *"view=map&locked=1"* ]] && p "member reaches overview" || f "unexpected locked redirect: $UN_REDIR"
     UN_TC=$(csrf_for "$UJ" "$BASE/portal/community.php?view=overview")
+
+    # Missing residence must block reporting even with a valid pin.
+    if [[ -n $MYSQL_CMD ]]; then
+      $MYSQL_CMD -e "UPDATE users SET resident_address=NULL WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      NO_RES=$(curl -s -b "$UJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+        -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] No residence" \
+        -F "description=fixture" -F "location_name=site" -F "city=Imus" \
+        -F "category=infrastructure" -F "status=dangerous" -F "latitude=14.421881" -F "longitude=120.916066")
+      echo "$NO_RES" | grep -q "complete your resident profile" \
+        && p "report blocked without a resident profile" || f "expected resident-profile block: $NO_RES"
+      $MYSQL_CMD -e "UPDATE users SET resident_address='123 Smoke Test St., Purok 1' WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+    else
+      s "resident-profile gate test needs mysql CLI"
+    fi
     UN_POST=$(curl -s -b "$UJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
       -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] Pin-based" \
       -F "description=fixture" -F "location_name=site" -F "city=Imus" \
       -F "category=infrastructure" -F "status=dangerous" -F "latitude=14.421881" -F "longitude=120.916066")
     echo "$UN_POST" | grep -q '"status":"success"' \
-      && p "member with no profile location can report from the pin" || f "pin-based report expected success: $UN_POST"
-    $MYSQL_CMD -e "DELETE FROM reports WHERE title='[SMOKE] Pin-based';" >/dev/null 2>&1 || true
+      && p "member with residence can report from the pin" || f "pin-based report expected success: $UN_POST"
+    $MYSQL_CMD -e "DELETE FROM reports WHERE title LIKE '[SMOKE] %';" >/dev/null 2>&1 || true
+
+    # Barangay change lock (1 minute in testing): recent change is rejected,
+    # backdating the timestamp unlocks it.
+    if [[ -n $MYSQL_CMD ]]; then
+      $MYSQL_CMD -e "UPDATE users SET barangay_changed_at=NOW() WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      LCK=$(curl -s -b "$UJ" -X POST "$BASE/portal/community.php?view=profile" \
+        --data-urlencode "save_profile=1" --data-urlencode "first_name=SmokeT" --data-urlencode "last_name=User" \
+        --data-urlencode "phone=09171234567" --data-urlencode "barangay_name=Alapan I-A" \
+        --data-urlencode "resident_address=123 Smoke Test St., Purok 1")
+      echo "$LCK" | grep -q "Barangay was not changed" \
+        && p "barangay change blocked by 1-minute lock" || f "expected barangay lock message"
+      LCK_BRGY=$($MYSQL_CMD -N -e "SELECT barangay_name FROM users WHERE email='smoke.t$STAMP@demo.ph'" 2>/dev/null)
+      [[ -z $LCK_BRGY || $LCK_BRGY == "Bucandala I" ]] && p "locked change kept the original barangay" || f "barangay changed despite lock: $LCK_BRGY"
+
+      $MYSQL_CMD -e "UPDATE users SET barangay_changed_at=NOW() - INTERVAL 2 MINUTE WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      UNLCK=$(curl -s -b "$UJ" -X POST "$BASE/portal/community.php?view=profile" \
+        --data-urlencode "save_profile=1" --data-urlencode "first_name=SmokeT" --data-urlencode "last_name=User" \
+        --data-urlencode "phone=09171234567" --data-urlencode "barangay_name=Alapan I-A" \
+        --data-urlencode "resident_address=123 Smoke Test St., Purok 1")
+      UNLCK_BRGY=$($MYSQL_CMD -N -e "SELECT barangay_name FROM users WHERE email='smoke.t$STAMP@demo.ph'" 2>/dev/null)
+      [[ -z $UNLCK_BRGY || $UNLCK_BRGY == "Alapan I-A" ]] && p "barangay change allowed after lock expires" || f "unlock failed: $UNLCK_BRGY"
+    else
+      s "barangay lock tests need mysql CLI"
+    fi
   fi
 else
   s "no outbox mail (live SMTP expected; add APP_DEBUG=1 to .env for offline)"

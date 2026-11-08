@@ -1460,6 +1460,8 @@ tr:hover td{background:#fafafa;}
 </div><!-- /main -->
 
 <script>
+// Escape user-controlled values before they are concatenated into innerHTML.
+function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function openSidebar(){
  document.getElementById('sidebar').classList.add('open');
  document.getElementById('overlay').classList.add('show');
@@ -1500,11 +1502,11 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  var baseHtml =
  '<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val">'+(pill[status]||status)+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
- '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
- '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
- (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+residence+'</div></div>':'')+
- '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
- (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'')+
+ '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+esc(barangay)+'</div></div>'+
+ '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+esc(reporter)+'</div></div>'+
+ (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+esc(residence)+'</div></div>':'')+
+ '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+esc(date)+'</div></div>'+
+ (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+esc(desc)+'</div></div>':'')+
  '<div id="lguModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
  
  document.getElementById('lguModalBody').innerHTML = baseHtml;

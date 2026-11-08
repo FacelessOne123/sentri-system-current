@@ -320,9 +320,6 @@ switch ($action) {
  r.city, r.province, r.latitude, r.longitude, r.radius_m,
  r.status, r.category, r.upvotes, r.downvotes, r.created_at,
  CONCAT(u.first_name,' ',u.last_name) AS poster_name,
- u.barangay_name AS poster_barangay,
- u.municipality AS poster_city,
- u.resident_address AS poster_address,
  v.vote AS user_vote
  FROM reports r
  INNER JOIN users u ON r.user_id = u.id
@@ -498,15 +495,13 @@ switch ($action) {
 
  // ── Reporter residence is mandatory (anti-abuse) ────────────────────────
  // Every community report must be attributable to a resident with a known
- // barangay + home address, so officials can verify who filed it.
- $uAddrCol = $conn->query("SHOW COLUMNS FROM users LIKE 'resident_address'");
- if ($uAddrCol && $uAddrCol->num_rows === 0) {
- $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
- }
+ // barangay + home address, so officials can verify who filed it. The
+ // resident_address column is created by sql/migrations/010_resident_address.sql
+ // (and the login/signup auto-migrators), never on the hot reporting path.
  $rp = $conn->prepare("SELECT barangay_name, resident_address FROM users WHERE id=? LIMIT 1");
  $rp->bind_param("i", $user_id); $rp->execute();
  $rp->bind_result($rep_brgy, $rep_addr); $rp->fetch(); $rp->close();
- if (trim((string)$rep_brgy) === '' || trim((string)$rep_addr) === '') {
+ if (trim((string)$rep_brgy) === '' || sentri_residence_clean((string)$rep_addr) === '') {
  echo json_encode(['status'=>'error','message'=>'Please complete your resident profile (barangay and home address) before reporting.']); exit;
  }
 
@@ -959,12 +954,13 @@ switch ($action) {
  if (!preg_match('/^#[0-9a-fA-F]{6}$/', $avatar_color)) $avatar_color = '#1c57b2';
 
  // Optional residence update (signup prompt / My Profile). Existing callers
- // that only change the avatar may omit these keys entirely.
+ // that only change the avatar may omit these keys entirely. A barangay change
+ // is rate-limited by the same lock the profile page shows.
  $has_residence = array_key_exists('barangay_name', $_POST) || array_key_exists('resident_address', $_POST);
- $barangay_val = null; $address_val = null;
+ $barangay_val = null; $address_val = null; $brgy_changed = false;
  if ($has_residence) {
  $barangay_in = trim($_POST['barangay_name'] ?? '');
- $address_val = trim($_POST['resident_address'] ?? '');
+ $address_val = sentri_residence_clean($_POST['resident_address'] ?? '');
  if ($barangay_in === '' || $address_val === '') {
  echo json_encode(['status'=>'error','message'=>'Barangay and home address are required.']); exit;
  }
@@ -975,18 +971,23 @@ switch ($action) {
  if (mb_strlen($address_val) < 5 || mb_strlen($address_val) > 255) {
  echo json_encode(['status'=>'error','message'=>'Please enter a complete home address (5-255 characters).']); exit;
  }
+ [$cur_brgy, $lock_left] = sentri_brgy_lock_state($conn, $user_id);
+ if (sentri_barangay_normalize($barangay_val) !== sentri_barangay_normalize($cur_brgy)) {
+  if ($cur_brgy !== '' && $lock_left > 0) {
+   $wait = $lock_left >= 60 ? ceil($lock_left / 60) . ' minute(s)' : $lock_left . ' second(s)';
+   echo json_encode(['status'=>'error','message'=>'Barangay was changed recently. Try again in ' . $wait . '.']); exit;
+  }
+  $brgy_changed = true;
+ }
  }
 
- // Ensure avatar_color / resident_address columns exist
+ // Ensure avatar_color exists (established auto-migrate behaviour).
  $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
  $chkCols = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
  $existCols = [];
  while($rc = $chkCols->fetch_row()) $existCols[] = $rc[0];
  if (!in_array('avatar_color', $existCols)) {
  $conn->query("ALTER TABLE users ADD COLUMN avatar_color VARCHAR(7) NOT NULL DEFAULT '#1c57b2'");
- }
- if (!in_array('resident_address', $existCols)) {
- $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
  }
 
  // Check email uniqueness (exclude current user)
@@ -1004,6 +1005,7 @@ switch ($action) {
  $types .= "ss";
  $vals[] = $barangay_val;
  $vals[] = $address_val;
+ if ($brgy_changed) $sets .= ", barangay_changed_at=NOW()";
  }
 
  // Password change requested?
@@ -1153,10 +1155,13 @@ switch ($action) {
   }
  }
  if ($role === 'first_responder') {
- $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous'");
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
  $stmt->bind_param("ii", $report_id, $user_id);
  } else {
- $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0");
+ // Admin overrides are unconditional; Brgy/LGU only win if no responder was
+ // dispatched in the meantime (race-safe version of the guard above).
+ $extra = ($role === 'admin') ? '' : ' AND assigned_to IS NULL AND resolved_at IS NULL';
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0$extra");
  $stmt->bind_param("i", $report_id);
  }
  $stmt->execute();
@@ -1286,8 +1291,11 @@ switch ($action) {
    }
   }
  }
- $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL';
- $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0");
+ $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL';
+ // Race-safe version of the guard above: Brgy/LGU cannot win the resolve race
+ // against a responder dispatch or a concurrent resolve. Admins override.
+ $extra = ($new_status === 'safe' && $role !== 'admin') ? ' AND assigned_to IS NULL AND resolved_at IS NULL' : '';
+ $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0$extra");
  $s_upd->bind_param("si", $new_status, $report_id);
  $s_upd->execute();
  // NOTE: changed status → affected_rows>0; SAME status → affected_rows=0 with an

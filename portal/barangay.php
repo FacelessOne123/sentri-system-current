@@ -794,6 +794,9 @@ tr:hover td{background:#fafafa;}
 </div>
 
 <script>
+// Escape user-controlled values before they are concatenated into innerHTML.
+function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
 // ── Toast notification system ─────────────────────────────────────────────
 function showToast(message, type) {
  type = type || 'success';
@@ -833,11 +836,11 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  (escalated ? ' &nbsp;<span style="display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;font-weight:700;color:#92400e;background:#fef3c7;padding:2px 8px;border-radius:6px;border:1px solid #fde68a;"><i class="fas fa-arrow-up-from-bracket"></i> Escalated to LGU</span>' : '') +
  '</div></div>' +
  '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
- '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
- '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
- (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+residence+'</div></div>':'')+
- '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
- (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'')+
+ '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+esc(barangay)+'</div></div>'+
+ '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+esc(reporter)+'</div></div>'+
+ (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+esc(residence)+'</div></div>':'')+
+ '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+esc(date)+'</div></div>'+
+ (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+esc(desc)+'</div></div>':'')+
  '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
 
  try {

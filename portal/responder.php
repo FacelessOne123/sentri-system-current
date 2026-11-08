@@ -851,6 +851,8 @@ tr:hover td{background:#fafafa;}
  }, $map_reports)) ?>;
  var rmc = {dangerous:'#dc2626',caution:'#d97706'};
  var catL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
+ // Escape user-controlled values before they are concatenated into innerHTML.
+ function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
  function makeRespIcon(color){
  return L.divIcon({className:'',html:'<div style="width:15px;height:15px;border-radius:50%;background:'+color+';border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>',iconSize:[15,15],iconAnchor:[7,7]});
  }
@@ -863,14 +865,14 @@ tr:hover td{background:#fafafa;}
  m.rd=r;
  m.bindPopup(
  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+ '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+esc(r.title)+'</div>'+
  '<div style="margin-bottom:7px;"><span style="background:'+(r.status==='dangerous'?'#fef2f2':'#fffbeb')+';color:'+(r.status==='dangerous'?'#991b1b':'#92400e')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span></div>'+
- (r.location?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Location:</b> '+r.location+'</div>':'')+
- (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Reported by:</b> '+r.reporter+'</div>':'')+
- (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Category:</b> '+(catL[r.category]||r.category)+'</div>'+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:6px;"><b>Reported:</b> '+r.date+'</div>'+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-bottom:8px;">'+r.desc.substring(0,100)+(r.desc.length>100?'…':'')+'</div>':'')+
+ (r.location?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Location:</b> '+esc(r.location)+'</div>':'')+
+ (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Reported by:</b> '+esc(r.reporter)+'</div>':'')+
+ (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Resident of:</b> Brgy '+esc(r.reporter_brgy)+(r.reporter_address?', '+esc(r.reporter_address):'')+'</div>':'')+
+ '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Category:</b> '+esc(catL[r.category]||r.category)+'</div>'+
+ '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:6px;"><b>Reported:</b> '+esc(r.date)+'</div>'+
+ (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-bottom:8px;">'+esc(r.desc.substring(0,100))+(r.desc.length>100?'…':'')+'</div>':'')+
  '<a href="javascript:void(0)" onclick="closeNavModal();openNavigation('+r.lat+','+r.lng+',\''+r.id+'\')" style="font-size:0.8rem;color:#2563eb;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:4px;"><i class="fas fa-directions"></i> Get Directions</a>'+
  '</div>',{maxWidth:240}
  );
