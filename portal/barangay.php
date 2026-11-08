@@ -73,7 +73,7 @@ if (in_array($view, ['overview','reports'])) {
  $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
  if ($brgy) {
   $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
   $s->bind_param("s", $brgy_key);
   $s->execute(); $res=$s->get_result();
   while($row=$res->fetch_assoc()) $reports[]=$row;
@@ -97,7 +97,7 @@ if ($view === 'contacts') {
 
 if ($view === 'residents') {
  if ($brgy) {
-  $q = "SELECT id,first_name,last_name,email,phone_number,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
+  $q = "SELECT id,first_name,last_name,email,phone_number,resident_address,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
   $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
   $res=$s->get_result();
   while($r=$res->fetch_assoc()) $residents[]=$r;
@@ -111,7 +111,7 @@ $map_reports = [];
 if ($view === 'map') {
  if ($brgy) {
   $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
   $s->bind_param("s", $brgy_key);
   $s->execute(); $res=$s->get_result();
   while($row=$res->fetch_assoc()) $map_reports[]=$row;
@@ -477,6 +477,7 @@ tr:hover td{background:#fafafa;}
  <div style="flex:1;min-width:0;">
  <div class="resident-name"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?></div>
  <div class="resident-email"><?= htmlspecialchars($r['email']) ?><?= $r['phone_number'] ? ' &nbsp;&middot;&nbsp; '.$r['phone_number'] : '' ?></div>
+ <?php if(!empty($r['resident_address'])): ?><div class="resident-email"><i class="fas fa-location-dot" style="margin-right:4px;color:var(--green);"></i><?= htmlspecialchars($r['resident_address']) ?></div><?php endif; ?>
  </div>
  <span style="font-size:0.73rem;color:var(--muted);"><?= date('M j, Y',strtotime($r['created_at'])) ?></span>
  </div>
@@ -537,6 +538,8 @@ tr:hover td{background:#fafafa;}
  'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),
  'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
  'reporter'=>htmlspecialchars(trim($r['first_name'].' '.$r['last_name']),ENT_QUOTES),
+ 'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),
+ 'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),
  'date'=>date('M j, Y g:i A',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)];
  }, $map_reports)) ?>;
  var markerColors = {dangerous:'#dc2626',caution:'#d97706',safe:'#16a34a'};
@@ -580,6 +583,7 @@ tr:hover td{background:#fafafa;}
   '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
   (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
   '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
+  (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
   (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
   '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
   {maxWidth:260}
@@ -810,11 +814,13 @@ function showToast(message, type) {
 var currentReportId = null;
 var currentReportStatus = null;
 var currentEscalated = false;
+var currentResponderPending = false;
 
-async function viewReport(id, title, category, status, barangay, reporter, date, desc, escalated) {
+async function viewReport(id, title, category, status, barangay, reporter, date, desc, escalated, residence, responderPending) {
  currentReportId = id;
  currentReportStatus = status;
  currentEscalated = !!escalated;
+ currentResponderPending = !!responderPending;
  document.getElementById('modalTitle').textContent = title;
 
  // Status colour
@@ -829,6 +835,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
+ (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+residence+'</div></div>':'')+
  '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
  (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'')+
  '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
@@ -882,6 +889,17 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  actions.innerHTML = '';
 
  if (!isResolved) {
+ if (responderPending) {
+ // A dispatched responder must clear the incident first.
+ var waitBtn = document.createElement('button');
+ waitBtn.className = 'btn-action btn-done';
+ waitBtn.id = 'modalResolveBtn';
+ waitBtn.disabled = true;
+ waitBtn.title = 'The assigned first responder must resolve this incident first';
+ waitBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
+ waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:not-allowed;';
+ actions.appendChild(waitBtn);
+ } else {
  // Resolve button
  var resolveBtn = document.createElement('button');
  resolveBtn.className = 'btn-action btn-resolve-full';
@@ -889,6 +907,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  resolveBtn.innerHTML = '<i class="fas fa-circle-check"></i> Mark Resolved';
  resolveBtn.onclick = function() { doResolve(resolveBtn); };
  actions.appendChild(resolveBtn);
+ }
 
  // Escalate button - show greyed "Already Escalated" if already escalated
  var escBtn = document.createElement('button');
@@ -916,7 +935,9 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  var sel = document.createElement('select');
  sel.id = 'modalStatusSelect';
  sel.style.cssText = 'padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:\'Inter\',sans-serif;cursor:pointer;background:#fff;';
- sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe">✅ Mark Safe</option>';
+ sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (responderPending ? ' disabled title="Waiting for the assigned responder to resolve this incident"' : '') + '>✅ Mark Safe</option>';
+ var safeOpt = sel.querySelector('option[value="safe"]');
+ if (safeOpt && responderPending) safeOpt.textContent = '✅ Mark Safe (awaiting responder)';
  sel.onchange = function() { changeStatus(this.value); };
  actions.appendChild(sel);
  }
@@ -931,6 +952,10 @@ function closeModal() { document.getElementById('reportModal').classList.remove(
 // ── Resolve ───────────────────────────────────────────────────────────────
 async function doResolve(btn) {
  if (!currentReportId) return;
+ if (currentResponderPending) {
+ showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ return;
+ }
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resolving…';
  try {
@@ -998,6 +1023,11 @@ async function doEscalate(btn) {
 // ── Change Status (dropdown) ───────────────────────────────────────────────
 async function changeStatus(newStatus) {
  if (!newStatus || !currentReportId) return;
+ if (newStatus === 'safe' && currentResponderPending) {
+ showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ var s0 = document.getElementById('modalStatusSelect'); if (s0) s0.value = '';
+ return;
+ }
  var sel = document.getElementById('modalStatusSelect');
  sel.disabled = true;
  try {
@@ -1023,6 +1053,11 @@ async function changeStatus(newStatus) {
 
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
+ var row = btn && btn.closest ? btn.closest('tr') : null;
+ if (row && row.getAttribute('data-responder-pending') === '1') {
+ showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ return;
+ }
  if (!confirm('Mark this report as resolved?')) return;
  btn.disabled = true;
  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
@@ -1094,13 +1129,19 @@ function refreshReportRow(id, newStatus, escalated) {
  pill.className = 'pill pill-' + newStatus;
  pill.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
  }
+ if (newStatus === 'safe') {
+ row.removeAttribute('data-responder-pending');
+ var pendingChip = row.querySelector('.responder-pending-chip');
+ if (pendingChip) pendingChip.remove();
+ }
+ var rowPending = row.getAttribute('data-responder-pending') === '1';
 
  // Remove or update action buttons
  var actionsCell = row.querySelector('td:last-child div');
  if (actionsCell) {
  // Remove old resolve/escalate buttons, leave view button
- actionsCell.querySelectorAll('.btn-resolve, .btn-escalate').forEach(function(b) { b.remove(); });
- if (newStatus !== 'safe') {
+ actionsCell.querySelectorAll('.btn-resolve, .btn-escalate, .btn-resolve-pending').forEach(function(b) { b.remove(); });
+ if (newStatus !== 'safe' && !rowPending) {
  // Re-add resolve button
  var rb = document.createElement('button');
  rb.className = 'btn-icon btn-resolve';
