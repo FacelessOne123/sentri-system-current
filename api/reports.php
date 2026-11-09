@@ -890,9 +890,17 @@ switch ($action) {
  while($rc2 = $colRes->fetch_row()) $existCols2[] = $rc2[0];
  if (!in_array('gps_lat', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_lat DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('gps_lng', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_lng DECIMAL(10,7) DEFAULT NULL");
+ if (!in_array('gps_accuracy', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_accuracy DECIMAL(8,2) DEFAULT NULL AFTER gps_lng");
+ if (!in_array('gps_at', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_at DATETIME DEFAULT NULL AFTER gps_accuracy");
+ if (!in_array('gps_source', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_source ENUM('browser','bridge','manual') DEFAULT NULL AFTER gps_at");
 
- $upd = $conn->prepare("UPDATE users SET gps_lat=?, gps_lng=? WHERE id=?");
- $upd->bind_param("ddi", $lat, $lng, $user_id);
+ // Accuracy + source let the UI say whether a position is live or stale.
+ $acc = isset($_POST['accuracy']) && $_POST['accuracy'] !== '' ? (float)$_POST['accuracy'] : null;
+ if ($acc !== null && (!is_finite($acc) || $acc < 0 || $acc > 100000)) $acc = null;
+ $src = isset($_POST['source']) && in_array($_POST['source'], ['browser','bridge','manual'], true) ? $_POST['source'] : 'browser';
+
+ $upd = $conn->prepare("UPDATE users SET gps_lat=?, gps_lng=?, gps_accuracy=?, gps_at=NOW(), gps_source=? WHERE id=?");
+ $upd->bind_param("dddsi", $lat, $lng, $acc, $src, $user_id);
  if ($upd->execute()) {
  $_SESSION['gps_lat'] = $lat;
  $_SESSION['gps_lng'] = $lng;
@@ -926,7 +934,7 @@ switch ($action) {
  }
  }
 
- echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng]);
+ echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng,'accuracy'=>$acc,'source'=>$src,'at'=>date('c')]);
  } else {
  echo json_encode(['status'=>'error','message'=>'Failed to save GPS: '.$upd->error]);
  }

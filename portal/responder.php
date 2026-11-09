@@ -14,12 +14,23 @@ $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
 $has_accepted_at = sentri_table_has_column($conn, 'reports', 'accepted_at');
 $has_responded_at = sentri_table_has_column($conn, 'reports', 'responded_at');
 $saved_gps_lat = $saved_gps_lng = null;
+$saved_gps_at = null;
+$saved_gps_source = null;
 if (sentri_table_has_column($conn, 'users', 'gps_lat') && sentri_table_has_column($conn, 'users', 'gps_lng')) {
- $gpsRes = $conn->prepare("SELECT gps_lat,gps_lng FROM users WHERE id=? LIMIT 1");
+ $gpsCols = 'gps_lat,gps_lng';
+ if (sentri_table_has_column($conn, 'users', 'gps_at')) $gpsCols .= ',gps_at';
+ if (sentri_table_has_column($conn, 'users', 'gps_source')) $gpsCols .= ',gps_source';
+ $gpsRes = $conn->prepare("SELECT $gpsCols FROM users WHERE id=? LIMIT 1");
  if ($gpsRes) {
  $gpsRes->bind_param("i", $uid);
  $gpsRes->execute();
+ if ($gpsCols === 'gps_lat,gps_lng') {
  $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng);
+ } elseif ($gpsCols === 'gps_lat,gps_lng,gps_at') {
+ $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng, $saved_gps_at);
+ } else {
+ $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng, $saved_gps_at, $saved_gps_source);
+ }
  $gpsRes->fetch();
  $gpsRes->close();
  }
@@ -183,6 +194,7 @@ $page_titles = [
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= $page_titles[$view] ?? 'Responder Portal' ?> | SenTri</title>
 <?= csrf_meta_tag() ?>
+<meta name="sentri-user" content="<?= htmlspecialchars((string)$uid, ENT_QUOTES, 'UTF-8') ?>">
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <style>
@@ -452,6 +464,9 @@ tr:hover td{background:#fafafa;}
  <div class="card-header">
  <h3><i class="fas fa-location-crosshairs" style="color:var(--red-light);margin-right:6px;"></i>My GPS Location</h3>
  <span class="card-meta" id="gpsStatus"><?= $saved_gps_lat !== null && $saved_gps_lng !== null ? 'Saved on profile' : 'Not saved yet' ?></span>
+ <?php if($saved_gps_at !== null): ?>
+ <span class="card-meta" title="When this position was last recorded">Recorded <?= htmlspecialchars((string)$saved_gps_at) ?></span>
+ <?php endif; ?>
  <span class="acc-chip" id="gpsAccChip" style="display:none;" title="GPS accuracy (higher precision &le; 50m)"></span>
  </div>
  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
@@ -459,7 +474,7 @@ tr:hover td{background:#fafafa;}
  <div id="gpsCoords" style="font-size:0.85rem;font-weight:700;color:var(--text);">
  <?= $saved_gps_lat !== null && $saved_gps_lng !== null ? htmlspecialchars(number_format((float)$saved_gps_lat, 6).', '.number_format((float)$saved_gps_lng, 6)) : 'Tap the button to get and save your current location.' ?>
  </div>
- <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports.</div>
+ <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports. If the browser cannot reach GPS, a paired <b>GPS bridge</b> on this machine keeps your position up to date.</div>
  </div>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
  <button type="button" class="btn-dispatch" onclick="captureMyGps(this)"><i class="fas fa-crosshairs"></i> Get My GPS</button>
@@ -905,13 +920,32 @@ tr:hover td{background:#fafafa;}
 function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.classList.add('sidebar-open');document.body.style.overflow='hidden';}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.classList.remove('sidebar-open');document.body.style.overflow='';}
 
-var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$saved_gps_lat) : 'null' ?>, lng: <?= $saved_gps_lng !== null ? json_encode((float)$saved_gps_lng) : 'null' ?> };
+var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$saved_gps_lat) : 'null' ?>, lng: <?= $saved_gps_lng !== null ? json_encode((float)$saved_gps_lng) : 'null' ?>, at: <?= $saved_gps_at !== null ? json_encode((string)$saved_gps_at) : 'null' ?>, source: <?= $saved_gps_source !== null ? json_encode((string)$saved_gps_source) : 'null' ?> };
+
+function gpsAgeLabel(){
+ if(!responderGps.at) return '';
+ var ts = Date.parse(String(responderGps.at).replace(' ','T') + 'Z');
+ if(isNaN(ts)) return '';
+ var sec = Math.max(0, Math.round((Date.now()-ts)/1000));
+ if(sec < 60) return sec + 's ago';
+ if(sec < 3600) return Math.round(sec/60) + 'm ago';
+ if(sec < 86400) return Math.round(sec/3600) + 'h ago';
+ return Math.round(sec/86400) + 'd ago';
+}
 
 function setGpsText(lat, lng, saved){
  var coords = document.getElementById('gpsCoords');
  var status = document.getElementById('gpsStatus');
  if(coords){ coords.textContent = Number(lat).toFixed(6) + ', ' + Number(lng).toFixed(6); }
- if(status){ status.textContent = saved ? 'Saved on profile' : 'Current location'; }
+ if(status){
+  if(saved){
+   var age = gpsAgeLabel();
+   var src = responderGps.source === 'bridge' ? 'GPS bridge' : (responderGps.source === 'browser' ? 'Browser GPS' : 'Saved on profile');
+   status.textContent = src + (age ? ' · ' + age : '');
+  } else {
+   status.textContent = 'Current location';
+  }
+ }
 }
 
 function updateAccChip(el, acc){
@@ -933,6 +967,7 @@ async function captureMyGps(btn){
   updateAccChip(document.getElementById('gpsAccChip'), acc);
   try{
   var fd = new FormData(); fd.append('action','save_gps'); fd.append('latitude', lat); fd.append('longitude', lng);
+  fd.append('accuracy', acc); fd.append('source','browser');
   var res = await fetch('../api/reports.php', {method:'POST', body:fd});
   var data = await res.json();
   if(data.status==='success'){
@@ -946,7 +981,17 @@ async function captureMyGps(btn){
   showRespToast('Could not save GPS location.', 'error');
   }
  } catch(e){
+  // Live GPS failed - fall back to the last known position so navigation and
+  // dispatch still have coordinates to work with.
+  var cached = (e && e.fallback) ? e.fallback : (window.SentriGeo && SentriGeo.readLastFix ? SentriGeo.readLastFix() : null);
+  if(cached){
+  responderGps.lat = cached.lat; responderGps.lng = cached.lng; responderGps.acc = cached.accuracy; responderGps.at = new Date(cached.at).toISOString();
+  setGpsText(cached.lat, cached.lng, true);
+  updateAccChip(document.getElementById('gpsAccChip'), cached.accuracy);
+  showRespToast('Live GPS unavailable - using your last known location.', 'error');
+  } else {
   showRespToast((e && e.message) ? e.message : 'Location access was denied.', 'error');
+  }
  }
  btn.disabled = false; btn.innerHTML = prev;
 }
@@ -1084,6 +1129,28 @@ function onNavPosition(fix){
  }
  }
 }
+/* Poll the paired GPS bridge so responders keep a position even when the
+   browser cannot obtain one (LAN HTTP, denied permission, no GPS chip). */
+function pollResponderBridge(){
+ fetch('../api/gps_bridge.php?action=get_my_gps')
+  .then(function(r){return r.json();})
+  .then(function(d){
+   if(!d||d.status!=='success'||!d.fix)return;
+   var f=d.fix;
+   var at=f.received_at?Date.parse(String(f.received_at).replace(' ','T')+'Z'):Date.now();
+   if(isNaN(at))at=Date.now();
+   // A bridge fix is newer than the profile snapshot only if it is recent.
+   if(responderGps.at && at < Date.parse(String(responderGps.at).replace(' ','T')+'Z')) return;
+   responderGps.lat=f.lat; responderGps.lng=f.lng; responderGps.acc=f.accuracy;
+   responderGps.at=new Date(at).toISOString(); responderGps.source=f.source||'bridge';
+   setGpsText(f.lat,f.lng,true);
+   updateAccChip(document.getElementById('gpsAccChip'), f.accuracy);
+  })
+  .catch(function(){});
+}
+setInterval(function(){ if(document.visibilityState!=='hidden') pollResponderBridge(); }, 15000);
+pollResponderBridge();
+
 function openNavigation(lat, lng, reportId){
  if(lat === null || lng === null || typeof lat === 'undefined' || typeof lng === 'undefined' || lat === '' || lng === ''){
  showRespToast('This report has no GPS coordinates.', 'error');

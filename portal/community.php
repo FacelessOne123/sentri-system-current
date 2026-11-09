@@ -36,6 +36,31 @@ if($row){
 }
 $needs_residence = ($user_barangay === '' || $user_address === '');
 
+// Last known position for this user (browser fix or GPS bridge), so the app
+// has a location immediately on load even before a live fix arrives.
+$saved_gps_lat=$saved_gps_lng=null; $saved_gps_at=null; $saved_gps_source=null; $saved_gps_accuracy=null;
+if(sentri_table_has_column($conn,'users','gps_lat')&&sentri_table_has_column($conn,'users','gps_lng')){
+ $gcols='gps_lat,gps_lng';
+ if(sentri_table_has_column($conn,'users','gps_at'))$gcols.=',gps_at';
+ if(sentri_table_has_column($conn,'users','gps_source'))$gcols.=',gps_source';
+ if(sentri_table_has_column($conn,'users','gps_accuracy'))$gcols.=',gps_accuracy';
+ $gs=$conn->prepare("SELECT $gcols FROM users WHERE id=? LIMIT 1");
+ if($gs){
+  $gs->bind_param("i",$uid);$gs->execute();
+  $gr=$gs->get_result();
+  if($gr&&$gr->num_rows>0){
+   $gv=$gr->fetch_row();
+   $saved_gps_lat=($gv[0]!==null)?(float)$gv[0]:null;
+   $saved_gps_lng=($gv[1]!==null)?(float)$gv[1]:null;
+   if(strpos($gcols,'gps_at')!==false)$saved_gps_at=$gv[2]??null;
+   if(strpos($gcols,'gps_source')!==false)$saved_gps_source=$gv[3]??null;
+   if(strpos($gcols,'gps_accuracy')!==false)$saved_gps_accuracy=($gv[4]!==null)?(float)$gv[4]:null;
+  }
+  $gr?$gr->free():null;
+  $gs->close();
+ }
+}
+
 // Barangay change lock: current value + seconds remaining, measured with DB
 // time so PHP/MySQL timezone differences cannot skew the countdown.
 [$lock_brgy, $brgy_lock_secs] = sentri_brgy_lock_state($conn, $uid);
@@ -117,6 +142,7 @@ $page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'In
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?> | SenTri</title>
 <?= csrf_meta_tag() ?>
+<meta name="sentri-user" content="<?= htmlspecialchars((string)$uid, ENT_QUOTES, 'UTF-8') ?>">
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
@@ -179,6 +205,11 @@ body.dark .dm-slider::before{transform:translateX(18px);}
 .gps-chip{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:50px;font-size:.76rem;font-weight:600;background:var(--bg);color:var(--muted);border:1.5px solid var(--input-border);transition:all .3s;flex-shrink:0;}
 .gps-chip.active{background:#f0fff4;color:#38a169;border-color:#38a169;}
 body.dark .gps-chip.active{background:#1a2e24;}
+.gps-chip.stale{background:#fffbeb;color:#b45309;border-color:#f59e0b;}
+body.dark .gps-chip.stale{background:#2e2010;}
+.gps-chip.bridge{background:#eff6ff;color:#1d4ed8;border-color:#3b82f6;}
+body.dark .gps-chip.bridge{background:#1e3a8a;}
+.gps-chip.stale .gps-dot,.gps-chip.bridge .gps-dot{animation:none;}
 .gps-dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex-shrink:0;}
 @keyframes gpsPulse{0%,100%{box-shadow:0 0 0 0 rgba(56,161,105,.5);}50%{box-shadow:0 0 0 5px rgba(56,161,105,0);}}
 .gps-chip.active .gps-dot{animation:gpsPulse 1.5s ease infinite;}
@@ -825,6 +856,32 @@ function actionToast(message,type){
  </div>
  <?php endif; ?>
 
+ <?php if($view==='profile'): ?>
+ <!-- ═══ GPS BRIDGE ═══ -->
+ <div class="profile-card" id="gpsBridgeCard">
+ <div class="pf-section-label"><i class="fas fa-satellite-dish" style="margin-right:6px;color:var(--blue);"></i>GPS Bridge
+ <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;">— share this device's location with SenTri when the browser cannot reach GPS</span></div>
+ <p style="font-size:.78rem;color:var(--muted);line-height:1.6;margin:0 0 14px;">
+ Browsers only allow GPS over <b>HTTPS</b> or <b>localhost</b>, so a computer opened from another device on the LAN usually cannot get a position.
+ A <b>GPS bridge</b> runs beside SenTri on the machine that has the GPS hardware and reports its position to the server, which the app then uses as a fallback.
+ </p>
+ <div id="gpsBridgeStatus" style="font-size:.8rem;color:var(--muted);margin-bottom:12px;"><i class="fas fa-spinner fa-spin" style="margin-right:6px;"></i>Checking paired devices…</div>
+ <div id="gpsBridgeCodeWrap" style="display:none;background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:14px;">
+ <div style="font-size:.75rem;font-weight:700;color:#1e40af;margin-bottom:6px;">Pairing code (single use, expires in 15 minutes)</div>
+ <div id="gpsBridgeCode" style="font-family:monospace;font-size:1.6rem;font-weight:700;letter-spacing:.25em;color:#1d4ed8;margin-bottom:8px;">--------</div>
+ <div style="font-size:.74rem;color:#475569;line-height:1.6;">
+ On the machine running the bridge, open
+ <code style="background:#dbeafe;padding:2px 6px;border-radius:4px;">php tools/gps-bridge/bridge.php --server=&lt;this SenTri URL&gt;</code>
+ and enter the code above.
+ </div>
+ </div>
+ <div style="display:flex;gap:9px;flex-wrap:wrap;">
+ <button type="button" class="btn-save" id="gpsPairBtn" style="padding:9px 18px;font-size:.83rem;"><i class="fas fa-key" style="margin-right:6px;"></i>Generate pairing code</button>
+ </div>
+ <div id="gpsDeviceList" style="margin-top:14px;"></div>
+ </div>
+ <?php endif; ?>
+
  </div>
 </div>
 
@@ -1060,6 +1117,14 @@ const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#
 
 let allReports=[], curView='feed';
 let userLat=null, userLng=null, hasGPS=false, liveGPS=false;
+// Last known position from the server (browser fix or GPS bridge).
+const SAVED_GPS = <?= json_encode([
+ 'lat'      => $saved_gps_lat,
+ 'lng'      => $saved_gps_lng,
+ 'at'       => $saved_gps_at,
+ 'source'   => $saved_gps_source,
+ 'accuracy' => $saved_gps_accuracy,
+], JSON_UNESCAPED_SLASHES) ?>;
 const alertTimes={};
 
 /* Dark mode */
@@ -1074,10 +1139,119 @@ function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.
 window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
 
 /* GPS */
-function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent='GPS Live';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
+/* GPS source tracking: live browser fix, a paired GPS bridge, or the last
+   known position cached from either. The chip always says which one it is so
+   nobody mistakes a stale position for a live one. */
+let gpsSource='none', gpsFixAt=0, gpsAccuracy=null, gpsFixSource='none';
+function updateChip(){
+ const chip=document.getElementById('gpsChip'),lbl=document.getElementById('gpsLabel');
+ if(!chip)return;
+ if(!hasGPS){chip.className='gps-chip';lbl.textContent='GPS Off';return;}
+ const age=gpsFixAt?Math.round((Date.now()-gpsFixAt)/1000):null;
+ if(gpsSource==='live'){chip.className='gps-chip active';lbl.textContent='GPS Live';return;}
+ if(gpsSource==='bridge'){
+  chip.className='gps-chip bridge';
+  lbl.textContent='GPS Bridge'+(age!=null?' · '+formatAge(age):'');
+  return;
+ }
+ // stale / last known
+ chip.className='gps-chip stale';
+ lbl.textContent='Last Known'+(age!=null?' · '+formatAge(age):'');
+}
+function formatAge(sec){
+ if(sec==null)return '';
+ if(sec<60)return sec+'s ago';
+ if(sec<3600)return Math.round(sec/60)+'m ago';
+ if(sec<86400)return Math.round(sec/3600)+'h ago';
+ return Math.round(sec/86400)+'d ago';
+}
+/* Save a live fix to the server so the position follows the user to other
+   browsers/devices and survives a dropped connection. Throttled to avoid
+   hammering the API on every watch tick. */
+let _gpsSaveAt=0;
+function saveGpsToServer(lat,lng,accuracy,source){
+ const now=Date.now();
+ if(now-_gpsSaveAt<60000)return;
+ _gpsSaveAt=now;
+ try{
+  const fd=new FormData();
+  fd.append('action','save_gps');
+  fd.append('latitude',lat);
+  fd.append('longitude',lng);
+  if(accuracy!=null&&isFinite(accuracy))fd.append('accuracy',accuracy);
+  fd.append('source',source||'browser');
+  fetch('../api/reports.php',{method:'POST',body:fd}).catch(()=>{});
+ }catch(e){}
+}
+
+/* ── GPS bridge ────────────────────────────────────────────────────────────
+   A paired bridge on this machine (or another device) reports its position
+   to the server. Polling it gives the app a position even when the browser
+   itself cannot obtain one (no permission, insecure origin, no GPS chip). */
+let _bridgeTimer=null;
+function pollBridgeGPS(){
+ const tick=()=>{
+  fetch('../api/gps_bridge.php?action=get_my_gps')
+   .then(r=>r.json())
+   .then(d=>{
+    if(!d||d.status!=='success'||!d.fix)return;
+    const f=d.fix;
+    const at=f.received_at?new Date(String(f.received_at).replace(' ','T')).getTime():Date.now();
+    // Never let an older fix overwrite a fresher live one.
+    if(gpsFixAt&&at&&at<gpsFixAt&&gpsSource==='live')return;
+    applyGpsFix(f.lat,f.lng,f.accuracy,f.source||'bridge',at);
+   })
+   .catch(()=>{});
+ };
+ tick();
+ if(_bridgeTimer)clearInterval(_bridgeTimer);
+ _bridgeTimer=setInterval(()=>{if(document.visibilityState!=='hidden')tick();},15000);
+}
+/** Apply a fix to the UI, remembering where it came from. */
+function applyGpsFix(lat,lng,accuracy,source,at){
+ if(!isFinite(lat)||!isFinite(lng))return;
+ userLat=lat;userLng=lng;hasGPS=true;
+ gpsFixSource=source||'browser';
+ // 'live' is a fresh browser fix; 'bridge' is a paired device; anything
+ // else is a cached/last-known position that must be labelled as such.
+ if(source==='live')gpsSource='live';
+ else if(source==='bridge')gpsSource='bridge';
+ else gpsSource='stale';
+ gpsFixAt=at||Date.now();
+ if(accuracy!=null&&isFinite(accuracy))gpsAccuracy=accuracy;else gpsAccuracy=null;
+ setGPSAccuracy(gpsAccuracy);
+ updateChip();
+ checkProximity();
+}
 function setGPSAccuracy(m){const el=document.getElementById('gpsAcc');if(!el)return;if(m==null||!isFinite(m)||m<=0){el.style.display='none';return;}const good=m<12,ok=m<50;el.style.display='inline';el.style.color=good?'#16a34a':ok?'#d97706':'#dc2626';el.textContent=`±${Math.round(m)}m ${good?'good':ok?'ok':'weak'}`;}
 function gpsErrorMessage(err){if(!err)return'Could not get your location — set it on the map instead.';if(typeof err.code==='number'){const t={1:'Location access denied — allow location for this site in your browser settings, or pick your spot on the map.',2:'Location services unavailable — drag the pin on the map to set it manually.',3:'Location fix timed out (no GPS/Wi-Fi source) — drag the pin on the map to set it manually.'};return t[err.code]||'Could not get your location.';}return err.message||'Could not get your location — set it on the map instead.';}
-function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;SentriGeo.watchUserLocation(pos=>{userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();},()=>{setGPSAccuracy(null);updateChip();});}
+function startGPS(){
+ if(!document.getElementById('gpsChip'))return;
+ // 1. Show the last known position immediately.
+ //    Prefer this device's cache, else the copy stored on the server.
+ const cached=SentriGeo.readLastFix();
+ if(cached){
+  applyGpsFix(cached.lat,cached.lng,cached.accuracy,'cached',cached.at);
+ } else if(SAVED_GPS&&SAVED_GPS.lat!=null&&SAVED_GPS.lng!=null){
+  const at=SAVED_GPS.at?Date.parse(String(SAVED_GPS.at).replace(' ','T')+'Z'):Date.now();
+  applyGpsFix(SAVED_GPS.lat,SAVED_GPS.lng,SAVED_GPS.accuracy,'cached',isNaN(at)?Date.now():at);
+ }
+ // 2. Pull the paired bridge position (works when the browser has no GPS).
+ pollBridgeGPS();
+ // 3. Try a live browser fix. A failure must not clear the fallback.
+ if(!navigator.geolocation)return;
+ SentriGeo.watchUserLocationResilient(pos=>{
+  liveGPS=true;
+  applyGpsFix(pos.lat,pos.lng,pos.accuracy,'live',Date.now());
+  saveGpsToServer(pos.lat,pos.lng,pos.accuracy,'browser');
+ },err=>{
+  setGPSAccuracy(gpsAccuracy);
+  updateChip();
+  if(err&&err.code===1&&!hasGPS){
+   actionToast('Location permission denied — enable it in your browser, or connect a GPS bridge in My Profile.','error');
+  }
+ });
+}
 function haversine(a,b,c,d){return SentriGeo.haversine(a,b,c,d);}
 function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now();allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const d=haversine(userLat,userLng,r.latitude,r.longitude);if(d<=(r.radius_m||200)){if(now-(alertTimes[r.id]||0)<300000)return;alertTimes[r.id]=now;showToast(r,Math.round(d));}});}
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
@@ -1714,6 +1888,14 @@ function useMyLocation(){
  },err=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ // Offer the last known position instead of leaving the user with nothing.
+ const fb=err&&err.fallback?err.fallback:null;
+ if(fb&&confirm('Live GPS is unavailable.\n\nUse your last known location from '+formatAge(Math.round((Date.now()-fb.at)/1000))+' instead?\n\n(You can drag the pin to adjust it.)')){
+  applyGpsFix(fb.lat,fb.lng,fb.accuracy,'cached',fb.at);
+  placePin(fb.lat,fb.lng,true);
+  actionToast('Using your last known location — drag the pin to adjust it.','warn');
+  return;
+ }
  actionToast(gpsErrorMessage(err),'error');
  fallback();
  });
@@ -1896,7 +2078,11 @@ function outsideCloseDetail(e){if(e.target===document.getElementById('detailOver
 
 function copyEmergencyCoordinates(btn){
  if(userLat!==null&&userLng!==null){
- const text=`🚨 EMERGENCY GPS LOCATION: ${userLat.toFixed(6)}, ${userLng.toFixed(6)} (via SenTri System)`;
+ // Label the source so a responder knows whether this is live or stale.
+ let suffix=' (live GPS)';
+ if(gpsSource==='bridge')suffix=` (GPS bridge, ${formatAge(Math.round((Date.now()-gpsFixAt)/1000))})`;
+ else if(gpsSource!=='live')suffix=` (last known, ${formatAge(Math.round((Date.now()-gpsFixAt)/1000))})`;
+ const text=`🚨 EMERGENCY GPS LOCATION: ${userLat.toFixed(6)}, ${userLng.toFixed(6)}${suffix} (via SenTri System)`;
  navigator.clipboard.writeText(text).then(()=>{
  const orig=btn.innerHTML;
  btn.innerHTML='<i class="fas fa-check"></i> Copied GPS!';
@@ -2247,6 +2433,81 @@ function updateGoBagProgress(){
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function ucFirst(s){return s?s.charAt(0).toUpperCase()+s.slice(1):'';}
 function showMsg(el,type,text){el.className='pf-msg '+type;el.textContent=text;el.style.display='block';}
+
+/* ── GPS bridge panel (My Profile) ──────────────────────────────────────── */
+(function(){
+ var statusEl=document.getElementById('gpsBridgeStatus');
+ if(!statusEl)return;
+ var listEl=document.getElementById('gpsDeviceList');
+ var codeWrap=document.getElementById('gpsBridgeCodeWrap');
+ var codeEl=document.getElementById('gpsBridgeCode');
+ var btn=document.getElementById('gpsPairBtn');
+
+ function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
+
+ function renderDevices(devices){
+  if(!listEl)return;
+  if(!devices||!devices.length){listEl.innerHTML='';return;}
+  var h='<div style="font-size:.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Paired devices</div>';
+  devices.forEach(function(d){
+   var revoked=!!d.revoked_at;
+   var seen=d.last_seen_at?('Last seen '+d.last_seen_at):'Never reported a position';
+   h+='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--card-border);border-radius:9px;margin-bottom:7px;">'
+    +'<span style="font-size:.82rem;font-weight:600;color:var(--text);"><i class="fas fa-mobile-alt" style="margin-right:7px;color:'+(revoked?'#94a3b8':'#3b82f6')+';"></i>'+esc(d.label)
+    +(revoked?' <span style="font-weight:400;color:#94a3b8;">(revoked)</span>':'')
+    +'<br><span style="font-weight:400;font-size:.72rem;color:var(--muted);">'+esc(seen)+'</span></span>';
+   if(!revoked){
+    h+='<button type="button" onclick="gpsRevokeDevice('+d.id+')" style="padding:6px 12px;border:1.5px solid #fecaca;background:#fff;color:#dc2626;border-radius:8px;font-size:.74rem;font-weight:700;cursor:pointer;white-space:nowrap;">Revoke</button>';
+   }
+   h+='</div>';
+  });
+  listEl.innerHTML=h;
+ }
+
+ function loadDevices(){
+  fetch('../api/gps_bridge.php?action=list_devices')
+   .then(r=>r.json())
+   .then(d=>{
+    if(!d||d.status!=='success')throw new Error('bad response');
+    var active=(d.devices||[]).filter(function(x){return !x.revoked_at;});
+    if(active.length){
+     statusEl.innerHTML='<i class="fas fa-satellite-dish" style="margin-right:6px;color:#16a34a;"></i><b>'+active.length+'</b> device'+(active.length>1?'s':'')+' paired. Position updates every 15 seconds.';
+    } else {
+     statusEl.innerHTML='<i class="fas fa-info-circle" style="margin-right:6px;"></i>No device paired yet.';
+    }
+    renderDevices(d.devices||[]);
+   })
+   .catch(()=>{statusEl.innerHTML='<i class="fas fa-triangle-exclamation" style="margin-right:6px;color:#dc2626;"></i>GPS bridge is not enabled on this server.';});
+ }
+
+ window.gpsRevokeDevice=function(id){
+  if(!confirm('Revoke this GPS bridge? It will stop reporting its position.'))return;
+  fetch('../api/gps_bridge.php?action=revoke',{
+   method:'POST',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({device_id:id})
+  }).then(r=>r.json()).then(()=>loadDevices());
+ };
+
+ if(btn){
+  btn.addEventListener('click',function(){
+   btn.disabled=true;
+   fetch('../api/gps_bridge.php?action=create_pair_code',{method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+     btn.disabled=false;
+     if(d&&d.status==='success'){
+      if(codeEl)codeEl.textContent=d.code;
+      if(codeWrap)codeWrap.style.display='block';
+     } else {
+      alert((d&&d.message)||'Could not create a pairing code.');
+     }
+    })
+    .catch(()=>{btn.disabled=false;alert('Could not create a pairing code.');});
+  });
+ }
+ loadDevices();
+})();
 
 /* Barangay lock countdown (profile) */
 (function(){

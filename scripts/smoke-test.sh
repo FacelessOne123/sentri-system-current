@@ -53,6 +53,117 @@ for p in index.php login.php signup.php admin.php verify_email.php forgot_passwo
   [[ $code == 200 ]] || { [[ $p == install.php && $code == 403 && -f config/install.lock ]]; } && p "$p → $code" || f "$p → $code"
 done
 
+say "0b. GPS bridge — pairing, ingestion and last-known fallback"
+GJJ="$JDIR/gps.jar"
+curl -s -c "$GJJ" "$BASE/login.php" -o /dev/null
+curl -s -b "$GJJ" -c "$GJJ" -X POST "$BASE/login.php" \
+  --data-urlencode "portal=community" --data-urlencode "email=community@demo.ph" \
+  --data-urlencode "password=Demo@1234" > /dev/null
+GTC=$(csrf_for "$GJJ" "$BASE/portal/community.php")
+
+# The session-only actions must reject a caller with no session at all.
+ANON=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/gps_bridge.php?action=list_devices")
+[[ $ANON == 401 ]] && p "gps_bridge rejects unauthenticated session calls" || f "gps_bridge anon expected 401, got $ANON"
+
+# A pairing code requires a CSRF token.
+NOCSRF=$(curl -s -o /dev/null -w '%{http_code}' -b "$GJJ" -X POST "$BASE/api/gps_bridge.php?action=create_pair_code")
+[[ $NOCSRF == 403 ]] && p "gps_bridge requires CSRF for pairing codes" || f "gps_bridge CSRF expected 403, got $NOCSRF"
+
+CODE_RESP=$(curl -s -b "$GJJ" -X POST "$BASE/api/gps_bridge.php?action=create_pair_code" -H "X-CSRF-Token: $GTC")
+GCODE=$(echo "$CODE_RESP" | grep -oE '"code":"[0-9]{8}"' | cut -d'"' -f4)
+[[ ${#GCODE} -eq 8 ]] && p "gps_bridge issues an 8-digit pairing code" || f "gps_bridge pairing code missing: $CODE_RESP"
+
+# The plaintext code must never be stored - only its hash.
+if [[ -n $MYSQL_CMD ]]; then
+  GHASH=$($MYSQL_CMD -N -e "SELECT code_hash FROM gps_pair_codes ORDER BY id DESC LIMIT 1" 2>/dev/null)
+  [[ -n $GHASH && "$GHASH" != "$GCODE" && ${#GHASH} -eq 64 ]] \
+    && p "pairing code is stored hashed, not in plaintext" \
+    || f "pairing code hashing looks wrong: $GHASH"
+else
+  s "pairing-code hashing test needs mysql CLI"
+fi
+
+# A wrong code must be refused.
+BADP=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/gps_bridge.php?action=pair" \
+  -H 'Content-Type: application/json' -d '{"code":"00000000","label":"bogus"}')
+[[ $BADP == 400 ]] && p "gps_bridge refuses an invalid pairing code" || f "invalid code expected 400, got $BADP"
+
+# Pair for real and capture the device token.
+PAIR_RESP=$(curl -s -X POST "$BASE/api/gps_bridge.php?action=pair" -H 'Content-Type: application/json' \
+  -d "{\"code\":\"$GCODE\",\"label\":\"[SMOKE] GPS bridge\"}")
+GTOKEN=$(echo "$PAIR_RESP" | grep -oE '"token":"[a-f0-9]{64}"' | cut -d'"' -f4)
+[[ ${#GTOKEN} -eq 64 ]] && p "gps_bridge pairs a device and returns a token" || f "pairing failed: $PAIR_RESP"
+
+# A pairing code is single-use.
+REPLAY=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/gps_bridge.php?action=pair" \
+  -H 'Content-Type: application/json' -d "{\"code\":\"$GCODE\",\"label\":\"replay\"}")
+[[ $REPLAY == 400 ]] && p "pairing code cannot be replayed" || f "replayed code expected 400, got $REPLAY"
+
+# Ingestion: valid fix, invalid coords and a missing token.
+if [[ -n $GTOKEN ]]; then
+  UP=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/gps_bridge.php?action=update" \
+    -H "Authorization: Bearer $GTOKEN" -H 'Content-Type: application/json' \
+    -d '{"lat":14.421881,"lng":120.916066,"accuracy":12.5}')
+  [[ $UP == 200 ]] && p "gps_bridge accepts a signed location fix" || f "fix ingest expected 200, got $UP"
+
+  BADCOORD=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/gps_bridge.php?action=update" \
+    -H "Authorization: Bearer $GTOKEN" -H 'Content-Type: application/json' \
+    -d '{"lat":999,"lng":120}')
+  [[ $BADCOORD == 400 ]] && p "gps_bridge rejects out-of-range coordinates" || f "bad coords expected 400, got $BADCOORD"
+
+  NOTOK=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/gps_bridge.php?action=update" \
+    -H 'Content-Type: application/json' -d '{"lat":14.4,"lng":120.9}')
+  [[ $NOTOK == 401 ]] && p "gps_bridge rejects an unauthenticated fix" || f "no-token expected 401, got $NOTOK"
+
+  # The session endpoint must return the ingested fix.
+  MYGPS=$(curl -s -b "$GJJ" "$BASE/api/gps_bridge.php?action=get_my_gps")
+  echo "$MYGPS" | grep -q '"source":"bridge"' \
+    && p "get_my_gps returns the bridge fix" \
+    || f "get_my_gps did not return the bridge fix: $MYGPS"
+
+  # The community portal must show the bridge position in its GPS chip.
+  PORTAL=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
+  echo "$PORTAL" | grep -q 'gpsBridgeStatus' \
+    && p "community portal renders the GPS bridge panel" \
+    || f "community portal is missing the GPS bridge panel"
+
+  # A responder signed in on the SAME browser must not shadow the community
+  # account here - otherwise the community portal reads the responder's
+  # position (a cross-account leak). Sign the responder in on the same jar,
+  # then confirm the community read still returns the community coordinates.
+  curl -s -b "$GJJ" -c "$GJJ" "$BASE/gov/login.php" -o /dev/null
+  curl -s -b "$GJJ" -c "$GJJ" -X POST "$BASE/gov/login.php" \
+    --data-urlencode "portal=first_responder" --data-urlencode "email=responder@demo.ph" \
+    --data-urlencode "password=Demo@1234" > /dev/null
+  GCOM=$(curl -s -b "$GJJ" "$BASE/api/gps_bridge.php?action=get_my_gps")
+  if [[ -n "$MYSQL_CMD" ]]; then
+    RESP_LAT=$($MYSQL_CMD -N -e "SELECT gps_lat FROM users WHERE email='responder@demo.ph'" 2>/dev/null)
+    COM_LAT=$($MYSQL_CMD -N -e "SELECT gps_lat FROM users WHERE email='community@demo.ph'" 2>/dev/null)
+    if [[ -n $RESP_LAT && -n $COM_LAT && "$RESP_LAT" != "$COM_LAT" ]]; then
+      echo "$GCOM" | grep -q "$RESP_LAT" \
+        && f "community GPS read leaked the responder account" \
+        || p "community GPS stays scoped to the community account"
+    else
+      s "realm isolation test needs distinct account positions"
+    fi
+  fi
+fi
+
+# Revoke the device and confirm the token stops working.
+DEVID=$(curl -s -b "$GJJ" "$BASE/api/gps_bridge.php?action=list_devices" | grep -oE '"id":[0-9]+' | head -1 | cut -d: -f2)
+if [[ -n $DEVID && -n $GTOKEN ]]; then
+  curl -s -b "$GJJ" -X POST "$BASE/api/gps_bridge.php?action=revoke" \
+    -H "X-CSRF-Token: $GTC" -H 'Content-Type: application/json' -d "{\"device_id\":$DEVID}" > /dev/null
+  AFTER=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/gps_bridge.php?action=update" \
+    -H "Authorization: Bearer $GTOKEN" -H 'Content-Type: application/json' -d '{"lat":14.4,"lng":120.9}')
+  [[ $AFTER == 401 ]] && p "revoked device token stops working" || f "revoked token expected 401, got $AFTER"
+fi
+
+# The local bridge daemon must be able to deliver a fix on its own.
+if [[ -n $MYSQL_CMD ]]; then
+  $MYSQL_CMD -e "DELETE FROM user_gps_fixes WHERE source='bridge'; DELETE FROM user_gps_devices WHERE label LIKE '[SMOKE]%';" >/dev/null 2>&1 || true
+fi
+
 say "1. All five role logins land on their portals"
 CS=$(login community community community@demo.ph Demo@1234) && p "community (sentri-comm)" || f "community"
 BS=$(login barangay barangay barangay@demo.ph Demo@1234)  && p "barangay (sentri-gov)"   || f "barangay"
