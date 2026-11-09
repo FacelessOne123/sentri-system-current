@@ -38,5 +38,3 @@ composer.lock
 # assets/geo/imus-address-terms.json IS committed.
 assets/geo/osm-imus-addresses.json
 
-# Local GPS bridge state (contains the device token)
-.sentri/

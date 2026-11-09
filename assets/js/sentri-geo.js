@@ -954,7 +954,7 @@
    *
    * @param {(pos:{lat,lng,accuracy,speed,source:string})=>void} callback
    * @param {(err:Object)=>void} errorHandler called with the last error
-   * @param {Object} [opts] {retryDelays:[ms], source:'browser'|'bridge'}
+   * @param {Object} [opts] {retryDelays:[ms], source:'browser'}
    */
   function watchUserLocationResilient(callback, errorHandler, opts) {
     opts = opts || {};

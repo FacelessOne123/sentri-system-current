@@ -88,6 +88,38 @@ if (!function_exists('sentri_barangay_is_valid')) {
  }
 }
 
+if (!function_exists('sentri_barangay_center')) {
+ /**
+  * Approximate centre point of a barangay, used as a coarse "home area"
+  * when no live position is available.
+  *
+  * The GeoJSON stores each feature's centre as [lng, lat] in the
+  * "center" property; this returns [lat, lng] to match the rest of the
+  * application (and the Leaflet/OSM convention).
+  *
+  * This is IDENTITY context, not a claim about where someone is right now:
+  * a resident who is commuting is somewhere else entirely.
+  *
+  * @return array{0:float,1:float}|null [lat, lng] or null when unknown
+  */
+ function sentri_barangay_center(string $name): ?array {
+  $canonical = sentri_barangay_canonical($name);
+  if ($canonical === null) return null;
+  foreach (sentri_barangay_features() as $feature) {
+   $featureName = trim((string)($feature['properties']['name'] ?? ''));
+   if ($featureName !== $canonical) continue;
+   $center = $feature['properties']['center'] ?? null;
+   if (!is_array($center) || count($center) < 2) return null;
+   $lng = (float)$center[0];
+   $lat = (float)$center[1];
+   if (!is_finite($lat) || !is_finite($lng)) return null;
+   if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) return null;
+   return [$lat, $lng];
+  }
+  return null;
+ }
+}
+
 /**
  * How long a community member must wait before changing their barangay again.
  *

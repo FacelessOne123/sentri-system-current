@@ -42,7 +42,6 @@ sentri-system/
 │ │ # admin user management incl. admin_create_official (provisioning)
 │ ├── contacts.php # Emergency contacts CRUD + notification dispatch
 │ ├── geocode_proxy.php # Server-side Nominatim proxy (CORS-safe)
-│ ├── gps_bridge.php # GPS bridge: pairing codes, device tokens, fix ingestion
 │ └── security.php # Security Monitor endpoint (failed logins, audit events)
 │
 ├── portal/
@@ -56,12 +55,6 @@ sentri-system/
 │ ├── .htaccess # Blocks PHP execution inside uploads/
 │ └── reports/ # Uploaded incident photos (runtime, git-ignored)
 │
-├── tools/
-│ └── gps-bridge/
-│   ├── bridge.php # Local GPS bridge daemon (pairs, forwards fixes)
-│   ├── router.php # Front controller for `php -S`
-│   ├── status-page.php # Bridge status UI template
-│   └── start.sh # Launcher with --server / --port / --label flags
 │
 └── sql/
  ├── sentri.sql # Full fresh-install schema
@@ -77,7 +70,7 @@ sentri-system/
  ├── 009_barangay_lock.sql # Anti-abuse barangay change lock timestamp
  ├── 010_resident_address.sql # Resident home address column
  ├── 011_barangay_address_terms.sql # Barangay-scoped address suggestion dictionary
- └── 012_gps_bridge.sql # GPS fix metadata + bridge pairing/devices/fixes
+ └── 012_gps_fix_metadata.sql # GPS fix accuracy/timestamp/source metadata
 ```
 
 ---
@@ -183,7 +176,7 @@ Leave it as `http://localhost` to keep auto-detection active everywhere.
 - In-app GTA-style heading-up navigation to report locations (no Google Maps redirect), with auto-arrival detection
 - Filter feed by status, category, or keyword
 - Dark / light mode toggle
-- GPS chip that always says where the position came from: **GPS Live**, **GPS Bridge** (a paired local bridge) or **Last Known** - stale positions are never presented as live
+- GPS chip that always says where the position came from: **GPS Live**, **Last Known** or **Registered Address** - stale positions are never presented as live
 
 ### Role-Based Portals
 - **Community** - report submission, feed browsing, map view
@@ -245,9 +238,6 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 | emergency_contacts | LGU, hospital, traffic, police, fire directory |
 | contact_notifications | Log of emails sent per report |
 | login_logs | Authentication audit trail |
-| gps_pair_codes | Single-use pairing codes for the GPS bridge |
-| user_gps_devices | Paired GPS bridge devices (token stored hashed) |
-| user_gps_fixes | Location history reported by GPS bridges |
 
 ### users table columns (current)
 `id`, `first_name`, `last_name`, `email`, `password`, `role`, `phone_number`,
@@ -258,93 +248,105 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 ---
 
-## GPS location & the GPS bridge
+## GPS location
 
 Browsers only allow geolocation on **HTTPS** or **localhost**. When SenTri is
 opened from another device on the LAN over plain `http://`, the browser blocks
-GPS entirely and the app has no position. SenTri solves this with a layered
-fallback and an optional local bridge.
+GPS entirely and the app has no position. SenTri degrades gracefully instead of
+failing silently.
 
 ### Location source chain
 
-| Priority | Source | Chip shows |
-|----------|--------|------------|
-| 1 | Live browser geolocation | `GPS Live` (green) |
-| 2 | Paired GPS bridge | `GPS Bridge · 1m ago` (blue) |
-| 3 | Last known position (device cache or server) | `Last Known · 2h ago` (amber) |
-| 4 | Nothing available | `GPS Off` (grey) |
+| Priority | Source | Chip shows | Precision |
+|----------|--------|------------|-----------|
+| 1 | Live browser geolocation | `GPS Live` (green) | 20-100 m |
+| 2 | Last known position (device cache, else server copy) | `Last Known · 2h ago` (amber) | as recorded |
+| 3 | Registered barangay centre | `Registered Address` (grey) | ~barangay |
+| 4 | Nothing available | `GPS Off` (grey) | - |
 
-- Every good fix is cached in `localStorage` (`sentri:lastFix:v1`, 7-day window)
-  and mirrored to the server, so the position survives a dropped connection and
-  follows the user to another browser.
-- The geolocation watcher now **reconnects with backoff** instead of giving up
-  after the first error, and re-arms when the tab becomes visible again.
-- **"Use My Location"** offers the last known position when a live fix fails.
-- **"Copy My GPS"** labels the copied text with its source and age, so a
-  responder is never handed a stale position as if it were live.
+**The browser already does WiFi + cell-tower positioning.** Chrome and Safari
+fuse GPS satellites, nearby WiFi access points and cell towers internally and
+hand the page one blended fix - that is why step 1 is accurate even on a
+laptop with no GPS chip. HTTPS is simply the switch that lets the browser do
+it. No website can read the raw WiFi/cell identifiers itself, so there is no
+API that could add a second positioning method.
+
+### What each source may and may not be used for
+
+| Purpose | Live GPS | Last known | Registered address |
+|---------|----------|------------|--------------------|
+| Report pin (where the incident is) | yes | yes, with confirmation | **never** |
+| Proximity alerts ("nearby reports") | yes | yes | **never** (false toasts) |
+| Copy My GPS (emergency context) | yes | yes, labelled with age | address text only, never coordinates |
+| "My barangay" identity context | - | - | yes |
+
+A resident who is commuting is somewhere else entirely, so the registered
+address is never presented as "where you are". It is identity context, the
+same thing the barangay shown on the profile is.
+
+### Reporting from another barangay
+
+A report's location is **always the dropped pin**, never the reporter's
+position or registered address. A resident may therefore report an incident in
+any barangay, including one they are not registered in - including a sighting
+from a commute that they file later from home. The server tags the report's
+barangay from the pin's coordinates against the authoritative Imus geometry, so
+the correct barangay officials receive it. The modal shows which barangay the
+pin currently routes to, so a misplaced pin is visible before submitting.
+
+### Resilience details
+
+- Every good fix is cached in `localStorage` (`sentri:lastFix:v1`, 7-day
+  window) **scoped per account**, and mirrored to the server, so the position
+  survives a dropped connection and follows the user to another browser.
+- The geolocation watcher **reconnects with backoff** instead of dying on the
+  first error, and re-arms when the tab becomes visible again.
+- "Use My Location" offers the last known position when a live fix fails, and
+  always leaves the pin draggable.
+- "Copy My GPS" labels the copied text with its source and age, so a stale
+  position is never handed to a responder as if it were live.
 - Report pins are never auto-placed from a stale position - the resident always
   confirms it and can drag the pin.
 
-### Running a GPS bridge
+### Why there is no IP-based fallback
 
-The bridge is a small PHP daemon that runs **on the machine that has the GPS
-hardware** and forwards positions to the SenTri server. It listens on
-`127.0.0.1` only, so it is not exposed to the LAN.
+Public-IP geolocation is not a usable fallback for SenTri. Carriers and
+business connections commonly sit behind **CGNAT**, so the address that gets
+geolocated belongs to the ISP's aggregation point rather than the user - a
+residential subscriber in Dasmariñas can resolve to Sorsogon, Laguna or
+Batangas. SenTri is also Imus-only, so an out-of-city result would be
+rejected by the geo-fence or, worse, silently mislead someone in an
+emergency. A wrong location is worse than no location, so the chain stops at
+the registered address instead.
 
-```bash
-# 1. In SenTri: My Profile -> GPS Bridge -> Generate pairing code
-# 2. On the machine with the GPS hardware:
-bash tools/gps-bridge/start.sh --server=http://192.168.1.10/sentri-system
+### HTTPS is the real unlock
 
-# 3. Open http://127.0.0.1:8787/ and enter the pairing code
+Step 1 of the chain (live GPS, including WiFi and cell-tower positioning) only
+works on a secure origin. Serving SenTri over HTTPS turns on accurate
+positioning for every device at once, with no extra hardware, no second
+device and no user setup. A minimal Caddy setup:
+
+```
+# /etc/caddy/Caddyfile
+sentri.example.com {
+    reverse_proxy 127.0.0.1:80
+}
 ```
 
-Push a position into the bridge from any local process:
-
-```bash
-curl -X POST http://127.0.0.1:8787/update \
-     -H 'Content-Type: application/json' \
-     -d '{"lat":14.4218,"lng":120.9160,"accuracy":12}'
-```
-
-One-shot mode (for scripts and CI):
-
-```bash
-php tools/gps-bridge/bridge.php --once --server=http://host/sentri-system \
-    --code=12345678 --lat=14.4218 --lng=120.9160 --accuracy=12
-```
-
-The device token is stored in `~/.sentri/gps-bridge.json` (mode `0600`).
-
-### Bridge security
-
-- Pairing codes are **single-use**, expire after 15 minutes, and are stored
-  only as a SHA-256 hash.
-- Device tokens are shown **once** and stored only as a SHA-256 hash.
-- Session-scoped actions (pairing codes, listing/revoking devices, reading your
-  own position) require a signed-in account **and** a valid CSRF token.
-- Fix ingestion requires the `Authorization: Bearer <device token>` header and
-  validates coordinate ranges; coordinates are never readable by other users.
-- Revoking a device in My Profile immediately invalidates its token.
-- The bridge binds to `127.0.0.1` by default; use `--allow-lan=1` only on a
-  trusted network.
-
-> **Transport note:** the device token travels over whatever URL you configure.
-> On plain HTTP it is visible to anyone sniffing that LAN. Put SenTri behind
-> HTTPS (Caddy/nginx + a certificate) for anything beyond a trusted network -
-> that also restores native browser GPS and makes the bridge unnecessary.
+Caddy provisions and renews the certificate automatically. An nginx +
+certbot arrangement works equally well.
 
 ### Database
 
-Migration `sql/migrations/012_gps_bridge.sql` adds the `gps_accuracy`,
-`gps_at` and `gps_source` columns plus the three bridge tables. Run it before
-using the bridge:
+Migration `sql/migrations/012_gps_fix_metadata.sql` adds the `gps_accuracy`,
+`gps_at` and `gps_source` columns to `users`:
 
 ```bash
-mysql -uroot sentri < sql/migrations/012_gps_bridge.sql
+mysql -uroot sentri < sql/migrations/012_gps_fix_metadata.sql
 ```
 
 ---
+
 
 ## Security Notes
 
@@ -362,7 +364,7 @@ mysql -uroot sentri < sql/migrations/012_gps_bridge.sql
 
 | Date | Change |
 |------------|--------|
-| 2026-11-09 | **feat(gps):** GPS fallback chain and an optional local **GPS bridge**. Browsers only allow geolocation over HTTPS/localhost, so opening SenTri from another device on the LAN usually leaves the app with no position at all - the chip now states exactly where the position came from (`GPS Live`, `GPS Bridge`, `Last Known`, `GPS Off`) and never presents a stale fix as live. Every good fix is cached in `localStorage` (`sentri:lastFix:v1`) and mirrored to the server (`users.gps_lat/gps_lng/gps_accuracy/gps_at/gps_source`), so the position survives a dropped connection and follows the user to another browser; the geolocation watcher reconnects with backoff instead of dying on the first error; "Use My Location" offers the last known position and "Copy My GPS" labels the copied text with its source and age. New `api/gps_bridge.php` pairs a local daemon with the server using a single-use, hashed 8-digit pairing code and a hashed device token (session actions require CSRF, fixes require a bearer token, devices can be revoked) - schema in migration `012_gps_bridge.sql`, daemon in `tools/gps-bridge/`. The community portal polls the bridge every 15 s and the responder portal uses it as a navigation fallback |
+| 2026-11-09 | **feat(gps):** Honest location fallback chain - `GPS Live` → `Last Known · 2h ago` → `Registered Address` → `GPS Off`. The browser's own geolocation already fuses GPS, WiFi access points and cell towers internally (HTTPS is the switch that enables it), so there is no second positioning API to add; instead the app now degrades gracefully instead of failing silently: every good fix is cached per account in `localStorage` (`sentri:lastFix:v1`, 7-day window) and mirrored to the server (`users.gps_lat/gps_lng/gps_accuracy/gps_at/gps_source`), so the position survives a dropped connection and follows the user to another browser; the geolocation watcher reconnects with backoff instead of dying on the first error; "Use My Location" offers the last known position; "Copy My GPS" labels the copied text with its source and age - and when only the registered address exists it copies the address text, never invented coordinates. The registered address is identity context only: it is never used as a report pin, for proximity alerts, or as emergency coordinates, so a resident who commutes and files a report elsewhere is never mislocated. A report's location remains the dropped pin alone, and the report modal now shows which barangay the pin routes to. IP-based lookup was deliberately excluded: CGNAT makes carrier IPs resolve to the wrong province (a Dasmariñas subscriber appearing in Sorsogon/Laguna/Batangas), and a wrong location is worse than no location. A short-lived GPS-bridge experiment (`api/gps_bridge.php`, `tools/gps-bridge/`) was removed before merge as too complex for residents |
 | 2026-11-08 | **feat(community):** Community reports are now located solely by the dropped pin - the report modal no longer prefills or auto-drops a pin from a stored location; users may pin anywhere inside Imus and the server tags the report's barangay from the authoritative 95-barangay geometry, rejecting pins that do not resolve to an Imus barangay. My Profile keeps the resident Barangay + Home Address for identity/verification (the home address is scoped to barangay/LGU/responder staff and never returned in the public feed), and the barangay change lock was reintroduced at **1 minute for testing** (`SENTRI_BRGY_LOCK_MINUTES` in `config/geo.php`, restore to `43200`/30 days for production). Also added the responder-first resolve lock: while a first responder is assigned, barangay/LGU cannot resolve the report, and resolve updates are race-safe. Removed the `_maketest.php` session-spoofing backdoor |
 | 2026-11-08 | **feat(alerts):** Responder and LGU portals now poll `poll_report_alerts` every 15-20 s and show right-side toasts for new dangerous reports (BFP/fire = dangerous fire only, PNP = dangerous crime only, other responders = any dangerous) and LGU escalations. Fixed status-upgrade toasts for previously unseen caution reports and added update-watermark polling for responders so caution → dangerous upgrades are announced. Kept the tracked `.env` placeholders and `.env.local` documentation after merging PR #13 |
 | 2026-11-06 | **feat(barangay):** Barangay Incident Map is now locked to the Imus perimeter (`SentriGeo.lockToImus` + hard max-bounds), rejects pins outside Imus, and draws community-style labels on all 95 barangay outlines (`labels: true`) with pin-overlap avoidance. Old outbox verification/reset links are rebuilt on the current host, and loopback hosts always follow the live request origin even when `APP_URL` is pinned to a stale local port |

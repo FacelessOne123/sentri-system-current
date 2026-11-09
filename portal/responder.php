@@ -474,7 +474,7 @@ tr:hover td{background:#fafafa;}
  <div id="gpsCoords" style="font-size:0.85rem;font-weight:700;color:var(--text);">
  <?= $saved_gps_lat !== null && $saved_gps_lng !== null ? htmlspecialchars(number_format((float)$saved_gps_lat, 6).', '.number_format((float)$saved_gps_lng, 6)) : 'Tap the button to get and save your current location.' ?>
  </div>
- <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports. If the browser cannot reach GPS, a paired <b>GPS bridge</b> on this machine keeps your position up to date.</div>
+ <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports. If the browser cannot reach GPS, your last known position is used and clearly labelled as such.</div>
  </div>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
  <button type="button" class="btn-dispatch" onclick="captureMyGps(this)"><i class="fas fa-crosshairs"></i> Get My GPS</button>
@@ -924,7 +924,7 @@ var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$save
 
 function gpsAgeLabel(){
  if(!responderGps.at) return '';
- var ts = Date.parse(String(responderGps.at).replace(' ','T') + 'Z');
+ var ts = Date.parse(String(responderGps.at).replace(' ','T'));
  if(isNaN(ts)) return '';
  var sec = Math.max(0, Math.round((Date.now()-ts)/1000));
  if(sec < 60) return sec + 's ago';
@@ -940,7 +940,7 @@ function setGpsText(lat, lng, saved){
  if(status){
   if(saved){
    var age = gpsAgeLabel();
-   var src = responderGps.source === 'bridge' ? 'GPS bridge' : (responderGps.source === 'browser' ? 'Browser GPS' : 'Saved on profile');
+   var src = responderGps.source === 'browser' ? 'Browser GPS' : 'Saved on profile';
    status.textContent = src + (age ? ' · ' + age : '');
   } else {
    status.textContent = 'Current location';
@@ -1129,28 +1129,6 @@ function onNavPosition(fix){
  }
  }
 }
-/* Poll the paired GPS bridge so responders keep a position even when the
-   browser cannot obtain one (LAN HTTP, denied permission, no GPS chip). */
-function pollResponderBridge(){
- fetch('../api/gps_bridge.php?action=get_my_gps')
-  .then(function(r){return r.json();})
-  .then(function(d){
-   if(!d||d.status!=='success'||!d.fix)return;
-   var f=d.fix;
-   var at=f.received_at?Date.parse(String(f.received_at).replace(' ','T')+'Z'):Date.now();
-   if(isNaN(at))at=Date.now();
-   // A bridge fix is newer than the profile snapshot only if it is recent.
-   if(responderGps.at && at < Date.parse(String(responderGps.at).replace(' ','T')+'Z')) return;
-   responderGps.lat=f.lat; responderGps.lng=f.lng; responderGps.acc=f.accuracy;
-   responderGps.at=new Date(at).toISOString(); responderGps.source=f.source||'bridge';
-   setGpsText(f.lat,f.lng,true);
-   updateAccChip(document.getElementById('gpsAccChip'), f.accuracy);
-  })
-  .catch(function(){});
-}
-setInterval(function(){ if(document.visibilityState!=='hidden') pollResponderBridge(); }, 15000);
-pollResponderBridge();
-
 function openNavigation(lat, lng, reportId){
  if(lat === null || lng === null || typeof lat === 'undefined' || typeof lng === 'undefined' || lat === '' || lng === ''){
  showRespToast('This report has no GPS coordinates.', 'error');
