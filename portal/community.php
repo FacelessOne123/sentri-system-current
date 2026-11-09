@@ -860,7 +860,7 @@ function actionToast(message,type){
  </div>
  <div class="form-group"><label>City / Municipality</label><input value="Imus City" readonly style="opacity:.7;cursor:not-allowed;"></div>
  </div>
- <div class="form-group"><label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label><input name="resident_address" value="<?= htmlspecialchars($user_address) ?>" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required></div>
+ <div class="form-group"><label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label><input name="resident_address" id="pfAddress" value="<?= htmlspecialchars($user_address) ?>" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required></div>
  <div class="pf-divider"></div>
  <div class="pf-section-label">Change Password <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;">(leave blank to keep current)</span></div>
  <div class="form-row">
@@ -2867,7 +2867,7 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
 </div>
 
 <?= csrf_script() ?>
-<?php if($needs_residence && $view !== 'profile'): ?>
+<?php if($needs_residence && !in_array($view, ['profile','contacts','map'], true)): ?>
 <!-- Mandatory resident-profile gate: existing accounts must supply a barangay
      and home address before they can use the portal or file a report. -->
 <div id="residenceGate" role="dialog" aria-modal="true" aria-labelledby="residenceGateTitle" style="position:fixed;inset:0;z-index:100000;background:rgba(6,24,44,.72);display:flex;align-items:center;justify-content:center;padding:18px;">
@@ -2889,7 +2889,7 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  <input type="hidden" name="avatar_color" value="<?= htmlspecialchars($avatar_color, ENT_QUOTES, 'UTF-8') ?>">
  <div class="form-group">
  <label>Barangay</label>
- <select name="barangay_name" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
+ <select name="barangay_name" id="gateBarangay" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
  <option value="">Select your barangay</option>
  <?php foreach (sentri_barangay_names() as $brgyName): ?>
  <option value="<?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($brgyName, ENT_QUOTES, 'UTF-8') ?></option>
@@ -2898,7 +2898,7 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  </div>
  <div class="form-group">
  <label>Home Address <span style="font-weight:400;text-transform:none;letter-spacing:0;">(House No., Street, Purok)</span></label>
- <input type="text" name="resident_address" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
+ <input type="text" name="resident_address" id="gateAddress" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border,#e5e7eb);border-radius:9px;font-size:.9rem;background:var(--input-bg,#fff);color:var(--text,#111827);">
  </div>
  <button type="submit" id="residenceGateBtn" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,var(--blue-accent,#3a8dff),var(--blue,#1c57b2));color:#fff;font-size:.92rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;"><i class="fas fa-floppy-disk" style="margin-right:7px;"></i><span>Save and continue</span></button>
  </form>
@@ -2942,6 +2942,23 @@ function openTutorial(){document.getElementById('tutorialModal').classList.add('
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTutorial();});
+</script>
+<script src="../assets/js/sentri-address-autocomplete.js?v=<?= filemtime(__DIR__ . '/../assets/js/sentri-address-autocomplete.js') ?>"></script>
+<script>
+(function(){
+ function bind(){
+  if(!window.SentriAddress) return;
+  var gb=document.getElementById('gateBarangay'), ga=document.getElementById('gateAddress');
+  if(gb&&ga&&ga.dataset.sentriAddress!=='1'){
+   SentriAddress.attach(ga,{getBarangay:function(){return gb.value;},barangayEl:gb});
+  }
+  var pb=document.getElementById('pfBrgy'), pa=document.getElementById('pfAddress');
+  if(pb&&pa&&pa.dataset.sentriAddress!=='1'){
+   SentriAddress.attach(pa,{getBarangay:function(){return pb.value;},barangayEl:pb});
+  }
+ }
+ if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind); else bind();
+})();
 </script>
 </body>
 </html>

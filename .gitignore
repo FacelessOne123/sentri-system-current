@@ -37,4 +37,3 @@ composer.lock
 # `php scripts/build-address-terms.php --fetch`). The processed snapshot
 # assets/geo/imus-address-terms.json IS committed.
 assets/geo/osm-imus-addresses.json
-
