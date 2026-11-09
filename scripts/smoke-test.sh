@@ -53,6 +53,27 @@ for p in index.php login.php signup.php admin.php verify_email.php forgot_passwo
   [[ $code == 200 ]] || { [[ $p == install.php && $code == 403 && -f config/install.lock ]]; } && p "$p → $code" || f "$p → $code"
 done
 
+say "0b. Barangay address-term suggestions"
+AT=$(curl -s "$BASE/api/address_terms.php?barangay=Bucandala%20I")
+echo "$AT" | grep -q '"status":"success"' && p "address API accepts a valid barangay" || f "address API valid-barangay failed: $(echo "$AT" | head -c 160)"
+ATC=$(echo "$AT" | grep -oE '"count":[0-9]+' | head -1 | cut -d: -f2)
+[[ ${ATC:-0} -gt 0 ]] && p "Bucandala I has $ATC address terms" || f "expected address terms for Bucandala I"
+echo "$AT" | grep -q '"source":"database"\|"source":"snapshot"' && p "address API reports its data source" || f "address API source missing"
+echo "$AT" | grep -q 'OpenStreetMap contributors' && p "address API returns OSM attribution" || f "address API attribution missing"
+BADT=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/address_terms.php?barangay=Atlantis")
+[[ $BADT == 400 ]] && p "address API rejects an unknown barangay (400)" || f "unknown barangay expected 400, got $BADT"
+MISST=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/address_terms.php")
+[[ $MISST == 400 ]] && p "address API rejects a missing barangay (400)" || f "missing barangay expected 400, got $MISST"
+MAG=$(curl -s "$BASE/api/address_terms.php?barangay=Magdalo")
+echo "$AT" | grep -qi 'Aguado Street' && f "address terms leaked across barangays" || p "no cross-barangay term leak"
+echo "$MAG" | grep -q 'Aguado Street' && p "Magdalo returns its own streets" || f "Magdalo street lookup failed"
+QF=$(curl -s "$BASE/api/address_terms.php?barangay=Bucandala%20I&q=street")
+QFC=$(echo "$QF" | grep -oE '"count":[0-9]+' | head -1 | cut -d: -f2)
+[[ ${QFC:-0} -gt 0 && ${QFC:-0} -le ${ATC:-0} ]] && p "address API text filter narrows results ($QFC/$ATC)" || f "address API filter failed ($QFC/$ATC)"
+COV=$(php -r '$p=$argv[1]."/assets/geo/imus-address-terms.json";$d=json_decode(@file_get_contents($p),true);if(!is_array($d)||!is_array($d["barangays"]??null)){echo "0/0";exit;}$m=0;foreach($d["barangays"] as $b){if(!$b)$m++;}echo count($d["barangays"])."/".$m;' "$(dirname "$0")/.." 2>/dev/null)
+[[ $COV == "95/0" ]] && p "address snapshot covers all 95 barangays" || f "address snapshot coverage: $COV"
+curl -s "$BASE/signup.php" | grep -q 'sentri-address-autocomplete.js' && p "signup loads the address-autocomplete module" || f "signup is missing the autocomplete script"
+
 say "1. All five role logins land on their portals"
 CS=$(login community community community@demo.ph Demo@1234) && p "community (sentri-comm)" || f "community"
 BS=$(login barangay barangay barangay@demo.ph Demo@1234)  && p "barangay (sentri-gov)"   || f "barangay"
@@ -180,6 +201,9 @@ if [[ -n $LV ]]; then
     # Missing residence must block reporting even with a valid pin.
     if [[ -n $MYSQL_CMD ]]; then
       $MYSQL_CMD -e "UPDATE users SET resident_address=NULL WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      CONTACTS_HTML=$(curl -s -b "$UJ" "$BASE/portal/community.php?view=contacts")
+      echo "$CONTACTS_HTML" | grep -q 'id="residenceGate"' \
+        && f "emergency contacts blocked by the residence gate" || p "emergency contacts stay usable without a residence"
       NO_RES=$(curl -s -b "$UJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
         -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] No residence" \
         -F "description=fixture" -F "location_name=site" -F "city=Imus" \

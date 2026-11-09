@@ -324,6 +324,28 @@ run($conn, 'Create table <code>contact_notifications</code>',
  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
 );
 
+// ── 8b. barangay_address_terms ───────────────────────────────────────────────
+run($conn, 'Create table <code>barangay_address_terms</code>',
+ "CREATE TABLE IF NOT EXISTS `barangay_address_terms` (
+ `id` INT(11) NOT NULL AUTO_INCREMENT,
+ `barangay_name` VARCHAR(150) NOT NULL,
+ `term` VARCHAR(190) NOT NULL,
+ `term_key` VARCHAR(190) NOT NULL,
+ `term_type` ENUM('street','road','subdivision','phase','block','purok','sitio','landmark','other') NOT NULL DEFAULT 'other',
+ `parent_term` VARCHAR(190) DEFAULT NULL,
+ `latitude` DECIMAL(10,7) DEFAULT NULL,
+ `longitude` DECIMAL(10,7) DEFAULT NULL,
+ `source` ENUM('osm','lgu','manual') NOT NULL DEFAULT 'osm',
+ `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+ `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ PRIMARY KEY (`id`),
+ UNIQUE KEY `uq_address_term` (`barangay_name`, `term_key`, `term_type`),
+ KEY `idx_address_brgy` (`barangay_name`),
+ KEY `idx_address_type` (`term_type`)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
+
 // ── 9. Foreign keys ──────────────────────────────────────────────────────────
 $fkChecks = [
  ['reports', 'fk_reports_user', "ALTER TABLE `reports` ADD CONSTRAINT `fk_reports_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE"],

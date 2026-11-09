@@ -165,6 +165,7 @@ Leave it as `http://localhost` to keep auto-detection active everywhere.
 - Submit geo-tagged incident reports with title, category, severity status, and location pin
 - Report location comes only from the dropped pin - no default or saved profile location; the server tags the barangay from authoritative Imus geometry
 - My Profile keeps the resident Barangay + Home Address for identity/verification (home address is only shown to barangay/LGU/responder staff, never in the public feed), and barangay changes are rate-limited by an anti-abuse lock
+- Barangay-scoped address suggestions: the residence fields in signup, My Profile and the "Complete your resident profile" popup autocomplete streets, subdivisions, phases, blocks, puroks and sitios for the selected barangay. Suggestions are advisory only - residents can still type a free-form house number/street
 - Attach up to 3 photos per report (JPG, PNG, WEBP - max 5 MB each)
 - Adjustable affected radius slider (50 m to 3 km)
 - Upvote / downvote reports for community credibility scoring
@@ -232,6 +233,7 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 | report_votes | Upvote / downvote records (1 per user/report) |
 | emergency_contacts | LGU, hospital, traffic, police, fire directory |
 | contact_notifications | Log of emails sent per report |
+| barangay_address_terms | Barangay-scoped street/subdivision/phase/block/purok/sitio dictionary (address suggestions) |
 | login_logs | Authentication audit trail |
 
 ### users table columns (current)
@@ -239,6 +241,46 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 `org_name`, `position`, `barangay_name`, `municipality`, `responder_type`,
 `is_approved`, `email_verified`, `verification_token`, `token_expires_at`,
 `reset_token`, `reset_token_expires`, `created_at`
+
+---
+
+## Address-term dictionary (barangay suggestions)
+
+The residence fields (signup, My Profile and the "Complete your resident profile" popup)
+autocomplete against `barangay_address_terms`, a MySQL dictionary of streets, roads,
+subdivisions, phases, blocks, puroks and sitios scoped to one of the 95 Imus barangays.
+Suggestions are advisory only: residents can always type a house number, street or
+purok that is not in the list.
+
+**Data sources**
+- OpenStreetMap snapshot of Imus (named highways, residential landuse, place nodes
+  and `addr:place`/`addr:street` tags), assigned to a barangay by point-in-polygon.
+- The existing street dataset (`assets/geo/imus-streets.json`) for guaranteed coverage.
+- An optional LGU override CSV for terms OSM does not carry (puroks, sitios, blocks).
+
+**Rebuild and seed** (after changing the snapshot or overrides):
+```bash
+php scripts/build-address-terms.php --fetch --check   # fetch OSM + write assets/geo/imus-address-terms.json
+php scripts/seed-address-terms.php                    # upsert into MySQL (idempotent)
+php scripts/seed-address-terms.php --fresh            # clear the table first
+```
+Run `sql/migrations/011_barangay_address_terms.sql` (or a fresh `install.php`) before seeding.
+The public API falls back to the committed JSON snapshot if the table is missing or empty.
+
+**LGU overrides** - edit `assets/geo/imus-address-overrides.csv`:
+```csv
+barangay,term,type,parent
+Bucandala I,Purok 3,purok,
+Anabu II-C,Vallejo Place Phase 4,phase,Vallejo Place
+```
+`type` is one of `street`, `road`, `subdivision`, `phase`, `block`, `purok`, `sitio`,
+`landmark`, `other`. Overrides always win over OSM rows with the same key.
+
+**Attribution** - address suggestions are derived from
+© OpenStreetMap contributors, available under the
+[Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/).
+The attribution is shown in the suggestion dropdown and must be kept in any
+redistribution of the dataset.
 
 ---
 
@@ -258,6 +300,7 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-11-09 | **feat(address):** Barangay-scoped address suggestion box for the residence fields (signup, My Profile and the "Complete your resident profile" login popup). A new `barangay_address_terms` table (migration `011`) stores streets, roads, subdivisions, phases, blocks, puroks and sitios for all 95 Imus barangays; the dataset is built from an OpenStreetMap snapshot plus an optional LGU override CSV (`assets/geo/imus-address-overrides.csv`). New public endpoint `api/address_terms.php?barangay=...` (validated against the 95 canonical barangays, no PII) with a committed JSON fallback (`assets/geo/imus-address-terms.json`) so the UI works before seeding. Shared `assets/js/sentri-address-autocomplete.js` renders grouped, badged, keyboard-accessible suggestions and always allows free-form addresses. Build/seed with `php scripts/build-address-terms.php --fetch` and `php scripts/seed-address-terms.php` |
 | 2026-11-08 | **feat(community):** Community reports are now located solely by the dropped pin - the report modal no longer prefills or auto-drops a pin from a stored location; users may pin anywhere inside Imus and the server tags the report's barangay from the authoritative 95-barangay geometry, rejecting pins that do not resolve to an Imus barangay. My Profile keeps the resident Barangay + Home Address for identity/verification (the home address is scoped to barangay/LGU/responder staff and never returned in the public feed), and the barangay change lock was reintroduced at **1 minute for testing** (`SENTRI_BRGY_LOCK_MINUTES` in `config/geo.php`, restore to `43200`/30 days for production). Also added the responder-first resolve lock: while a first responder is assigned, barangay/LGU cannot resolve the report, and resolve updates are race-safe. Removed the `_maketest.php` session-spoofing backdoor |
 | 2026-11-08 | **feat(alerts):** Responder and LGU portals now poll `poll_report_alerts` every 15-20 s and show right-side toasts for new dangerous reports (BFP/fire = dangerous fire only, PNP = dangerous crime only, other responders = any dangerous) and LGU escalations. Fixed status-upgrade toasts for previously unseen caution reports and added update-watermark polling for responders so caution → dangerous upgrades are announced. Kept the tracked `.env` placeholders and `.env.local` documentation after merging PR #13 |
 | 2026-11-06 | **feat(barangay):** Barangay Incident Map is now locked to the Imus perimeter (`SentriGeo.lockToImus` + hard max-bounds), rejects pins outside Imus, and draws community-style labels on all 95 barangay outlines (`labels: true`) with pin-overlap avoidance. Old outbox verification/reset links are rebuilt on the current host, and loopback hosts always follow the live request origin even when `APP_URL` is pinned to a stale local port |
@@ -323,6 +366,8 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 sudo bash scripts/setup-linux-mint.sh     # packages + DB + .env + seed + serve :8080
 BASE=http://localhost:8080 bash scripts/smoke-test.sh   # 32-check full-stack battery
 php scripts/seed-demo.php                 # re-seed demo users + [SMOKE] incidents
+php scripts/build-address-terms.php --check   # verify the address snapshot (95 barangays)
+php scripts/seed-address-terms.php            # sync address suggestions into MySQL
 ```
 
 - **Offline emails**: `APP_DEBUG=1` in `.env` diverts all mail to `logs/mail/*.eml` —
