@@ -511,6 +511,9 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-accent);border-col
 .video-title{color:#fff;font-size:0.95rem;font-weight:800;display:flex;align-items:center;gap:8px;}
 .video-close{background:none;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;padding:6px;}
 .video-close:hover{color:#fff;}
+.tutorial-restore-pill{position:fixed;right:18px;bottom:18px;z-index:1190;display:none;align-items:center;gap:8px;padding:10px 16px;border-radius:50px;border:none;background:#1c57b2;color:#fff;font-size:.8rem;font-weight:700;font-family:'Poppins',sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);}
+.tutorial-restore-pill.show{display:inline-flex;}
+.tutorial-restore-pill:hover{filter:brightness(1.08);}
 .video-card video{width:100%;border-radius:10px;display:block;max-height:70vh;}
 
 /* ── Lightbox ── */
@@ -738,6 +741,14 @@ function actionToast(message,type){
  <input type="text" id="searchInput" placeholder="Search location, keyword...">
  <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+ <select id="timeFilter" title="Show only incidents from this time range">
+ <option value="">Any time</option>
+ <option value="15">Last 15 min</option>
+ <option value="60">Last hour</option>
+ <option value="1440">Last 24 hours</option>
+ <option value="10080">Last 7 days</option>
+ <option value="43200">Last 30 days</option>
+ </select>
  <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
  <div class="view-toggle">
  <button class="view-btn active" id="btnFeed" onclick="switchView('feed')"><i class="fas fa-list"></i> Feed</button>
@@ -764,6 +775,14 @@ function actionToast(message,type){
  <input type="text" id="searchInput" placeholder="Search my reports...">
  <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+ <select id="timeFilter" title="Show only incidents from this time range">
+ <option value="">Any time</option>
+ <option value="15">Last 15 min</option>
+ <option value="60">Last hour</option>
+ <option value="1440">Last 24 hours</option>
+ <option value="10080">Last 7 days</option>
+ <option value="43200">Last 30 days</option>
+ </select>
  <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
  </div>
  <div id="feed"><div class="loading"><i class="fas fa-spinner"></i> Loading your reports…</div></div>
@@ -986,6 +1005,10 @@ function actionToast(message,type){
         <option value="suspicious_activity">Suspicious Activity</option>
         <option value="public_disturbance">Public Disturbance</option>
     </select>
+    <div class="form-group" style="margin-top:10px;margin-bottom:0;">
+        <label for="other_text">Please specify <span style="font-weight:400;color:var(--muted);">(what is the incident?)</span></label>
+        <input type="text" name="other_text" id="other_text" maxlength="100" placeholder="e.g. Stray dogs, illegal dumping, damaged signage…">
+    </div>
 </div>
 
 
@@ -1264,12 +1287,32 @@ function getFiltered(mineOnly){
  const s=(document.getElementById('searchInput')?.value||'').trim().toLowerCase();
  const st=document.getElementById('statusFilter')?.value||'';
  const ca=document.getElementById('categoryFilter')?.value||'';
+ const tf=parseInt(document.getElementById('timeFilter')?.value||'',10);
+ const cutoff=isFinite(tf)&&tf>0?Date.now()-tf*60000:null;
  return allReports.filter(r=>{
  if(mineOnly&&r.user_id!=MY_USER_ID)return false;
  if(st&&r.status!==st)return false;if(ca&&r.category!==ca)return false;
- if(s){const h=(r.title+r.location_name+r.city+(r.barangay||'')+(r.description||'')).toLowerCase();if(!h.includes(s))return false;}
+ if(cutoff!==null){const t=parseTs(r.created_at);if(t===null||t<cutoff)return false;}
+ if(s){const h=(r.title+r.location_name+r.city+(r.barangay||'')+(r.description||'')+(r.custom_type||'')).toLowerCase();if(!h.includes(s))return false;}
  return true;
  });
+}
+
+/** Parse a MySQL datetime ("2026-11-09 14:13:07") as local time. */
+function parseTs(s){
+ if(!s)return null;
+ const t=new Date(String(s).replace(' ','T')).getTime();
+ return isNaN(t)?null:t;
+}
+/** Short relative timestamp for cards ("15m ago", "2h ago", "3d ago"). */
+function timeAgoText(s){
+ const t=parseTs(s);if(t===null)return '';
+ const sec=Math.max(0,Math.round((Date.now()-t)/1000));
+ if(sec<45)return 'just now';
+ if(sec<3600)return Math.round(sec/60)+'m ago';
+ if(sec<86400)return Math.round(sec/3600)+'h ago';
+ if(sec<604800)return Math.round(sec/86400)+'d ago';
+ return new Date(t).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
 }
 
 function renderFeed(mineOnly=false){
@@ -1281,6 +1324,7 @@ function renderFeed(mineOnly=false){
  }
  feed.innerHTML=list.map((r,i)=>{
  const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+ const ago=timeAgoText(r.created_at);
  const isMine=r.user_id==MY_USER_ID,upV=r.user_vote==='up',dnV=r.user_vote==='down',hasPin=r.latitude&&r.longitude,hasPh=r.images&&r.images.length>0;
  const isVerified=r.upvotes>=2;
  return `<div class="report-card ${r.status}" style="animation-delay:${i*.04}s;" onclick="openDetail(${r.id})">
@@ -1294,7 +1338,7 @@ function renderFeed(mineOnly=false){
  <div class="card-meta">
  <span><i class="fas fa-map-location-dot"></i>${esc(r.location_name)}</span>
  <span><i class="fas fa-city"></i>${esc(r.city)}${r.province?', '+esc(r.province):''}</span>
- <span><i class="fas fa-clock"></i>${date}</span>
+ <span title="${esc(date)}"><i class="fas fa-clock"></i>${ago||date}</span>
  <span><i class="fas fa-user"></i>${esc(r.poster_name)}</span>
  ${hasPh?`<span><i class="fas fa-camera" style="color:var(--blue-accent);"></i>${r.images.length} photo${r.images.length>1?'s':''}</span>`:''}
  </div>
@@ -1304,14 +1348,14 @@ function renderFeed(mineOnly=false){
  <button class="vote-btn down ${dnV?'voted':''}" onclick="vote(${r.id},'down')"><i class="fas fa-thumbs-down"></i><span id="dn_${r.id}">${r.downvotes}</span></button>
  <button class="pin-chip" style="background:#eff6ff;color:#2563eb;border-color:#bfdbfe;font-weight:700;" onclick="crowdVerify(${r.id})"><i class="fas fa-shield-check"></i> +1 Verify</button>
  ${hasPin?`<button class="pin-chip" onclick="openMiniMap(${r.id})"><i class="fas fa-map-pin"></i> Map</button>`:''}
- ${isMine?`<button class="vote-btn" style="margin-left:auto;border-color:var(--red);color:var(--red);" onclick="deleteReport(${r.id})"><i class="fas fa-trash-can"></i></button>`:`<span class="category-tag" style="margin-left:auto;"><i class="fas ${CI[r.category]||'fa-circle-info'}"></i> ${ucFirst(r.category)}</span>`}
+ ${isMine?`<button class="vote-btn" style="margin-left:auto;border-color:var(--red);color:var(--red);" onclick="deleteReport(${r.id})"><i class="fas fa-trash-can"></i></button>`:`<span class="category-tag" style="margin-left:auto;"><i class="fas ${CI[r.category]||'fa-circle-info'}"></i> ${ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}</span>`}
  </div>
  </div>`;
  }).join('');
 }
 
-['searchInput','statusFilter','categoryFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();},200);});});
-function resetFilters(){['searchInput','statusFilter','categoryFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}
+['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();},200);});});
+function resetFilters(){['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}
 function quickFilterStatus(status){const sf=document.getElementById('statusFilter');if(sf){sf.value=status;renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}}
 
 async function crowdVerify(id){
@@ -2054,7 +2098,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -2932,14 +2976,19 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  <div class="video-card">
  <div class="video-head">
  <div class="video-title"><i class="fas fa-circle-play"></i> SenTri — How It Works (Community)</div>
+ <div style="display:flex;align-items:center;gap:2px;">
+ <button type="button" class="video-close" onclick="minimizeTutorial()" aria-label="Minimize" title="Minimize"><i class="fas fa-compress"></i></button>
  <button type="button" class="video-close" onclick="closeTutorial()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+ </div>
  </div>
  <video id="tutorialVideo" src="../assets/media/community-tutorial.mp4" controls preload="none" playsinline></video>
  </div>
 </div>
+<button type="button" id="tutorialRestorePill" class="tutorial-restore-pill" onclick="openTutorial()"><i class="fas fa-circle-play"></i> How SenTri Works</button>
 <script>
-function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
+function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const p=document.getElementById('tutorialRestorePill');if(p)p.classList.remove('show');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
+function minimizeTutorial(){const p=document.getElementById('tutorialRestorePill');if(p)p.classList.add('show');closeTutorial();}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTutorial();});
 </script>

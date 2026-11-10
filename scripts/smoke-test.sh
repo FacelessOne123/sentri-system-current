@@ -118,6 +118,40 @@ COV=$(php -r '$p=$argv[1]."/assets/geo/imus-address-terms.json";$d=json_decode(@
 [[ $COV == "95/0" ]] && p "address snapshot covers all 95 barangays" || f "address snapshot coverage: $COV"
 curl -s "$BASE/signup.php" | grep -q 'sentri-address-autocomplete.js' && p "signup loads the address-autocomplete module" || f "signup is missing the autocomplete script"
 
+say "0d. Consultation remarks (NOV 9)"
+LOGIN_HTML=$(curl -s "$BASE/login.php")
+echo "$LOGIN_HTML" | grep -q 'class="auth-split"' && p "login page uses the taller split layout" || f "login split layout missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaMinBtn"' && p "login tutorial video can be minimized" || f "login tutorial minimize control missing"
+echo "$LOGIN_HTML" | grep -q 'id="tutorialRestore"' && p "minimized tutorial can be restored" || f "tutorial restore control missing"
+
+PORTAL_HTML=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
+echo "$PORTAL_HTML" | grep -q 'id="timeFilter"' && p "feed has a time-range filter" || f "time-range filter missing"
+echo "$PORTAL_HTML" | grep -q 'id="other_text"' && p "Other category has a free-text input" || f "Other free-text input missing"
+echo "$PORTAL_HTML" | grep -q 'How SenTri Works' && p "community tutorial can be minimized to a pill" || f "tutorial minimize pill missing"
+
+# The free-text type must round-trip to the database.
+if [[ -n $MYSQL_CMD && -n ${GTC:-} ]]; then
+  CT_RESP=$(curl -s -b "$GJJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+    -F "action=post_report" -F "csrf_token=$GTC" -F "title=[CONSULT] Smoke other" \
+    -F "description=consultation fixture" -F "location_name=site" -F "city=Imus" \
+    -F "category=other" -F "other_text=Smoke custom type" -F "status=caution" \
+    -F "latitude=14.421881" -F "longitude=120.916066")
+  echo "$CT_RESP" | grep -q '"status":"success"' \
+    && p "report with a custom 'Other' type is accepted" \
+    || f "custom-type report failed: $CT_RESP"
+  CT_DB=$($MYSQL_CMD -N -e "SELECT custom_type FROM reports WHERE title='[CONSULT] Smoke other' ORDER BY id DESC LIMIT 1" 2>/dev/null)
+  [[ "$CT_DB" == "Smoke custom type" ]] \
+    && p "custom 'Other' type is stored" \
+    || f "custom type not stored (got: $CT_DB)"
+  CT_API=$(curl -s -b "$GJJ" "$BASE/api/reports.php?action=get_reports&limit=5")
+  echo "$CT_API" | grep -q '"custom_type":"Smoke custom type"' \
+    && p "custom 'Other' type is returned by the API" \
+    || f "custom type missing from get_reports"
+  $MYSQL_CMD -e "DELETE FROM reports WHERE title='[CONSULT] Smoke other';" >/dev/null 2>&1 || true
+else
+  s "custom-type round-trip needs mysql CLI and a signed-in session"
+fi
+
 say "1. All five role logins land on their portals"
 CS=$(login community community community@demo.ph Demo@1234) && p "community (sentri-comm)" || f "community"
 BS=$(login barangay barangay barangay@demo.ph Demo@1234)  && p "barangay (sentri-gov)"   || f "barangay"

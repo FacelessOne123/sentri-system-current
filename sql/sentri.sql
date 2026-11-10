@@ -62,6 +62,7 @@ CREATE TABLE `reports` (
  `radius_m` INT(11) DEFAULT 200 COMMENT 'Affected area radius in metres',
  `status` ENUM('dangerous','caution','safe') NOT NULL DEFAULT 'caution',
  `category` ENUM('crime','accident','flooding','fire','health','infrastructure','other') NOT NULL DEFAULT 'other',
+ `custom_type` VARCHAR(100) DEFAULT NULL COMMENT 'Free-text type when category=other',
  `upvotes` INT(11) NOT NULL DEFAULT 0,
  `downvotes` INT(11) NOT NULL DEFAULT 0,
  `is_archived` TINYINT(1) NOT NULL DEFAULT 0,
