@@ -65,7 +65,8 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .media-frame{position:relative;flex:0 0 auto;height:var(--media-h);background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);transition:height .25s ease;}
 .media-video{display:block;width:100%;height:100%;background:#04121f;object-fit:cover;cursor:pointer;}
 .media-caption{margin-top:14px;flex-shrink:0;}
-.media-controls{position:absolute;top:10px;right:10px;z-index:3;display:flex;gap:6px;}
+.media-controls{position:absolute;top:10px;right:10px;z-index:3;display:flex;gap:6px;opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.media-controls.show,.media-controls.always{opacity:1;pointer-events:auto;}
 .media-ctl{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.28);background:rgba(4,18,31,.62);color:#e5edf7;font-size:.78rem;font-family:'Inter',sans-serif;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s,opacity .15s;}
 .media-ctl:hover:not(:disabled){background:rgba(37,99,235,.7);}
 .media-ctl:disabled{opacity:.35;cursor:default;}
@@ -504,8 +505,27 @@ if (document.addEventListener) {
     bFull.title = on ? 'Exit fullscreen' : 'Open the video fullscreen';
   });
 }
+// Show the resize/fullscreen controls only while the pointer is over the
+// video; they fade out when it leaves. Touch devices (no hover) keep them
+// visible so they remain usable.
+(function () {
+  const ctrl = document.querySelector('.media-controls');
+  if (!ctrl || !mediaFrame) return;
+  try {
+    if (window.matchMedia && !window.matchMedia('(hover: hover)').matches) ctrl.classList.add('always');
+  } catch (e) { ctrl.classList.add('always'); }
+  const show = () => ctrl.classList.add('show');
+  const hide = () => { if (!ctrl.classList.contains('always')) ctrl.classList.remove('show'); };
+  mediaFrame.addEventListener('mouseenter', show);
+  mediaFrame.addEventListener('mousemove', show);
+  mediaFrame.addEventListener('mouseleave', hide);
+  ctrl.addEventListener('focusin', show);
+  ctrl.addEventListener('focusout', () => {
+    if (!ctrl.contains(document.activeElement)) hide();
+  });
+})();
+
 try {
-  if (localStorage.getItem('sentri:tutorialMin')) localStorage.removeItem('sentri:tutorialMin');
   const saved = localStorage.getItem('sentri:tutorialSize');
   applyMediaSize(saved === 'sm' || saved === 'lg' ? saved : 'md');
 } catch (e) { applyMediaSize('md'); }
