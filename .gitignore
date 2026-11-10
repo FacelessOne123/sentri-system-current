@@ -31,10 +31,11 @@ composer.lock
 .env.local
 .env.local.*
 !.env.local.example
-
+.env
 
 # Raw Overpass snapshot cache for the address-term build (regenerate with
 # `php scripts/build-address-terms.php --fetch`). The processed snapshot
 # assets/geo/imus-address-terms.json IS committed.
 assets/geo/osm-imus-addresses.json
 AGENTS.md
+.opencode
