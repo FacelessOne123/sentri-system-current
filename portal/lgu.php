@@ -800,7 +800,7 @@ tr:hover td{background:#fafafa;}
  $r_stat_js = htmlspecialchars(json_encode($r['status'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_loc_js = htmlspecialchars(json_encode($r['barangay'] ?? $r['city'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_user_js = htmlspecialchars(json_encode(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')), ENT_QUOTES, 'UTF-8');
- $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
+ $r_date_js = htmlspecialchars(json_encode(date('M j, Y g:i A', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_esc_js = !empty($r['escalated_to_lgu']) ? 1 : 0;
  $rep_brgy = trim((string)($r['barangay_name'] ?? ''));
@@ -814,7 +814,7 @@ tr:hover td{background:#fafafa;}
  <td style="font-weight:600;max-width:180px;"><?= htmlspecialchars(mb_strimwidth($r['title'],0,50,'…')) ?><?php if($responder_pending): ?><span class="responder-pending-chip" title="A first responder has been dispatched and must resolve this incident" style="margin-left:5px;display:inline-flex;align-items:center;gap:3px;font-size:0.64rem;font-weight:700;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a;white-space:nowrap;vertical-align:middle;"><i class="fas fa-hourglass-half"></i> Responder pending</span><?php endif; ?></td>
  <td><span class="cat-chip"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i> <?= ucfirst($r['category']) ?></span></td>
  <td style="font-size:0.78rem;"><?= htmlspecialchars($r['barangay'] ?? $r['city']) ?></td>
- <td style="font-size:0.74rem;color:var(--muted);"><?= date('M j', strtotime($r['created_at'])) ?></td>
+ <td style="font-size:0.74rem;color:var(--muted);"><?= date('M j, Y g:i A', strtotime($r['created_at'])) ?></td>
  </tr>
  <?php endforeach; ?>
  </tbody>
@@ -886,7 +886,7 @@ tr:hover td{background:#fafafa;}
  $r_stat_js = htmlspecialchars(json_encode($r['status'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_loc_js = htmlspecialchars(json_encode($r['barangay'] ?? $r['city'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_user_js = htmlspecialchars(json_encode(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')), ENT_QUOTES, 'UTF-8');
- $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
+ $r_date_js = htmlspecialchars(json_encode(date('M j, Y g:i A', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_esc_js = !empty($r['escalated_to_lgu']) ? 1 : 0;
  $rep_brgy = trim((string)($r['barangay_name'] ?? ''));
@@ -902,7 +902,7 @@ tr:hover td{background:#fafafa;}
  <td><span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span></td>
  <td style="font-size:0.78rem;"><?= htmlspecialchars($r['barangay'] ?? $r['city']) ?></td>
  <td style="font-size:0.78rem;color:var(--muted);"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?><?php if($residence_full !== ''): ?><div style="font-size:0.7rem;color:#94a3b8;margin-top:2px;"><i class="fas fa-house-user" style="margin-right:3px;"></i><?= htmlspecialchars($residence_full) ?></div><?php endif; ?></td>
- <td style="font-size:0.74rem;color:var(--muted);white-space:nowrap;"><?= date('M j, Y', strtotime($r['created_at'])) ?></td>
+ <td style="font-size:0.74rem;color:var(--muted);white-space:nowrap;"><?= date('M j, Y g:i A', strtotime($r['created_at'])) ?></td>
  <td>
  <button onclick="event.stopPropagation();lguViewReport(<?= $r['id'] ?>, <?= $r_title_js ?>, <?= $r_cat_js ?>, <?= $r_stat_js ?>, <?= $r_loc_js ?>, <?= $r_user_js ?>, <?= $r_date_js ?>, <?= $r_desc_js ?>, <?= $r_esc_js ?>, <?= $r_res_js ?>, <?= $responder_pending ? 1 : 0 ?>)" style="background:#eff6ff;color:#2563eb;border:none;padding:5px 10px;border-radius:7px;font-size:0.76rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-pen-to-square"></i> Manage</button>
  </td>
@@ -1053,7 +1053,7 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
  <script>
- var reports = <?= json_encode(array_map(function($r){ return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],'reporter'=>htmlspecialchars(trim(($r['first_name']??'').' '.($r['last_name']??'')),ENT_QUOTES),'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),'date'=>date('M j, Y',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)]; }, $map_reports)) ?>;
+ var reports = <?= json_encode(array_map(function($r){ return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],'reporter'=>htmlspecialchars(trim(($r['first_name']??'').' '.($r['last_name']??'')),ENT_QUOTES),'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),'date'=>date('M j, Y g:i A',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)]; }, $map_reports)) ?>;
  var markerColors = {dangerous:'#dc2626',caution:'#d97706',safe:'#16a34a'};
  var catLabels = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
 
@@ -1460,6 +1460,8 @@ tr:hover td{background:#fafafa;}
 </div><!-- /main -->
 
 <script>
+// Escape user-controlled values before they are concatenated into innerHTML.
+function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function openSidebar(){
  document.getElementById('sidebar').classList.add('open');
  document.getElementById('overlay').classList.add('show');
@@ -1500,11 +1502,11 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  var baseHtml =
  '<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val">'+(pill[status]||status)+'</div></div>'+
  '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
- '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
- '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
- (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+residence+'</div></div>':'')+
- '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
- (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'')+
+ '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+esc(barangay)+'</div></div>'+
+ '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+esc(reporter)+'</div></div>'+
+ (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+esc(residence)+'</div></div>':'')+
+ '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+esc(date)+'</div></div>'+
+ (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+esc(desc)+'</div></div>':'')+
  '<div id="lguModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
  
  document.getElementById('lguModalBody').innerHTML = baseHtml;

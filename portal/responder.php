@@ -14,12 +14,23 @@ $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
 $has_accepted_at = sentri_table_has_column($conn, 'reports', 'accepted_at');
 $has_responded_at = sentri_table_has_column($conn, 'reports', 'responded_at');
 $saved_gps_lat = $saved_gps_lng = null;
+$saved_gps_at = null;
+$saved_gps_source = null;
 if (sentri_table_has_column($conn, 'users', 'gps_lat') && sentri_table_has_column($conn, 'users', 'gps_lng')) {
- $gpsRes = $conn->prepare("SELECT gps_lat,gps_lng FROM users WHERE id=? LIMIT 1");
+ $gpsCols = 'gps_lat,gps_lng';
+ if (sentri_table_has_column($conn, 'users', 'gps_at')) $gpsCols .= ',gps_at';
+ if (sentri_table_has_column($conn, 'users', 'gps_source')) $gpsCols .= ',gps_source';
+ $gpsRes = $conn->prepare("SELECT $gpsCols FROM users WHERE id=? LIMIT 1");
  if ($gpsRes) {
  $gpsRes->bind_param("i", $uid);
  $gpsRes->execute();
+ if ($gpsCols === 'gps_lat,gps_lng') {
  $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng);
+ } elseif ($gpsCols === 'gps_lat,gps_lng,gps_at') {
+ $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng, $saved_gps_at);
+ } else {
+ $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng, $saved_gps_at, $saved_gps_source);
+ }
  $gpsRes->fetch();
  $gpsRes->close();
  }
@@ -183,6 +194,7 @@ $page_titles = [
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= $page_titles[$view] ?? 'Responder Portal' ?> | SenTri</title>
 <?= csrf_meta_tag() ?>
+<meta name="sentri-user" content="<?= htmlspecialchars((string)$uid, ENT_QUOTES, 'UTF-8') ?>">
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <style>
@@ -452,6 +464,9 @@ tr:hover td{background:#fafafa;}
  <div class="card-header">
  <h3><i class="fas fa-location-crosshairs" style="color:var(--red-light);margin-right:6px;"></i>My GPS Location</h3>
  <span class="card-meta" id="gpsStatus"><?= $saved_gps_lat !== null && $saved_gps_lng !== null ? 'Saved on profile' : 'Not saved yet' ?></span>
+ <?php if($saved_gps_at !== null): ?>
+ <span class="card-meta" title="When this position was last recorded">Recorded <?= htmlspecialchars((string)$saved_gps_at) ?></span>
+ <?php endif; ?>
  <span class="acc-chip" id="gpsAccChip" style="display:none;" title="GPS accuracy (higher precision &le; 50m)"></span>
  </div>
  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
@@ -459,7 +474,7 @@ tr:hover td{background:#fafafa;}
  <div id="gpsCoords" style="font-size:0.85rem;font-weight:700;color:var(--text);">
  <?= $saved_gps_lat !== null && $saved_gps_lng !== null ? htmlspecialchars(number_format((float)$saved_gps_lat, 6).', '.number_format((float)$saved_gps_lng, 6)) : 'Tap the button to get and save your current location.' ?>
  </div>
- <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports.</div>
+ <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports. If the browser cannot reach GPS, your last known position is used and clearly labelled as such.</div>
  </div>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
  <button type="button" class="btn-dispatch" onclick="captureMyGps(this)"><i class="fas fa-crosshairs"></i> Get My GPS</button>
@@ -851,6 +866,8 @@ tr:hover td{background:#fafafa;}
  }, $map_reports)) ?>;
  var rmc = {dangerous:'#dc2626',caution:'#d97706'};
  var catL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
+ // Escape user-controlled values before they are concatenated into innerHTML.
+ function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
  function makeRespIcon(color){
  return L.divIcon({className:'',html:'<div style="width:15px;height:15px;border-radius:50%;background:'+color+';border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>',iconSize:[15,15],iconAnchor:[7,7]});
  }
@@ -863,14 +880,14 @@ tr:hover td{background:#fafafa;}
  m.rd=r;
  m.bindPopup(
  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+ '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+esc(r.title)+'</div>'+
  '<div style="margin-bottom:7px;"><span style="background:'+(r.status==='dangerous'?'#fef2f2':'#fffbeb')+';color:'+(r.status==='dangerous'?'#991b1b':'#92400e')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span></div>'+
- (r.location?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Location:</b> '+r.location+'</div>':'')+
- (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Reported by:</b> '+r.reporter+'</div>':'')+
- (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Category:</b> '+(catL[r.category]||r.category)+'</div>'+
- '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:6px;"><b>Reported:</b> '+r.date+'</div>'+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-bottom:8px;">'+r.desc.substring(0,100)+(r.desc.length>100?'…':'')+'</div>':'')+
+ (r.location?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Location:</b> '+esc(r.location)+'</div>':'')+
+ (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Reported by:</b> '+esc(r.reporter)+'</div>':'')+
+ (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Resident of:</b> Brgy '+esc(r.reporter_brgy)+(r.reporter_address?', '+esc(r.reporter_address):'')+'</div>':'')+
+ '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Category:</b> '+esc(catL[r.category]||r.category)+'</div>'+
+ '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:6px;"><b>Reported:</b> '+esc(r.date)+'</div>'+
+ (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-bottom:8px;">'+esc(r.desc.substring(0,100))+(r.desc.length>100?'…':'')+'</div>':'')+
  '<a href="javascript:void(0)" onclick="closeNavModal();openNavigation('+r.lat+','+r.lng+',\''+r.id+'\')" style="font-size:0.8rem;color:#2563eb;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:4px;"><i class="fas fa-directions"></i> Get Directions</a>'+
  '</div>',{maxWidth:240}
  );
@@ -903,13 +920,32 @@ tr:hover td{background:#fafafa;}
 function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.classList.add('sidebar-open');document.body.style.overflow='hidden';}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.classList.remove('sidebar-open');document.body.style.overflow='';}
 
-var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$saved_gps_lat) : 'null' ?>, lng: <?= $saved_gps_lng !== null ? json_encode((float)$saved_gps_lng) : 'null' ?> };
+var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$saved_gps_lat) : 'null' ?>, lng: <?= $saved_gps_lng !== null ? json_encode((float)$saved_gps_lng) : 'null' ?>, at: <?= $saved_gps_at !== null ? json_encode((string)$saved_gps_at) : 'null' ?>, source: <?= $saved_gps_source !== null ? json_encode((string)$saved_gps_source) : 'null' ?> };
+
+function gpsAgeLabel(){
+ if(!responderGps.at) return '';
+ var ts = Date.parse(String(responderGps.at).replace(' ','T'));
+ if(isNaN(ts)) return '';
+ var sec = Math.max(0, Math.round((Date.now()-ts)/1000));
+ if(sec < 60) return sec + 's ago';
+ if(sec < 3600) return Math.round(sec/60) + 'm ago';
+ if(sec < 86400) return Math.round(sec/3600) + 'h ago';
+ return Math.round(sec/86400) + 'd ago';
+}
 
 function setGpsText(lat, lng, saved){
  var coords = document.getElementById('gpsCoords');
  var status = document.getElementById('gpsStatus');
  if(coords){ coords.textContent = Number(lat).toFixed(6) + ', ' + Number(lng).toFixed(6); }
- if(status){ status.textContent = saved ? 'Saved on profile' : 'Current location'; }
+ if(status){
+  if(saved){
+   var age = gpsAgeLabel();
+   var src = responderGps.source === 'browser' ? 'Browser GPS' : 'Saved on profile';
+   status.textContent = src + (age ? ' · ' + age : '');
+  } else {
+   status.textContent = 'Current location';
+  }
+ }
 }
 
 function updateAccChip(el, acc){
@@ -931,6 +967,7 @@ async function captureMyGps(btn){
   updateAccChip(document.getElementById('gpsAccChip'), acc);
   try{
   var fd = new FormData(); fd.append('action','save_gps'); fd.append('latitude', lat); fd.append('longitude', lng);
+  fd.append('accuracy', acc); fd.append('source','browser');
   var res = await fetch('../api/reports.php', {method:'POST', body:fd});
   var data = await res.json();
   if(data.status==='success'){
@@ -944,7 +981,17 @@ async function captureMyGps(btn){
   showRespToast('Could not save GPS location.', 'error');
   }
  } catch(e){
+  // Live GPS failed - fall back to the last known position so navigation and
+  // dispatch still have coordinates to work with.
+  var cached = (e && e.fallback) ? e.fallback : (window.SentriGeo && SentriGeo.readLastFix ? SentriGeo.readLastFix() : null);
+  if(cached){
+  responderGps.lat = cached.lat; responderGps.lng = cached.lng; responderGps.acc = cached.accuracy; responderGps.at = new Date(cached.at).toISOString();
+  setGpsText(cached.lat, cached.lng, true);
+  updateAccChip(document.getElementById('gpsAccChip'), cached.accuracy);
+  showRespToast('Live GPS unavailable - using your last known location.', 'error');
+  } else {
   showRespToast((e && e.message) ? e.message : 'Location access was denied.', 'error');
+  }
  }
  btn.disabled = false; btn.innerHTML = prev;
 }

@@ -87,3 +87,77 @@ if (!function_exists('sentri_barangay_is_valid')) {
   return sentri_barangay_canonical($name) !== null;
  }
 }
+
+if (!function_exists('sentri_barangay_center')) {
+ /**
+  * Approximate centre point of a barangay, used as a coarse "home area"
+  * when no live position is available.
+  *
+  * The GeoJSON stores each feature's centre as [lng, lat] in the
+  * "center" property; this returns [lat, lng] to match the rest of the
+  * application (and the Leaflet/OSM convention).
+  *
+  * This is IDENTITY context, not a claim about where someone is right now:
+  * a resident who is commuting is somewhere else entirely.
+  *
+  * @return array{0:float,1:float}|null [lat, lng] or null when unknown
+  */
+ function sentri_barangay_center(string $name): ?array {
+  $canonical = sentri_barangay_canonical($name);
+  if ($canonical === null) return null;
+  foreach (sentri_barangay_features() as $feature) {
+   $featureName = trim((string)($feature['properties']['name'] ?? ''));
+   if ($featureName !== $canonical) continue;
+   $center = $feature['properties']['center'] ?? null;
+   if (!is_array($center) || count($center) < 2) return null;
+   $lng = (float)$center[0];
+   $lat = (float)$center[1];
+   if (!is_finite($lat) || !is_finite($lng)) return null;
+   if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) return null;
+   return [$lat, $lng];
+  }
+  return null;
+ }
+}
+
+/**
+ * How long a community member must wait before changing their barangay again.
+ *
+ * TESTING VALUE: 1 minute. Set back to 43200 (30 days) before production.
+ */
+if (!defined('SENTRI_BRGY_LOCK_MINUTES')) {
+ define('SENTRI_BRGY_LOCK_MINUTES', 1);
+}
+
+if (!function_exists('sentri_brgy_lock_state')) {
+ /**
+  * Current barangay + seconds remaining on the change lock, using DB time so
+  * PHP/MySQL timezone differences cannot skew the countdown.
+  *
+  * @return array{0:string,1:int} [current barangay, seconds remaining]
+  */
+ function sentri_brgy_lock_state(mysqli $conn, int $uid): array {
+  $minutes = SENTRI_BRGY_LOCK_MINUTES;
+  $s = $conn->prepare("SELECT COALESCE(barangay_name,''),
+    COALESCE(GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), DATE_ADD(barangay_changed_at, INTERVAL ? MINUTE))), 0)
+    FROM users WHERE id=? LIMIT 1");
+  if (!$s) return ['', 0];
+  $s->bind_param("ii", $minutes, $uid);
+  $s->execute();
+  $s->bind_result($brgy, $secs);
+  $s->fetch();
+  $s->close();
+  return [(string)$brgy, (int)$secs];
+ }
+}
+
+if (!function_exists('sentri_residence_clean')) {
+ /**
+  * Normalise a free-text home address for storage/display.
+  */
+ function sentri_residence_clean(string $address): string {
+  $address = preg_replace('/[\x00-\x1F\x7F]/u', ' ', $address) ?? '';
+  $address = preg_replace('/\s+/u', ' ', $address) ?? '';
+  return trim($address);
+ }
+}

@@ -299,6 +299,7 @@ function ensureGeoColumns($conn) {
  if (!in_array('latitude', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN latitude DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('longitude', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN longitude DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('radius_m', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN radius_m INT(11) NOT NULL DEFAULT 200");
+ if (!in_array('custom_type', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN custom_type VARCHAR(100) DEFAULT NULL AFTER category");
 }
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -318,11 +319,8 @@ switch ($action) {
  $sql = "
  SELECT r.id, r.user_id, r.title, r.description, r.location_name, r.barangay,
  r.city, r.province, r.latitude, r.longitude, r.radius_m,
- r.status, r.category, r.upvotes, r.downvotes, r.created_at,
+ r.status, r.category, r.custom_type, r.upvotes, r.downvotes, r.created_at,
  CONCAT(u.first_name,' ',u.last_name) AS poster_name,
- u.barangay_name AS poster_barangay,
- u.municipality AS poster_city,
- u.resident_address AS poster_address,
  v.vote AS user_vote
  FROM reports r
  INNER JOIN users u ON r.user_id = u.id
@@ -443,7 +441,7 @@ switch ($action) {
  $server_time = $meta['server_time'] ?? date('Y-m-d H:i:s');
  $latest_id = (int)($meta['latest_id'] ?? 0);
 
- $sql = "SELECT r.id, r.title, r.status, r.category, r.barangay, r.city, r.description,
+ $sql = "SELECT r.id, r.title, r.status, r.category, r.custom_type, r.barangay, r.city, r.description,
   r.created_at, r.updated_at{$esc_select}
   FROM reports r
   WHERE " . implode(' AND ', $where) . "
@@ -480,6 +478,11 @@ switch ($action) {
  $province = trim($_POST['province'] ?? '');
  $status_val = trim($_POST['status'] ?? '');
  $category = trim($_POST['category'] ?? '');
+ // Free-text incident type for the "Other" category (NOV 9 consultation).
+ $custom_type = trim((string)($_POST['other_text'] ?? ''));
+ if (function_exists('mb_substr')) $custom_type = mb_substr($custom_type, 0, 100, 'UTF-8');
+ else $custom_type = substr($custom_type, 0, 100);
+ if ($category !== 'other' || $custom_type === '') $custom_type = null;
 
  // Lat/lng: keep as string or null - 's' type in bind_param handles nullable
  // decimals correctly on all MySQL versions (null → SQL NULL, "14.35" → DECIMAL)
@@ -498,15 +501,13 @@ switch ($action) {
 
  // ── Reporter residence is mandatory (anti-abuse) ────────────────────────
  // Every community report must be attributable to a resident with a known
- // barangay + home address, so officials can verify who filed it.
- $uAddrCol = $conn->query("SHOW COLUMNS FROM users LIKE 'resident_address'");
- if ($uAddrCol && $uAddrCol->num_rows === 0) {
- $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
- }
+ // barangay + home address, so officials can verify who filed it. The
+ // resident_address column is created by sql/migrations/010_resident_address.sql
+ // (and the login/signup auto-migrators), never on the hot reporting path.
  $rp = $conn->prepare("SELECT barangay_name, resident_address FROM users WHERE id=? LIMIT 1");
  $rp->bind_param("i", $user_id); $rp->execute();
  $rp->bind_result($rep_brgy, $rep_addr); $rp->fetch(); $rp->close();
- if (trim((string)$rep_brgy) === '' || trim((string)$rep_addr) === '') {
+ if (trim((string)$rep_brgy) === '' || sentri_residence_clean((string)$rep_addr) === '') {
  echo json_encode(['status'=>'error','message'=>'Please complete your resident profile (barangay and home address) before reporting.']); exit;
  }
 
@@ -547,11 +548,11 @@ switch ($action) {
 
  // Type string: i=user_id, s×7=text fields, s=lat, s=lng, i=radius, s=status, s=category
  // Using 's' (not 'd') for lat/lng so PHP null becomes SQL NULL safely
- $ins = $conn->prepare("INSERT INTO reports (user_id,title,description,location_name,barangay,city,province,latitude,longitude,radius_m,status,category) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+ $ins = $conn->prepare("INSERT INTO reports (user_id,title,description,location_name,barangay,city,province,latitude,longitude,radius_m,status,category,custom_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
  if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare failed: '.$conn->error]); exit; }
- $ins->bind_param("issssssssiss",
+ $ins->bind_param("issssssssisss",
  $user_id,$title,$description,$location_name,$barangay,$city,$province,
- $lat,$lng,$rad,$status_val,$category);
+ $lat,$lng,$rad,$status_val,$category,$custom_type);
  if ($ins->execute()) {
  $new_id = (int)$conn->insert_id;
  $ins->close();
@@ -895,9 +896,17 @@ switch ($action) {
  while($rc2 = $colRes->fetch_row()) $existCols2[] = $rc2[0];
  if (!in_array('gps_lat', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_lat DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('gps_lng', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_lng DECIMAL(10,7) DEFAULT NULL");
+ if (!in_array('gps_accuracy', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_accuracy DECIMAL(8,2) DEFAULT NULL AFTER gps_lng");
+ if (!in_array('gps_at', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_at DATETIME DEFAULT NULL AFTER gps_accuracy");
+ if (!in_array('gps_source', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_source ENUM('browser','manual') DEFAULT NULL AFTER gps_at");
 
- $upd = $conn->prepare("UPDATE users SET gps_lat=?, gps_lng=? WHERE id=?");
- $upd->bind_param("ddi", $lat, $lng, $user_id);
+ // Accuracy + source let the UI say whether a position is live or stale.
+ $acc = isset($_POST['accuracy']) && $_POST['accuracy'] !== '' ? (float)$_POST['accuracy'] : null;
+ if ($acc !== null && (!is_finite($acc) || $acc < 0 || $acc > 100000)) $acc = null;
+ $src = isset($_POST['source']) && in_array($_POST['source'], ['browser','manual'], true) ? $_POST['source'] : 'browser';
+
+ $upd = $conn->prepare("UPDATE users SET gps_lat=?, gps_lng=?, gps_accuracy=?, gps_at=NOW(), gps_source=? WHERE id=?");
+ $upd->bind_param("dddsi", $lat, $lng, $acc, $src, $user_id);
  if ($upd->execute()) {
  $_SESSION['gps_lat'] = $lat;
  $_SESSION['gps_lng'] = $lng;
@@ -931,7 +940,7 @@ switch ($action) {
  }
  }
 
- echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng]);
+ echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng,'accuracy'=>$acc,'source'=>$src,'at'=>date('c')]);
  } else {
  echo json_encode(['status'=>'error','message'=>'Failed to save GPS: '.$upd->error]);
  }
@@ -959,12 +968,13 @@ switch ($action) {
  if (!preg_match('/^#[0-9a-fA-F]{6}$/', $avatar_color)) $avatar_color = '#1c57b2';
 
  // Optional residence update (signup prompt / My Profile). Existing callers
- // that only change the avatar may omit these keys entirely.
+ // that only change the avatar may omit these keys entirely. A barangay change
+ // is rate-limited by the same lock the profile page shows.
  $has_residence = array_key_exists('barangay_name', $_POST) || array_key_exists('resident_address', $_POST);
- $barangay_val = null; $address_val = null;
+ $barangay_val = null; $address_val = null; $brgy_changed = false;
  if ($has_residence) {
  $barangay_in = trim($_POST['barangay_name'] ?? '');
- $address_val = trim($_POST['resident_address'] ?? '');
+ $address_val = sentri_residence_clean($_POST['resident_address'] ?? '');
  if ($barangay_in === '' || $address_val === '') {
  echo json_encode(['status'=>'error','message'=>'Barangay and home address are required.']); exit;
  }
@@ -975,18 +985,23 @@ switch ($action) {
  if (mb_strlen($address_val) < 5 || mb_strlen($address_val) > 255) {
  echo json_encode(['status'=>'error','message'=>'Please enter a complete home address (5-255 characters).']); exit;
  }
+ [$cur_brgy, $lock_left] = sentri_brgy_lock_state($conn, $user_id);
+ if (sentri_barangay_normalize($barangay_val) !== sentri_barangay_normalize($cur_brgy)) {
+  if ($cur_brgy !== '' && $lock_left > 0) {
+   $wait = $lock_left >= 60 ? ceil($lock_left / 60) . ' minute(s)' : $lock_left . ' second(s)';
+   echo json_encode(['status'=>'error','message'=>'Barangay was changed recently. Try again in ' . $wait . '.']); exit;
+  }
+  $brgy_changed = true;
+ }
  }
 
- // Ensure avatar_color / resident_address columns exist
+ // Ensure avatar_color exists (established auto-migrate behaviour).
  $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
  $chkCols = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
  $existCols = [];
  while($rc = $chkCols->fetch_row()) $existCols[] = $rc[0];
  if (!in_array('avatar_color', $existCols)) {
  $conn->query("ALTER TABLE users ADD COLUMN avatar_color VARCHAR(7) NOT NULL DEFAULT '#1c57b2'");
- }
- if (!in_array('resident_address', $existCols)) {
- $conn->query("ALTER TABLE users ADD COLUMN resident_address VARCHAR(255) DEFAULT NULL");
  }
 
  // Check email uniqueness (exclude current user)
@@ -1004,6 +1019,7 @@ switch ($action) {
  $types .= "ss";
  $vals[] = $barangay_val;
  $vals[] = $address_val;
+ if ($brgy_changed) $sets .= ", barangay_changed_at=NOW()";
  }
 
  // Password change requested?
@@ -1153,10 +1169,13 @@ switch ($action) {
   }
  }
  if ($role === 'first_responder') {
- $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous'");
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
  $stmt->bind_param("ii", $report_id, $user_id);
  } else {
- $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0");
+ // Admin overrides are unconditional; Brgy/LGU only win if no responder was
+ // dispatched in the meantime (race-safe version of the guard above).
+ $extra = ($role === 'admin') ? '' : ' AND assigned_to IS NULL AND resolved_at IS NULL';
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0$extra");
  $stmt->bind_param("i", $report_id);
  }
  $stmt->execute();
@@ -1286,8 +1305,11 @@ switch ($action) {
    }
   }
  }
- $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL';
- $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0");
+ $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL';
+ // Race-safe version of the guard above: Brgy/LGU cannot win the resolve race
+ // against a responder dispatch or a concurrent resolve. Admins override.
+ $extra = ($new_status === 'safe' && $role !== 'admin') ? ' AND assigned_to IS NULL AND resolved_at IS NULL' : '';
+ $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0$extra");
  $s_upd->bind_param("si", $new_status, $report_id);
  $s_upd->execute();
  // NOTE: changed status → affected_rows>0; SAME status → affected_rows=0 with an

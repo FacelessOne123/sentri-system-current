@@ -53,6 +53,112 @@ for p in index.php login.php signup.php admin.php verify_email.php forgot_passwo
   [[ $code == 200 ]] || { [[ $p == install.php && $code == 403 && -f config/install.lock ]]; } && p "$p → $code" || f "$p → $code"
 done
 
+<<<<<<< HEAD
+say "0b. Barangay address-term suggestions"
+=======
+say "0b. GPS fallback chain (live → last known → registered address)"
+GJJ="$JDIR/gps.jar"
+curl -s -c "$GJJ" "$BASE/login.php" -o /dev/null
+curl -s -b "$GJJ" -c "$GJJ" -X POST "$BASE/login.php" \
+  --data-urlencode "portal=community" --data-urlencode "email=community@demo.ph" \
+  --data-urlencode "password=Demo@1234" > /dev/null
+GTC=$(csrf_for "$GJJ" "$BASE/portal/community.php")
+
+PORTAL=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
+
+# The report modal must never auto-place a pin from the registered address.
+echo "$PORTAL" | grep -q 'reportRoutingHint' \
+  && p "report modal shows which barangay the pin routes to" \
+  || f "report modal is missing the routing hint"
+echo "$PORTAL" | grep -q 'Use My Location.*only if the incident is happening where you are' \
+  && p "report modal warns that Use My Location is only for the current spot" \
+  || f "report modal is missing the Use My Location warning"
+
+# The registered address must be exposed as identity context, clearly named.
+echo "$PORTAL" | grep -q "Registered Address" \
+  && p "GPS chip names the registered-address state honestly" \
+  || f "GPS chip is missing the Registered Address state"
+
+# The server-side last-known fix must be rendered for the community account.
+if [[ -n $MYSQL_CMD ]]; then
+  $MYSQL_CMD -e "UPDATE users SET gps_lat=14.4218810,gps_lng=120.9160660,gps_accuracy=12.50,gps_at=NOW(),gps_source='browser' WHERE email='community@demo.ph';" >/dev/null 2>&1 || true
+  PORTAL2=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
+  echo "$PORTAL2" | grep -q '"lat":14.421881' \
+    && p "last-known position is rendered into the portal" \
+    || f "last-known position was not rendered"
+  # A registered barangay must yield a home-area centre.
+  echo "$PORTAL2" | grep -q '"barangay":"' \
+    && p "registered barangay is available as home-area context" \
+    || f "home-area context missing"
+fi
+
+# The last-known cache must be scoped per account, never shared between users.
+echo "$PORTAL" | grep -q 'sentri-user' \
+  && p "last-fix cache is scoped per account" \
+  || f "portal is missing the sentri-user scoping meta tag"
+
+# The bridge API must be gone entirely.
+BCODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/gps_bridge.php")
+[[ $BCODE == 404 ]] && p "removed GPS bridge API is no longer reachable" || f "gps_bridge.php still responds ($BCODE)"
+say "0c. Barangay address-term suggestions"
+>>>>>>> developer/geolocation-experiment
+AT=$(curl -s "$BASE/api/address_terms.php?barangay=Bucandala%20I")
+echo "$AT" | grep -q '"status":"success"' && p "address API accepts a valid barangay" || f "address API valid-barangay failed: $(echo "$AT" | head -c 160)"
+ATC=$(echo "$AT" | grep -oE '"count":[0-9]+' | head -1 | cut -d: -f2)
+[[ ${ATC:-0} -gt 0 ]] && p "Bucandala I has $ATC address terms" || f "expected address terms for Bucandala I"
+echo "$AT" | grep -q '"source":"database"\|"source":"snapshot"' && p "address API reports its data source" || f "address API source missing"
+echo "$AT" | grep -q 'OpenStreetMap contributors' && p "address API returns OSM attribution" || f "address API attribution missing"
+BADT=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/address_terms.php?barangay=Atlantis")
+[[ $BADT == 400 ]] && p "address API rejects an unknown barangay (400)" || f "unknown barangay expected 400, got $BADT"
+MISST=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/address_terms.php")
+[[ $MISST == 400 ]] && p "address API rejects a missing barangay (400)" || f "missing barangay expected 400, got $MISST"
+MAG=$(curl -s "$BASE/api/address_terms.php?barangay=Magdalo")
+echo "$AT" | grep -qi 'Aguado Street' && f "address terms leaked across barangays" || p "no cross-barangay term leak"
+echo "$MAG" | grep -q 'Aguado Street' && p "Magdalo returns its own streets" || f "Magdalo street lookup failed"
+QF=$(curl -s "$BASE/api/address_terms.php?barangay=Bucandala%20I&q=street")
+QFC=$(echo "$QF" | grep -oE '"count":[0-9]+' | head -1 | cut -d: -f2)
+[[ ${QFC:-0} -gt 0 && ${QFC:-0} -le ${ATC:-0} ]] && p "address API text filter narrows results ($QFC/$ATC)" || f "address API filter failed ($QFC/$ATC)"
+COV=$(php -r '$p=$argv[1]."/assets/geo/imus-address-terms.json";$d=json_decode(@file_get_contents($p),true);if(!is_array($d)||!is_array($d["barangays"]??null)){echo "0/0";exit;}$m=0;foreach($d["barangays"] as $b){if(!$b)$m++;}echo count($d["barangays"])."/".$m;' "$(dirname "$0")/.." 2>/dev/null)
+[[ $COV == "95/0" ]] && p "address snapshot covers all 95 barangays" || f "address snapshot coverage: $COV"
+curl -s "$BASE/signup.php" | grep -q 'sentri-address-autocomplete.js' && p "signup loads the address-autocomplete module" || f "signup is missing the autocomplete script"
+
+<<<<<<< HEAD
+=======
+say "0d. Consultation remarks (NOV 9)"
+LOGIN_HTML=$(curl -s "$BASE/login.php")
+echo "$LOGIN_HTML" | grep -q 'class="auth-split"' && p "login page uses the taller split layout" || f "login split layout missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaSmaller"' && p "login tutorial video can be shrunk" || f "tutorial shrink control missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaLarger"' && p "login tutorial video can be enlarged" || f "tutorial enlarge control missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaFull"' && p "login tutorial video can go fullscreen" || f "tutorial fullscreen control missing"
+
+PORTAL_HTML=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
+echo "$PORTAL_HTML" | grep -q 'id="timeFilter"' && p "feed has a time-range filter" || f "time-range filter missing"
+echo "$PORTAL_HTML" | grep -q 'id="other_text"' && p "Other category has a free-text input" || f "Other free-text input missing"
+
+# The free-text type must round-trip to the database.
+if [[ -n $MYSQL_CMD && -n ${GTC:-} ]]; then
+  CT_RESP=$(curl -s -b "$GJJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+    -F "action=post_report" -F "csrf_token=$GTC" -F "title=[CONSULT] Smoke other" \
+    -F "description=consultation fixture" -F "location_name=site" -F "city=Imus" \
+    -F "category=other" -F "other_text=Smoke custom type" -F "status=caution" \
+    -F "latitude=14.421881" -F "longitude=120.916066")
+  echo "$CT_RESP" | grep -q '"status":"success"' \
+    && p "report with a custom 'Other' type is accepted" \
+    || f "custom-type report failed: $CT_RESP"
+  CT_DB=$($MYSQL_CMD -N -e "SELECT custom_type FROM reports WHERE title='[CONSULT] Smoke other' ORDER BY id DESC LIMIT 1" 2>/dev/null)
+  [[ "$CT_DB" == "Smoke custom type" ]] \
+    && p "custom 'Other' type is stored" \
+    || f "custom type not stored (got: $CT_DB)"
+  CT_API=$(curl -s -b "$GJJ" "$BASE/api/reports.php?action=get_reports&limit=5")
+  echo "$CT_API" | grep -q '"custom_type":"Smoke custom type"' \
+    && p "custom 'Other' type is returned by the API" \
+    || f "custom type missing from get_reports"
+  $MYSQL_CMD -e "DELETE FROM reports WHERE title='[CONSULT] Smoke other';" >/dev/null 2>&1 || true
+else
+  s "custom-type round-trip needs mysql CLI and a signed-in session"
+fi
+
+>>>>>>> developer/geolocation-experiment
 say "1. All five role logins land on their portals"
 CS=$(login community community community@demo.ph Demo@1234) && p "community (sentri-comm)" || f "community"
 BS=$(login barangay barangay barangay@demo.ph Demo@1234)  && p "barangay (sentri-gov)"   || f "barangay"
@@ -61,6 +167,9 @@ LS=$(login lgu lgu lgu@demo.ph Demo@1234)            && p "lgu (sentri-gov)"    
 AS=$(login admin admin admin@sentri.ph Admin@1234)     && p "admin (sentri-admin)"    || f "admin"
 
 say "2. Full cross-realm transaction chain (community → barangay → LGU → responder → admin)"
+# Residence is required for reporting now; seed the demo community fixture.
+$MYSQL_CMD -e "UPDATE users SET barangay_name='Bucandala I', resident_address='123 Smoke Test St., Purok 1', barangay_changed_at=NULL WHERE email='community@demo.ph';" >/dev/null 2>&1 \
+  && p "community residence fixture ensured" || s "residence fixture needs mysql CLI"
 TC=$(csrf_for "$JDIR/community.jar" "$BASE/portal/community.php")
 
 # Pins outside Imus must be rejected — the pin is the only location source
@@ -85,6 +194,12 @@ else
   [[ -n $RID ]] && p "post_report created id=$RID" || f "post_report: $RESP"
   BRGY=${MYSQL_CMD:+$($MYSQL_CMD -N -e "SELECT barangay FROM reports WHERE id=$RID" 2>/dev/null)}
   [[ $BRGY == "Bucandala I" ]] && p "server tagged barangay=Bucandala I (geometry wins)" || f "barangay tag got '${BRGY:-?}' (expected Bucandala I)"
+  FEED=$(curl -s -b "$JDIR/community.jar" "$BASE/api/reports.php?action=get_reports")
+  if echo "$FEED" | grep -q "poster_address\|poster_barangay"; then
+    f "community feed leaks reporter residence (poster_address/poster_barangay)"
+  else
+    p "community feed omits reporter residence (privacy)"
+  fi
   TV=$(curl -s -b "$JDIR/community.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
     -F "action=vote" -F "csrf_token=$TC" -F "report_id=$RID" -F "vote=up")
   echo "$TV" | grep -q '"status":"success"' && p "vote counted server-side" || f "vote: $TV"
@@ -112,6 +227,11 @@ else
   DISP=$(curl -s -b "$JDIR/lgu.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
     -F "action=lgu_dispatch" -F "csrf_token=$TL" -F "report_id=$RID" -F "responder_id=$TRP")
   echo "$DISP" | grep -q success && p "LGU dispatch ok" || f "dispatch: $DISP"
+  # Responder-first lock: once dispatched, Brgy/LGU cannot resolve it.
+  LOCK_RES=$(curl -s -b "$JDIR/lgu.jar" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+    -F "action=resolve_report" -F "csrf_token=$TL" -F "report_id=$RID")
+  echo "$LOCK_RES" | grep -q "must resolve it first" \
+    && p "LGU resolve blocked while responder is assigned" || f "LGU resolve should be blocked: $LOCK_RES"
   RS2=$(login responder responder responder@demo.ph Demo@1234) && p "re-login responder for chain" || s "responder re-login issue"
   TR=$(csrf_for "$JDIR/responder.jar" "$BASE/portal/responder.php")
   for ACT in accept_assignment report_responded resolve_report; do
@@ -146,7 +266,8 @@ STAMP=$(date +%s)
 SRES=$(curl -s -X POST "$BASE/signup.php" -A "Mozilla/5.0" \
   --data-urlencode "first_name=SmokeT" --data-urlencode "last_name=User" \
   --data-urlencode "email=smoke.t$STAMP@demo.ph" --data-urlencode "password=Smoke@1234" \
-  --data-urlencode "confirm_password=Smoke@1234" --data-urlencode "phone=09171234567")
+  --data-urlencode "confirm_password=Smoke@1234" --data-urlencode "phone=09171234567" \
+  --data-urlencode "barangay_name=Bucandala I" --data-urlencode "resident_address=123 Smoke Test St., Purok 1")
 echo "$SRES" | grep -q '"success"' && p "signup OK" || f "signup: $SRES"
 LV=$(find "$PWD/logs/mail" -maxdepth 1 -name '*.eml' -newermt "@$STAMP" 2>/dev/null | sort | tail -1)
 if [[ -n $LV ]]; then
@@ -159,15 +280,56 @@ if [[ -n $LV ]]; then
     curl -s -b "$UJ" -c "$UJ" -X POST "$BASE/login.php" \
       --data-urlencode "email=smoke.t$STAMP@demo.ph" --data-urlencode "password=Smoke@1234" > /dev/null
     UN_REDIR=$(curl -s -b "$UJ" -o /dev/null -w '%{redirect_url}' "$BASE/portal/community.php?view=overview")
-    [[ -z $UN_REDIR || $UN_REDIR != *"view=map&locked=1"* ]] && p "member with no profile location reaches overview" || f "unexpected locked redirect: $UN_REDIR"
+    [[ -z $UN_REDIR || $UN_REDIR != *"view=map&locked=1"* ]] && p "member reaches overview" || f "unexpected locked redirect: $UN_REDIR"
     UN_TC=$(csrf_for "$UJ" "$BASE/portal/community.php?view=overview")
+
+    # Missing residence must block reporting even with a valid pin.
+    if [[ -n $MYSQL_CMD ]]; then
+      $MYSQL_CMD -e "UPDATE users SET resident_address=NULL WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      CONTACTS_HTML=$(curl -s -b "$UJ" "$BASE/portal/community.php?view=contacts")
+      echo "$CONTACTS_HTML" | grep -q 'id="residenceGate"' \
+        && f "emergency contacts blocked by the residence gate" || p "emergency contacts stay usable without a residence"
+      NO_RES=$(curl -s -b "$UJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
+        -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] No residence" \
+        -F "description=fixture" -F "location_name=site" -F "city=Imus" \
+        -F "category=infrastructure" -F "status=dangerous" -F "latitude=14.421881" -F "longitude=120.916066")
+      echo "$NO_RES" | grep -q "complete your resident profile" \
+        && p "report blocked without a resident profile" || f "expected resident-profile block: $NO_RES"
+      $MYSQL_CMD -e "UPDATE users SET resident_address='123 Smoke Test St., Purok 1' WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+    else
+      s "resident-profile gate test needs mysql CLI"
+    fi
     UN_POST=$(curl -s -b "$UJ" -X POST "$BASE/api/reports.php" -A "Mozilla/5.0" \
       -F "action=post_report" -F "csrf_token=$UN_TC" -F "title=[SMOKE] Pin-based" \
       -F "description=fixture" -F "location_name=site" -F "city=Imus" \
       -F "category=infrastructure" -F "status=dangerous" -F "latitude=14.421881" -F "longitude=120.916066")
     echo "$UN_POST" | grep -q '"status":"success"' \
-      && p "member with no profile location can report from the pin" || f "pin-based report expected success: $UN_POST"
-    $MYSQL_CMD -e "DELETE FROM reports WHERE title='[SMOKE] Pin-based';" >/dev/null 2>&1 || true
+      && p "member with residence can report from the pin" || f "pin-based report expected success: $UN_POST"
+    $MYSQL_CMD -e "DELETE FROM reports WHERE title LIKE '[SMOKE] %';" >/dev/null 2>&1 || true
+
+    # Barangay change lock (1 minute in testing): recent change is rejected,
+    # backdating the timestamp unlocks it.
+    if [[ -n $MYSQL_CMD ]]; then
+      $MYSQL_CMD -e "UPDATE users SET barangay_changed_at=NOW() WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      LCK=$(curl -s -b "$UJ" -X POST "$BASE/portal/community.php?view=profile" \
+        --data-urlencode "save_profile=1" --data-urlencode "first_name=SmokeT" --data-urlencode "last_name=User" \
+        --data-urlencode "phone=09171234567" --data-urlencode "barangay_name=Alapan I-A" \
+        --data-urlencode "resident_address=123 Smoke Test St., Purok 1")
+      echo "$LCK" | grep -q "Barangay was not changed" \
+        && p "barangay change blocked by 1-minute lock" || f "expected barangay lock message"
+      LCK_BRGY=$($MYSQL_CMD -N -e "SELECT barangay_name FROM users WHERE email='smoke.t$STAMP@demo.ph'" 2>/dev/null)
+      [[ -z $LCK_BRGY || $LCK_BRGY == "Bucandala I" ]] && p "locked change kept the original barangay" || f "barangay changed despite lock: $LCK_BRGY"
+
+      $MYSQL_CMD -e "UPDATE users SET barangay_changed_at=NOW() - INTERVAL 2 MINUTE WHERE email='smoke.t$STAMP@demo.ph';" >/dev/null 2>&1 || true
+      UNLCK=$(curl -s -b "$UJ" -X POST "$BASE/portal/community.php?view=profile" \
+        --data-urlencode "save_profile=1" --data-urlencode "first_name=SmokeT" --data-urlencode "last_name=User" \
+        --data-urlencode "phone=09171234567" --data-urlencode "barangay_name=Alapan I-A" \
+        --data-urlencode "resident_address=123 Smoke Test St., Purok 1")
+      UNLCK_BRGY=$($MYSQL_CMD -N -e "SELECT barangay_name FROM users WHERE email='smoke.t$STAMP@demo.ph'" 2>/dev/null)
+      [[ -z $UNLCK_BRGY || $UNLCK_BRGY == "Alapan I-A" ]] && p "barangay change allowed after lock expires" || f "unlock failed: $UNLCK_BRGY"
+    else
+      s "barangay lock tests need mysql CLI"
+    fi
   fi
 else
   s "no outbox mail (live SMTP expected; add APP_DEBUG=1 to .env for offline)"

@@ -25,7 +25,7 @@
  <td><span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span><?php if($responder_pending): ?><span class="responder-pending-chip" title="A first responder has been dispatched and must resolve this incident" style="margin-left:5px;display:inline-flex;align-items:center;gap:3px;font-size:0.64rem;font-weight:700;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a;white-space:nowrap;"><i class="fas fa-hourglass-half"></i> Responder pending</span><?php endif; ?></td>
  <td style="font-size:0.78rem;"><?= htmlspecialchars($r['barangay'] ?? $r['city'] ?? '') ?></td>
  <td style="font-size:0.78rem;color:var(--muted);"><?= htmlspecialchars($r['first_name'].' '.$r['last_name']) ?><?php if($residence_full !== ''): ?><div style="font-size:0.7rem;color:#94a3b8;margin-top:2px;"><i class="fas fa-house-user" style="margin-right:3px;"></i><?= htmlspecialchars($residence_full) ?></div><?php endif; ?></td>
- <td style="font-size:0.74rem;color:var(--muted);white-space:nowrap;"><?= date('M j, Y',strtotime($r['created_at'])) ?></td>
+ <td style="font-size:0.74rem;color:var(--muted);white-space:nowrap;"><?= date('M j, Y g:i A',strtotime($r['created_at'])) ?></td>
  <td>
  <div style="display:flex;gap:5px;align-items:center;">
  <?php
@@ -34,7 +34,7 @@
  $r_stat_js = htmlspecialchars(json_encode($r['status'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_loc_js = htmlspecialchars(json_encode($r['barangay'] ?? $r['city'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_user_js = htmlspecialchars(json_encode(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')), ENT_QUOTES, 'UTF-8');
- $r_date_js = htmlspecialchars(json_encode(date('M j, Y', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
+ $r_date_js = htmlspecialchars(json_encode(date('M j, Y g:i A', strtotime($r['created_at']))), ENT_QUOTES, 'UTF-8');
  $r_desc_js = htmlspecialchars(json_encode($r['description'] ?? ''), ENT_QUOTES, 'UTF-8');
  $r_res_js = htmlspecialchars(json_encode($residence_full), ENT_QUOTES, 'UTF-8');
  ?>

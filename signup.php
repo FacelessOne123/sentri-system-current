@@ -272,7 +272,7 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
  </div>
  <div class="form-group">
  <label>Home Address <span style="color:var(--muted);font-weight:400;">(House No., Street, Purok)</span></label>
- <input type="text" name="resident_address" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required>
+ <input type="text" name="resident_address" id="regAddress" placeholder="e.g. 123 Mabini St., Purok 2" maxlength="255" required>
  </div>
  <p style="font-size:0.74rem;color:var(--muted);margin:-4px 0 2px;line-height:1.5;"><i class="fas fa-location-dot" style="margin-right:5px;"></i>This address identifies the resident behind each report and is shown to Barangay/LGU officials.</p>
 
@@ -309,6 +309,17 @@ document.getElementById('regForm').addEventListener('submit',async e=>{
  }catch(err){showMsg('error','Error: '+err.message);btn.disabled=false;btn.innerHTML=orig;}
 });
 function showMsg(type,text){const el=document.getElementById('regMsg');el.className='msg '+type;el.textContent=text;el.style.display='block';}
+</script>
+<script src="assets/js/sentri-address-autocomplete.js?v=<?= filemtime(__DIR__ . '/assets/js/sentri-address-autocomplete.js') ?>"></script>
+<script>
+(function(){
+ function bind(){
+  if(!window.SentriAddress) return;
+  var b=document.getElementById('regBarangay'), a=document.getElementById('regAddress');
+  if(b&&a) SentriAddress.attach(a,{getBarangay:function(){return b.value;},barangayEl:b});
+ }
+ if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind); else bind();
+})();
 </script>
 </body>
 </html>

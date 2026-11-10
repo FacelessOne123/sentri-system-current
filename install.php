@@ -91,6 +91,9 @@ run($conn, 'Create table <code>users</code>',
  `avatar_color` VARCHAR(7) NOT NULL DEFAULT '#1c57b2',
  `gps_lat` DECIMAL(10,7) DEFAULT NULL,
  `gps_lng` DECIMAL(10,7) DEFAULT NULL,
+ `gps_accuracy` DECIMAL(8,2) DEFAULT NULL,
+ `gps_at` DATETIME DEFAULT NULL,
+ `gps_source` ENUM('browser','manual') DEFAULT NULL,
  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY (`id`),
  UNIQUE KEY `uq_email` (`email`),
@@ -124,6 +127,9 @@ $userColChecks = [
  'avatar_color' => "ALTER TABLE `users` ADD COLUMN `avatar_color` VARCHAR(7) NOT NULL DEFAULT '#1c57b2'",
  'gps_lat' => "ALTER TABLE `users` ADD COLUMN `gps_lat` DECIMAL(10,7) DEFAULT NULL",
  'gps_lng' => "ALTER TABLE `users` ADD COLUMN `gps_lng` DECIMAL(10,7) DEFAULT NULL",
+ 'gps_accuracy' => "ALTER TABLE `users` ADD COLUMN `gps_accuracy` DECIMAL(8,2) DEFAULT NULL AFTER `gps_lng`",
+ 'gps_at' => "ALTER TABLE `users` ADD COLUMN `gps_at` DATETIME DEFAULT NULL AFTER `gps_accuracy`",
+ 'gps_source' => "ALTER TABLE `users` ADD COLUMN `gps_source` ENUM('browser','manual') DEFAULT NULL AFTER `gps_at`",
 ];
 
 foreach ($userColChecks as $col => $sql) {
@@ -180,6 +186,7 @@ run($conn, 'Create table <code>reports</code>',
  `radius_m` INT(11) DEFAULT 200,
  `status` ENUM('dangerous','caution','safe') NOT NULL DEFAULT 'caution',
  `category` ENUM('crime','accident','flooding','fire','health','infrastructure','other') NOT NULL DEFAULT 'other',
+ `custom_type` VARCHAR(100) DEFAULT NULL,
  `upvotes` INT(11) NOT NULL DEFAULT 0,
  `downvotes` INT(11) NOT NULL DEFAULT 0,
  `is_archived` TINYINT(1) NOT NULL DEFAULT 0,
@@ -321,6 +328,28 @@ run($conn, 'Create table <code>contact_notifications</code>',
  `sent_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY (`id`),
  KEY `report_id` (`report_id`)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
+
+// ── 8b. barangay_address_terms ───────────────────────────────────────────────
+run($conn, 'Create table <code>barangay_address_terms</code>',
+ "CREATE TABLE IF NOT EXISTS `barangay_address_terms` (
+ `id` INT(11) NOT NULL AUTO_INCREMENT,
+ `barangay_name` VARCHAR(150) NOT NULL,
+ `term` VARCHAR(190) NOT NULL,
+ `term_key` VARCHAR(190) NOT NULL,
+ `term_type` ENUM('street','road','subdivision','phase','block','purok','sitio','landmark','other') NOT NULL DEFAULT 'other',
+ `parent_term` VARCHAR(190) DEFAULT NULL,
+ `latitude` DECIMAL(10,7) DEFAULT NULL,
+ `longitude` DECIMAL(10,7) DEFAULT NULL,
+ `source` ENUM('osm','lgu','manual') NOT NULL DEFAULT 'osm',
+ `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+ `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ PRIMARY KEY (`id`),
+ UNIQUE KEY `uq_address_term` (`barangay_name`, `term_key`, `term_type`),
+ KEY `idx_address_brgy` (`barangay_name`),
+ KEY `idx_address_type` (`term_type`)
  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
 );
 
