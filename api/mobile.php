@@ -812,6 +812,114 @@ switch ($action) {
         break;
     }
 
+    case 'reverse_geocode': {
+        $lat = isset($_GET['lat']) ? (float)$_GET['lat'] : (isset($input['lat']) ? (float)$input['lat'] : null);
+        $lon = isset($_GET['lng']) ? (float)$_GET['lng'] : (isset($_GET['lon']) ? (float)$_GET['lon'] : (isset($input['lng']) ? (float)$input['lng'] : (isset($input['lon']) ? (float)$input['lon'] : null)));
+
+        if ($lat === null || $lon === null || $lat < -90 || $lat > 90 || $lon < -180 || $lon > 180) {
+            mobile_respond(400, ['status' => 'error', 'message' => 'Valid coordinates required']);
+        }
+
+        $detectedBrgy = null;
+        $closestStreet = null;
+
+        // 1. Try finding official barangay using GeoJSON point-in-polygon if available
+        $geoJsonPath = __DIR__ . '/../assets/geo/imus-barangays.geojson';
+        if (file_exists($geoJsonPath)) {
+            $rawGeo = @file_get_contents($geoJsonPath);
+            if ($rawGeo) {
+                $fc = json_decode($rawGeo, true);
+                if (isset($fc['features']) && is_array($fc['features'])) {
+                    foreach ($fc['features'] as $feat) {
+                        $geom = $feat['geometry'] ?? null;
+                        if (!$geom) continue;
+                        $polys = ($geom['type'] === 'Polygon') ? [$geom['coordinates']] : (($geom['type'] === 'MultiPolygon') ? $geom['coordinates'] : []);
+                        foreach ($polys as $poly) {
+                            if (!empty($poly)) {
+                                $outerRing = $poly[0];
+                                $inside = false;
+                                for ($i = 0, $j = count($outerRing) - 1; $i < count($outerRing); $j = $i++) {
+                                    $xi = $outerRing[$i][0]; $yi = $outerRing[$i][1];
+                                    $xj = $outerRing[$j][0]; $yj = $outerRing[$j][1];
+                                    $intersects = (($yi > $lat) !== ($yj > $lat)) && ($lon < ($xj - $xi) * ($lat - $yi) / ($yj - $yi) + $xi);
+                                    if ($intersects) $inside = !$inside;
+                                }
+                                if ($inside) {
+                                    $detectedBrgy = $feat['properties']['name'] ?? null;
+                                    break 2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Try closest street from imus-streets.json
+        $streetsPath = __DIR__ . '/../assets/geo/imus-streets.json';
+        if ($detectedBrgy && file_exists($streetsPath)) {
+            $streetsData = json_decode(@file_get_contents($streetsPath), true);
+            if ($streetsData && isset($streetsData['streetsByBarangay'][$detectedBrgy])) {
+                $streets = $streetsData['streetsByBarangay'][$detectedBrgy];
+                $minDist = INF;
+                foreach ($streets as $s) {
+                    $key = $detectedBrgy . '|||' . $s;
+                    if (isset($streetsData['streetCoordinates'][$key])) {
+                        $c = $streetsData['streetCoordinates'][$key];
+                        $dLat = ($c[0] - $lat) * 111000;
+                        $dLng = ($c[1] - $lon) * 111000 * cos(deg2rad($lat));
+                        $d = sqrt($dLat * $dLat + $dLng * $dLng);
+                        if ($d < $minDist) {
+                            $minDist = $d;
+                            $closestStreet = $s;
+                        }
+                    }
+                }
+                if ($minDist > 500) {
+                    $closestStreet = null;
+                }
+            }
+        }
+
+        // 3. Fallback or augment with Nominatim reverse geocode
+        $url = sprintf('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%s&lon=%s&zoom=18&addressdetails=1', urlencode((string)$lat), urlencode((string)$lon));
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => "User-Agent: SenTri/1.0\r\nAccept-Language: en\r\n",
+                'timeout' => 5,
+            ]
+        ]);
+        $nomRaw = @file_get_contents($url, false, $ctx);
+        $nomData = $nomRaw ? json_decode($nomRaw, true) : null;
+        if ($nomData && isset($nomData['address'])) {
+            $a = $nomData['address'];
+            $nomRoad = $a['road'] ?? $a['pedestrian'] ?? $a['residential'] ?? $a['amenity'] ?? $a['building'] ?? $a['hamlet'] ?? $a['neighbourhood'] ?? '';
+            $nomBrgy = $a['quarter'] ?? $a['neighbourhood'] ?? $a['suburb'] ?? $a['village'] ?? $a['hamlet'] ?? '';
+            if (!$closestStreet && $nomRoad) {
+                $closestStreet = $nomRoad;
+            }
+            if (!$detectedBrgy && $nomBrgy) {
+                if (function_exists('sentri_barangay_canonical')) {
+                    $detectedBrgy = sentri_barangay_canonical($nomBrgy) ?: $nomBrgy;
+                } else {
+                    $detectedBrgy = $nomBrgy;
+                }
+            }
+        }
+
+        mobile_respond(200, [
+            'status' => 'success',
+            'latitude' => $lat,
+            'longitude' => $lon,
+            'barangay' => $detectedBrgy ?? '',
+            'street' => $closestStreet ?? '',
+            'city' => 'Imus',
+            'province' => 'Cavite'
+        ]);
+        break;
+    }
+
     default:
         mobile_respond(400, [
             'status' => 'error',
