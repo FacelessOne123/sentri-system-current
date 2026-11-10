@@ -511,9 +511,6 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-accent);border-col
 .video-title{color:#fff;font-size:0.95rem;font-weight:800;display:flex;align-items:center;gap:8px;}
 .video-close{background:none;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;padding:6px;}
 .video-close:hover{color:#fff;}
-.tutorial-restore-pill{position:fixed;right:18px;bottom:18px;z-index:1190;display:none;align-items:center;gap:8px;padding:10px 16px;border-radius:50px;border:none;background:#1c57b2;color:#fff;font-size:.8rem;font-weight:700;font-family:'Poppins',sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);}
-.tutorial-restore-pill.show{display:inline-flex;}
-.tutorial-restore-pill:hover{filter:brightness(1.08);}
 .video-card video{width:100%;border-radius:10px;display:block;max-height:70vh;}
 
 /* ── Lightbox ── */
@@ -2976,19 +2973,14 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  <div class="video-card">
  <div class="video-head">
  <div class="video-title"><i class="fas fa-circle-play"></i> SenTri — How It Works (Community)</div>
- <div style="display:flex;align-items:center;gap:2px;">
- <button type="button" class="video-close" onclick="minimizeTutorial()" aria-label="Minimize" title="Minimize"><i class="fas fa-compress"></i></button>
  <button type="button" class="video-close" onclick="closeTutorial()" aria-label="Close"><i class="fas fa-xmark"></i></button>
- </div>
  </div>
  <video id="tutorialVideo" src="../assets/media/community-tutorial.mp4" controls preload="none" playsinline></video>
  </div>
 </div>
-<button type="button" id="tutorialRestorePill" class="tutorial-restore-pill" onclick="openTutorial()"><i class="fas fa-circle-play"></i> How SenTri Works</button>
 <script>
-function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const p=document.getElementById('tutorialRestorePill');if(p)p.classList.remove('show');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
+function openTutorial(){document.getElementById('tutorialModal').classList.add('open');const v=document.getElementById('tutorialVideo');if(v)v.play().catch(()=>{});}
 function closeTutorial(){const v=document.getElementById('tutorialVideo');if(v){v.pause();}document.getElementById('tutorialModal').classList.remove('open');}
-function minimizeTutorial(){const p=document.getElementById('tutorialRestorePill');if(p)p.classList.add('show');closeTutorial();}
 document.addEventListener('click',function(e){const m=document.getElementById('tutorialModal');if(m&&e.target===m)closeTutorial();});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTutorial();});
 </script>

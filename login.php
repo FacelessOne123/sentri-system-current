@@ -56,34 +56,34 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .hero-badge span{font-size:0.68rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;}
 .form-wrap{max-width:480px;width:100%;margin:0 auto;padding:0 16px 28px;position:relative;z-index:2;}
 /* Two-column sign-in: the tutorial video on the left, the form on the right.
-   Both columns stretch to the same height so the page fills the available
-   space instead of floating in the middle with dead room above and below. */
-.auth-split{max-width:1180px;margin:auto;padding:22px 28px 28px;display:flex;gap:44px;align-items:stretch;justify-content:center;min-height:clamp(460px,62vh,620px);}
-.auth-media{flex:1 1 0;min-width:0;max-width:560px;display:flex;flex-direction:column;}
-.media-frame{position:relative;flex:1 1 auto;background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
-.media-video{display:block;width:100%;height:100%;min-height:420px;background:#04121f;object-fit:cover;cursor:pointer;}
+   The video panel can be resized (small / default / large) and expanded
+   fullscreen, but it is never hidden. */
+.auth-split{--media-w:560px;--media-h:420px;max-width:1260px;margin:auto;padding:22px 28px 28px;display:flex;gap:44px;align-items:center;justify-content:center;}
+.auth-media{flex:0 0 var(--media-w);width:var(--media-w);max-width:var(--media-w);min-width:0;display:flex;flex-direction:column;transition:flex-basis .25s ease,width .25s ease,max-width .25s ease;}
+.auth-split.media-sm{--media-w:420px;--media-h:300px;}
+.auth-split.media-lg{--media-w:700px;--media-h:540px;}
+.media-frame{position:relative;flex:0 0 auto;height:var(--media-h);background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);transition:height .25s ease;}
+.media-video{display:block;width:100%;height:100%;background:#04121f;object-fit:cover;cursor:pointer;}
 .media-caption{margin-top:14px;flex-shrink:0;}
-.media-min{position:absolute;top:10px;right:10px;z-index:3;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.28);background:rgba(4,18,31,.62);color:#e5edf7;font-size:.72rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s;}
-.media-min:hover{background:rgba(37,99,235,.65);}
-.auth-split.video-min{justify-content:center;min-height:0;}
-.auth-split.video-min .auth-media{display:none;}
-.tutorial-restore{position:fixed;left:18px;bottom:18px;z-index:60;display:none;align-items:center;gap:8px;padding:10px 16px;border-radius:50px;border:none;background:#1c57b2;color:#fff;font-size:.8rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);}
-.tutorial-restore:hover{filter:brightness(1.08);}
-.tutorial-restore.show{display:inline-flex;}
+.media-controls{position:absolute;top:10px;right:10px;z-index:3;display:flex;gap:6px;}
+.media-ctl{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.28);background:rgba(4,18,31,.62);color:#e5edf7;font-size:.78rem;font-family:'Inter',sans-serif;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s,opacity .15s;}
+.media-ctl:hover:not(:disabled){background:rgba(37,99,235,.7);}
+.media-ctl:disabled{opacity:.35;cursor:default;}
 .media-caption h3{font-family:'Poppins',sans-serif;font-size:1rem;font-weight:800;color:#fff;margin-bottom:4px;}
 .media-caption p{font-size:.8rem;line-height:1.5;color:rgba(255,255,255,.62);}
 .auth-split .form-wrap{flex:0 0 460px;max-width:460px;margin:0;padding:0;display:flex;}
-.auth-split .form-card{margin-top:0;height:100%;display:flex;flex-direction:column;justify-content:center;padding:34px 32px 30px;}
+.auth-split .form-card{margin-top:0;height:auto;min-height:480px;display:flex;flex-direction:column;justify-content:center;padding:34px 32px 30px;}
 .auth-split .form-group{margin-bottom:16px;}
 .auth-split .form-group input{padding:12px 14px;font-size:.9rem;}
 .auth-split .form-group label{margin-bottom:5px;}
 .auth-split .btn-login{min-height:48px;font-size:.95rem;}
 @media(max-width:1000px){
-.auth-split{flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;min-height:0;}
-.auth-media{order:2;max-width:560px;margin:0 auto;width:100%;display:flex;}
+.auth-split,.auth-split.media-sm,.auth-split.media-lg{--media-w:100%;--media-h:auto;flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;min-height:0;}
+.auth-media{order:2;flex:1 1 auto;max-width:560px;margin:0 auto;width:100%;display:flex;}
+.media-frame{height:auto;}
 .media-video{height:auto;min-height:0;aspect-ratio:16/9;object-fit:contain;}
 .auth-split .form-wrap{order:1;flex:1 1 auto;max-width:480px;margin:0 auto;width:100%;display:block;}
-.auth-split .form-card{height:auto;padding:24px 26px 20px;}
+.auth-split .form-card{height:auto;min-height:0;padding:24px 26px 20px;}
 .auth-split .form-group{margin-bottom:11px;}
 .auth-split .form-group input{padding:9px 11px;font-size:.86rem;}
 .auth-split .btn-login{min-height:42px;font-size:.9rem;}
@@ -203,8 +203,12 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 
 <div class="auth-split">
 <aside class="auth-media">
- <div class="media-frame">
-  <button type="button" class="media-min" id="mediaMinBtn" title="Minimize the tutorial video" aria-label="Minimize the tutorial video"><i class="fas fa-compress"></i> Minimize</button>
+ <div class="media-frame" id="mediaFrame">
+  <div class="media-controls">
+   <button type="button" class="media-ctl" id="mediaSmaller" title="Make the video smaller" aria-label="Make the video smaller"><i class="fas fa-minus"></i></button>
+   <button type="button" class="media-ctl" id="mediaLarger" title="Make the video larger" aria-label="Make the video larger"><i class="fas fa-plus"></i></button>
+   <button type="button" class="media-ctl" id="mediaFull" title="Open the video fullscreen" aria-label="Open the video fullscreen"><i class="fas fa-expand"></i></button>
+  </div>
   <video class="media-video" id="tutorialVideo" src="assets/media/community-tutorial.mp4" poster="assets/media/community-tutorial-poster.jpg" autoplay muted loop playsinline preload="auto" title="Click to toggle sound"></video>
  </div>
  <div class="media-caption">
@@ -246,7 +250,6 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 </div>
 </div>
 <footer class="site-footer"><p>SenTri Community Safety Incident Reporting System - For community use.</p></footer>
-<button type="button" class="tutorial-restore" id="tutorialRestore" title="Show the tutorial video"><i class="fas fa-circle-play"></i> Show tutorial video</button>
 
 <!-- First-login guide popup -->
 <div class="guide-overlay" id="guideOverlay" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
@@ -459,24 +462,53 @@ if (tv) {
   if (p && p.catch) p.catch(() => {});
 }
 
-// Minimize / restore the tutorial video (the panel is tall, so residents who
-// just want to sign in can collapse it). The choice is remembered per browser.
+// Resize / expand the tutorial video. The player stays visible at all times;
+// residents can step it down or up (remembered per browser) or open it
+// fullscreen.
 const authSplit = document.querySelector('.auth-split');
-const mediaMinBtn = document.getElementById('mediaMinBtn');
-const tutorialRestore = document.getElementById('tutorialRestore');
-function setVideoMinimized(min) {
-  if (!authSplit) return;
-  authSplit.classList.toggle('video-min', min);
-  if (tutorialRestore) tutorialRestore.classList.toggle('show', min);
-  if (min && tv) tv.pause();
-  else if (tv) { const p2 = tv.play(); if (p2 && p2.catch) p2.catch(() => {}); }
-  try { localStorage.setItem('sentri:tutorialMin', min ? '1' : '0'); } catch (e) {}
+const mediaFrame = document.getElementById('mediaFrame');
+const bSmaller = document.getElementById('mediaSmaller');
+const bLarger = document.getElementById('mediaLarger');
+const bFull = document.getElementById('mediaFull');
+const MEDIA_SIZES = ['sm','md','lg'];
+let mediaSize = 'md';
+function applyMediaSize(size) {
+  const i = MEDIA_SIZES.indexOf(size);
+  mediaSize = i === -1 ? 'md' : size;
+  if (authSplit) {
+    authSplit.classList.remove('media-sm','media-md','media-lg');
+    authSplit.classList.add('media-' + mediaSize);
+  }
+  if (bSmaller) bSmaller.disabled = mediaSize === 'sm';
+  if (bLarger) bLarger.disabled = mediaSize === 'lg';
+  try { localStorage.setItem('sentri:tutorialSize', mediaSize); } catch (e) {}
 }
-if (mediaMinBtn) mediaMinBtn.addEventListener('click', () => setVideoMinimized(true));
-if (tutorialRestore) tutorialRestore.addEventListener('click', () => setVideoMinimized(false));
+function stepMedia(delta) {
+  const i = MEDIA_SIZES.indexOf(mediaSize);
+  applyMediaSize(MEDIA_SIZES[Math.max(0, Math.min(MEDIA_SIZES.length - 1, i + delta))]);
+}
+if (bSmaller) bSmaller.addEventListener('click', () => stepMedia(-1));
+if (bLarger) bLarger.addEventListener('click', () => stepMedia(1));
+if (bFull) bFull.addEventListener('click', () => {
+  const target = mediaFrame || tv;
+  if (!target) return;
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
+  else if (target.requestFullscreen) { target.requestFullscreen().catch(() => {}); }
+  else if (tv && tv.webkitEnterFullscreen) { tv.webkitEnterFullscreen(); }
+});
+if (document.addEventListener) {
+  document.addEventListener('fullscreenchange', () => {
+    if (!bFull) return;
+    const on = !!document.fullscreenElement;
+    bFull.innerHTML = on ? '<i class="fas fa-compress"></i>' : '<i class="fas fa-expand"></i>';
+    bFull.title = on ? 'Exit fullscreen' : 'Open the video fullscreen';
+  });
+}
 try {
-  if (localStorage.getItem('sentri:tutorialMin') === '1') setVideoMinimized(true);
-} catch (e) {}
+  if (localStorage.getItem('sentri:tutorialMin')) localStorage.removeItem('sentri:tutorialMin');
+  const saved = localStorage.getItem('sentri:tutorialSize');
+  applyMediaSize(saved === 'sm' || saved === 'lg' ? saved : 'md');
+} catch (e) { applyMediaSize('md'); }
 </script>
 </body>
 </html>

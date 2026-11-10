@@ -121,13 +121,13 @@ curl -s "$BASE/signup.php" | grep -q 'sentri-address-autocomplete.js' && p "sign
 say "0d. Consultation remarks (NOV 9)"
 LOGIN_HTML=$(curl -s "$BASE/login.php")
 echo "$LOGIN_HTML" | grep -q 'class="auth-split"' && p "login page uses the taller split layout" || f "login split layout missing"
-echo "$LOGIN_HTML" | grep -q 'id="mediaMinBtn"' && p "login tutorial video can be minimized" || f "login tutorial minimize control missing"
-echo "$LOGIN_HTML" | grep -q 'id="tutorialRestore"' && p "minimized tutorial can be restored" || f "tutorial restore control missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaSmaller"' && p "login tutorial video can be shrunk" || f "tutorial shrink control missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaLarger"' && p "login tutorial video can be enlarged" || f "tutorial enlarge control missing"
+echo "$LOGIN_HTML" | grep -q 'id="mediaFull"' && p "login tutorial video can go fullscreen" || f "tutorial fullscreen control missing"
 
 PORTAL_HTML=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
 echo "$PORTAL_HTML" | grep -q 'id="timeFilter"' && p "feed has a time-range filter" || f "time-range filter missing"
 echo "$PORTAL_HTML" | grep -q 'id="other_text"' && p "Other category has a free-text input" || f "Other free-text input missing"
-echo "$PORTAL_HTML" | grep -q 'How SenTri Works' && p "community tutorial can be minimized to a pill" || f "tutorial minimize pill missing"
 
 # The free-text type must round-trip to the database.
 if [[ -n $MYSQL_CMD && -n ${GTC:-} ]]; then
