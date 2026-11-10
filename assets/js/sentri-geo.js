@@ -839,7 +839,15 @@
  }, { enableHighAccuracy: true, timeout: hiTimeout, maximumAge: 15000 });
  hardStop = global.setTimeout(function () {
  if (coarse && acceptable(coarse)) { settle(resolve, coarse); return; } // coarse beats nothing
- settle(reject, failMsg({ code: 3 }));
+ // Nothing live - hand back the last known fix so the caller can offer it
+ // as a labelled fallback instead of showing an empty map.
+ var cached = readLastFix();
+ var err = failMsg({ code: 3 });
+ if (cached) {
+ err.fallback = cached;
+ err.message = err.message + ' Using your last known location instead.';
+ }
+ settle(reject, err);
  }, hiTimeout + 46000);
  });
  }
@@ -853,12 +861,14 @@
   function watchUserLocation(callback, errorHandler) {
     return global.navigator.geolocation.watchPosition(function (pos) {
       var c = pos.coords || {};
-      callback({
+      var fix = {
         lat: c.latitude,
         lng: c.longitude,
         accuracy: typeof c.accuracy === 'number' ? c.accuracy : LOW_ACCURACY_LIMIT,
         speed: typeof c.speed === 'number' ? c.speed : null
-      });
+      };
+      storeLastFix(fix);
+      callback(fix);
     }, errorHandler || function () {}, {
       enableHighAccuracy: true,
       timeout: 60000, // was 20000 — a cold GPS chip needs up to a minute; aborting early appeared as a "delay" with no recovery
@@ -871,6 +881,131 @@
     if (id !== undefined && id !== null && global.navigator.geolocation) {
       global.navigator.geolocation.clearWatch(id);
     }
+  }
+
+  // ── Last-known-location cache ────────────────────────────────────────────
+  // A dropped connection or a refused geolocation permission must not leave
+  // the user with no position at all. Every good fix is cached locally and
+  // offered back as a clearly-labelled fallback.
+  var LAST_FIX_KEY = 'sentri:lastFix:v1';
+  var LAST_FIX_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+  /**
+   * The cache is scoped per account. Two people sharing a browser (a family
+   * tablet, a responder kiosk) must never see each other's position.
+   */
+  function lastFixKey() {
+    var scope = 'anon';
+    try {
+      var meta = document.querySelector('meta[name="sentri-user"]');
+      if (meta && meta.content) scope = meta.content;
+    } catch (e) {}
+    return LAST_FIX_KEY + ':' + scope;
+  }
+
+  function storeLastFix(fix) {
+    if (!fix || !isFinite(fix.lat) || !isFinite(fix.lng)) return;
+    try {
+      var payload = {
+        lat: fix.lat,
+        lng: fix.lng,
+        accuracy: typeof fix.accuracy === 'number' ? fix.accuracy : null,
+        at: Date.now()
+      };
+      global.localStorage.setItem(lastFixKey(), JSON.stringify(payload));
+    } catch (e) { /* storage may be unavailable (private mode) */ }
+  }
+
+  /**
+   * Read the cached last-known fix.
+   * @param {number} [maxAgeMs] oldest acceptable age in ms (default 7 days)
+   * @returns {{lat:number,lng:number,accuracy:?number,at:number,ageMs:number}|null}
+   */
+  function readLastFix(maxAgeMs) {
+    var limit = typeof maxAgeMs === 'number' ? maxAgeMs : LAST_FIX_MAX_AGE;
+    try {
+      var raw = global.localStorage.getItem(lastFixKey());
+      if (!raw) return null;
+      var d = JSON.parse(raw);
+      if (!d || !isFinite(d.lat) || !isFinite(d.lng) || !d.at) return null;
+      var age = Date.now() - d.at;
+      if (age < 0 || age > limit) return null;
+      return {
+        lat: d.lat,
+        lng: d.lng,
+        accuracy: typeof d.accuracy === 'number' ? d.accuracy : null,
+        at: d.at,
+        ageMs: age
+      };
+    } catch (e) { return null; }
+  }
+
+  function clearLastFix() {
+    try { global.localStorage.removeItem(lastFixKey()); } catch (e) {}
+  }
+
+  /**
+   * Keep-alive watcher that reconnects after transient failures.
+   *
+   * A single geolocation error used to end tracking for the whole session, so
+   * a brief tunnel, a screen lock or a dropped Wi-Fi left the app permanently
+   * without a position. This retries with backoff and re-arms when the tab
+   * becomes visible again.
+   *
+   * @param {(pos:{lat,lng,accuracy,speed,source:string})=>void} callback
+   * @param {(err:Object)=>void} errorHandler called with the last error
+   * @param {Object} [opts] {retryDelays:[ms], source:'browser'}
+   */
+  function watchUserLocationResilient(callback, errorHandler, opts) {
+    opts = opts || {};
+    var delays = opts.retryDelays || [5000, 15000, 30000, 60000];
+    var attempt = 0;
+    var watchId = null;
+    var timer = null;
+    var stopped = false;
+
+    function arm() {
+      if (stopped) return;
+      if (watchId !== null) { clearWatch(watchId); watchId = null; }
+      watchId = watchUserLocation(function (pos) {
+        attempt = 0;
+        pos.source = opts.source || 'browser';
+        storeLastFix(pos);
+        callback(pos);
+      }, function (err) {
+        if (stopped) return;
+        if (typeof errorHandler === 'function') errorHandler(err);
+        // Permission denial is permanent - do not hammer the user with prompts.
+        if (err && err.code === 1) { stopped = true; return; }
+        var delay = delays[Math.min(attempt, delays.length - 1)];
+        attempt++;
+        if (timer) global.clearTimeout(timer);
+        timer = global.setTimeout(arm, delay);
+      });
+    }
+
+    arm();
+
+    // Re-arm when the tab becomes visible again: mobile browsers often stop
+    // delivering positions while backgrounded.
+    function onVisible() {
+      if (stopped) return;
+      if (global.document && global.document.visibilityState === 'visible') arm();
+    }
+    if (global.document && global.document.addEventListener) {
+      global.document.addEventListener('visibilitychange', onVisible);
+    }
+
+    return {
+      stop: function () {
+        stopped = true;
+        if (timer) global.clearTimeout(timer);
+        if (watchId !== null) clearWatch(watchId);
+        if (global.document && global.document.removeEventListener) {
+          global.document.removeEventListener('visibilitychange', onVisible);
+        }
+      }
+    };
   }
 
   global.SentriGeo = {
@@ -892,7 +1027,12 @@
     haversine: haversine,
     getUserLocation: getUserLocation,
     watchUserLocation: watchUserLocation,
+    watchUserLocationResilient: watchUserLocationResilient,
     clearWatch: clearWatch, // eslint-disable-line object-shorthand
+    storeLastFix: storeLastFix,
+    readLastFix: readLastFix,
+    clearLastFix: clearLastFix,
+    LAST_FIX_KEY: LAST_FIX_KEY,
     // read-only constants for callers that need the same thresholds
     LOW_ACCURACY_LIMIT: LOW_ACCURACY_LIMIT
   };

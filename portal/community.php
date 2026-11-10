@@ -34,7 +34,49 @@ if($row){
  $user_barangay=trim((string)($row['barangay_name']??''));
  $user_address=trim((string)($row['resident_address']??''));
 }
-$needs_residence = ($user_barangay === '' || $user_address === '');
+ $needs_residence = ($user_barangay === '' || $user_address === '');
+
+// Approximate "home area" = the centre of the resident's registered barangay.
+// Used ONLY as identity context when no live position exists. It is never
+// used as a report pin, for proximity alerts, or as emergency coordinates.
+$home_area_lat = $home_area_lng = null;
+if ($user_barangay !== '') {
+ $center = sentri_barangay_center($user_barangay);
+ if ($center !== null) { $home_area_lat = $center[0]; $home_area_lng = $center[1]; }
+}
+
+// Age of the last known fix, computed server-side so browser clocks and
+// timezones cannot produce a negative "2h ago".
+$saved_gps_age = null;
+if ($saved_gps_at !== null) {
+ $ts = strtotime((string)$saved_gps_at);
+ if ($ts !== false) $saved_gps_age = max(0, time() - $ts);
+}
+
+// Last known position for this user (a previous browser fix), so the app
+// has a location immediately on load even before a live fix arrives.
+$saved_gps_lat=$saved_gps_lng=null; $saved_gps_at=null; $saved_gps_source=null; $saved_gps_accuracy=null;
+if(sentri_table_has_column($conn,'users','gps_lat')&&sentri_table_has_column($conn,'users','gps_lng')){
+ $gcols='gps_lat,gps_lng';
+ if(sentri_table_has_column($conn,'users','gps_at'))$gcols.=',gps_at';
+ if(sentri_table_has_column($conn,'users','gps_source'))$gcols.=',gps_source';
+ if(sentri_table_has_column($conn,'users','gps_accuracy'))$gcols.=',gps_accuracy';
+ $gs=$conn->prepare("SELECT $gcols FROM users WHERE id=? LIMIT 1");
+ if($gs){
+  $gs->bind_param("i",$uid);$gs->execute();
+  $gr=$gs->get_result();
+  if($gr&&$gr->num_rows>0){
+   $gv=$gr->fetch_row();
+   $saved_gps_lat=($gv[0]!==null)?(float)$gv[0]:null;
+   $saved_gps_lng=($gv[1]!==null)?(float)$gv[1]:null;
+   if(strpos($gcols,'gps_at')!==false)$saved_gps_at=$gv[2]??null;
+   if(strpos($gcols,'gps_source')!==false)$saved_gps_source=$gv[3]??null;
+   if(strpos($gcols,'gps_accuracy')!==false)$saved_gps_accuracy=($gv[4]!==null)?(float)$gv[4]:null;
+  }
+  $gr?$gr->free():null;
+  $gs->close();
+ }
+}
 
 // Barangay change lock: current value + seconds remaining, measured with DB
 // time so PHP/MySQL timezone differences cannot skew the countdown.
@@ -117,6 +159,7 @@ $page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'In
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?> | SenTri</title>
 <?= csrf_meta_tag() ?>
+<meta name="sentri-user" content="<?= htmlspecialchars((string)$uid, ENT_QUOTES, 'UTF-8') ?>">
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
@@ -179,6 +222,11 @@ body.dark .dm-slider::before{transform:translateX(18px);}
 .gps-chip{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:50px;font-size:.76rem;font-weight:600;background:var(--bg);color:var(--muted);border:1.5px solid var(--input-border);transition:all .3s;flex-shrink:0;}
 .gps-chip.active{background:#f0fff4;color:#38a169;border-color:#38a169;}
 body.dark .gps-chip.active{background:#1a2e24;}
+.gps-chip.stale{background:#fffbeb;color:#b45309;border-color:#f59e0b;}
+body.dark .gps-chip.stale{background:#2e2010;}
+.gps-chip.registered{background:#f1f5f9;color:#475569;border-color:#94a3b8;}
+body.dark .gps-chip.registered{background:#21262d;}
+.gps-chip.stale .gps-dot,.gps-chip.registered .gps-dot{animation:none;}
 .gps-dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex-shrink:0;}
 @keyframes gpsPulse{0%,100%{box-shadow:0 0 0 0 rgba(56,161,105,.5);}50%{box-shadow:0 0 0 5px rgba(56,161,105,0);}}
 .gps-chip.active .gps-dot{animation:gpsPulse 1.5s ease infinite;}
@@ -690,6 +738,14 @@ function actionToast(message,type){
  <input type="text" id="searchInput" placeholder="Search location, keyword...">
  <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+ <select id="timeFilter" title="Show only incidents from this time range">
+ <option value="">Any time</option>
+ <option value="15">Last 15 min</option>
+ <option value="60">Last hour</option>
+ <option value="1440">Last 24 hours</option>
+ <option value="10080">Last 7 days</option>
+ <option value="43200">Last 30 days</option>
+ </select>
  <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
  <div class="view-toggle">
  <button class="view-btn active" id="btnFeed" onclick="switchView('feed')"><i class="fas fa-list"></i> Feed</button>
@@ -716,6 +772,14 @@ function actionToast(message,type){
  <input type="text" id="searchInput" placeholder="Search my reports...">
  <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+ <select id="timeFilter" title="Show only incidents from this time range">
+ <option value="">Any time</option>
+ <option value="15">Last 15 min</option>
+ <option value="60">Last hour</option>
+ <option value="1440">Last 24 hours</option>
+ <option value="10080">Last 7 days</option>
+ <option value="43200">Last 30 days</option>
+ </select>
  <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
  </div>
  <div id="feed"><div class="loading"><i class="fas fa-spinner"></i> Loading your reports…</div></div>
@@ -824,6 +888,7 @@ function actionToast(message,type){
  </div>
  </div>
  <?php endif; ?>
+
 
  </div>
 </div>
@@ -937,6 +1002,10 @@ function actionToast(message,type){
         <option value="suspicious_activity">Suspicious Activity</option>
         <option value="public_disturbance">Public Disturbance</option>
     </select>
+    <div class="form-group" style="margin-top:10px;margin-bottom:0;">
+        <label for="other_text">Please specify <span style="font-weight:400;color:var(--muted);">(what is the incident?)</span></label>
+        <input type="text" name="other_text" id="other_text" maxlength="100" placeholder="e.g. Stray dogs, illegal dumping, damaged signage…">
+    </div>
 </div>
 
 
@@ -950,6 +1019,13 @@ function actionToast(message,type){
  <div class="loc-auto-row">
  <button type="button" class="locate-btn-big" id="locateBtn" onclick="useMyLocation()"><i class="fas fa-location-crosshairs"></i> Use My Location</button>
  <span class="pin-status" id="pinStatus"><i class="fas fa-circle-info"></i> No pin set</span>
+ </div>
+ <div style="font-size:.73rem;color:var(--muted);line-height:1.5;margin:2px 0 10px;">
+ <i class="fas fa-circle-info" style="margin-right:5px;"></i>Use “Use My Location” only if the incident is happening where you are right now.
+ Otherwise drop the pin on the map at the spot — a resident may report an incident in any barangay, wherever they saw it.
+ </div>
+ <div id="reportRoutingHint" style="display:none;font-size:.75rem;font-weight:600;color:var(--blue);background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:10px;">
+ <i class="fas fa-map-marker-alt" style="margin-right:6px;"></i><span id="reportRoutingText"></span>
  </div>
  <div class="suggest-wrap" style="margin-bottom:8px;">
   <input type="text" id="r_city" placeholder="City / Municipality *" maxlength="150" autocomplete="off">
@@ -1060,6 +1136,23 @@ const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#
 
 let allReports=[], curView='feed';
 let userLat=null, userLng=null, hasGPS=false, liveGPS=false;
+// Last known position from the server (a previous browser fix).
+const SAVED_GPS = <?= json_encode([
+ 'lat'      => $saved_gps_lat,
+ 'lng'      => $saved_gps_lng,
+ 'age'      => $saved_gps_age,
+ 'source'   => $saved_gps_source,
+ 'accuracy' => $saved_gps_accuracy,
+], JSON_UNESCAPED_SLASHES) ?>;
+// Approximate centre of the resident's REGISTERED barangay. This is identity
+// context only - it is never used to place a report pin, to raise proximity
+// alerts, or as emergency coordinates. A resident who is commuting is
+// somewhere else entirely, so the UI never calls this "your location".
+const HOME_AREA = <?= json_encode([
+ 'lat'      => $home_area_lat,
+ 'lng'      => $home_area_lng,
+ 'barangay' => $user_barangay,
+], JSON_UNESCAPED_SLASHES) ?>;
 const alertTimes={};
 
 /* Dark mode */
@@ -1074,10 +1167,105 @@ function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.
 window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
 
 /* GPS */
-function updateChip(){const chip=document.getElementById('gpsChip');const lbl=document.getElementById('gpsLabel');if(!chip)return;if(hasGPS){chip.className='gps-chip active';lbl.textContent='GPS Live';}else{chip.className='gps-chip';lbl.textContent='GPS Off';}}
+/* GPS source tracking: a live browser fix, or a labelled fallback (the last
+   known position, or the registered home area). The chip always says which
+   one it is so nobody mistakes a stale position for a live one. */
+let gpsSource='none', gpsFixAt=0, gpsAccuracy=null, gpsFixSource='none';
+function updateChip(){
+ const chip=document.getElementById('gpsChip'),lbl=document.getElementById('gpsLabel');
+ if(!chip)return;
+ if(!hasGPS){chip.className='gps-chip';lbl.textContent='GPS Off';return;}
+ const age=gpsFixAt?Math.round((Date.now()-gpsFixAt)/1000):null;
+ if(gpsSource==='live'){chip.className='gps-chip active';lbl.textContent='GPS Live';return;}
+ if(gpsSource==='address'){
+  // The registered address is IDENTITY context, not "where I am". A resident
+  // who is commuting is somewhere else entirely, so this is never presented
+  // as a position.
+  chip.className='gps-chip registered';
+  lbl.textContent='Registered Address';
+  return;
+ }
+ // stale / last known
+ chip.className='gps-chip stale';
+ lbl.textContent='Last Known'+(age!=null?' · '+formatAge(age):'');
+}
+function formatAge(sec){
+ if(sec==null)return '';
+ sec=Math.max(0,sec);
+ if(sec<60)return sec+'s ago';
+ if(sec<3600)return Math.round(sec/60)+'m ago';
+ if(sec<86400)return Math.round(sec/3600)+'h ago';
+ return Math.round(sec/86400)+'d ago';
+}
+/* Save a live fix to the server so the position follows the user to other
+   browsers/devices and survives a dropped connection. Throttled to avoid
+   hammering the API on every watch tick. */
+let _gpsSaveAt=0;
+function saveGpsToServer(lat,lng,accuracy,source){
+ const now=Date.now();
+ if(now-_gpsSaveAt<60000)return;
+ _gpsSaveAt=now;
+ try{
+  const fd=new FormData();
+  fd.append('action','save_gps');
+  fd.append('latitude',lat);
+  fd.append('longitude',lng);
+  if(accuracy!=null&&isFinite(accuracy))fd.append('accuracy',accuracy);
+  fd.append('source',source||'browser');
+  fetch('../api/reports.php',{method:'POST',body:fd}).catch(()=>{});
+ }catch(e){}
+}
+
+/** Apply a fix to the UI, remembering where it came from. */
+function applyGpsFix(lat,lng,accuracy,source,at){
+ if(!isFinite(lat)||!isFinite(lng))return;
+ userLat=lat;userLng=lng;hasGPS=true;
+ gpsFixSource=source||'browser';
+ // 'live' is a fresh browser fix, 'address' is the registered home area -
+ // identity context only, never a claim about where the user is right now.
+ if(source==='live')gpsSource='live';
+ else if(source==='address')gpsSource='address';
+ else gpsSource='stale';
+ gpsFixAt=at||Date.now();
+ if(accuracy!=null&&isFinite(accuracy))gpsAccuracy=accuracy;else gpsAccuracy=null;
+ setGPSAccuracy(gpsAccuracy);
+ updateChip();
+ // Proximity toasts must only run on a real position. The registered address
+ // would fire false "nearby report" alerts for anyone who is not at home.
+ if(gpsSource!=='address')checkProximity();
+}
 function setGPSAccuracy(m){const el=document.getElementById('gpsAcc');if(!el)return;if(m==null||!isFinite(m)||m<=0){el.style.display='none';return;}const good=m<12,ok=m<50;el.style.display='inline';el.style.color=good?'#16a34a':ok?'#d97706':'#dc2626';el.textContent=`±${Math.round(m)}m ${good?'good':ok?'ok':'weak'}`;}
 function gpsErrorMessage(err){if(!err)return'Could not get your location — set it on the map instead.';if(typeof err.code==='number'){const t={1:'Location access denied — allow location for this site in your browser settings, or pick your spot on the map.',2:'Location services unavailable — drag the pin on the map to set it manually.',3:'Location fix timed out (no GPS/Wi-Fi source) — drag the pin on the map to set it manually.'};return t[err.code]||'Could not get your location.';}return err.message||'Could not get your location — set it on the map instead.';}
-function startGPS(){if(!navigator.geolocation||!document.getElementById('gpsChip'))return;SentriGeo.watchUserLocation(pos=>{userLat=pos.lat;userLng=pos.lng;hasGPS=true;liveGPS=true;setGPSAccuracy(pos.accuracy);updateChip();checkProximity();},()=>{setGPSAccuracy(null);updateChip();});}
+function startGPS(){
+ if(!document.getElementById('gpsChip'))return;
+ // 1. Show the last known position immediately.
+ //    Prefer this device's cache, else the copy stored on the server.
+ const cached=SentriGeo.readLastFix();
+ if(cached){
+  applyGpsFix(cached.lat,cached.lng,cached.accuracy,'cached',cached.at);
+ } else if(SAVED_GPS&&SAVED_GPS.lat!=null&&SAVED_GPS.lng!=null){
+  const at=SAVED_GPS.age!=null?Date.now()-SAVED_GPS.age*1000:Date.now();
+  applyGpsFix(SAVED_GPS.lat,SAVED_GPS.lng,SAVED_GPS.accuracy,'cached',at);
+ } else if(HOME_AREA&&HOME_AREA.lat!=null&&HOME_AREA.lng!=null){
+  // 2. Last resort: the centre of the resident's registered barangay. This is
+  //    IDENTITY context, not "where I am" - it is only ever used for the
+  //    profile chip, never for a report pin or proximity alerts.
+  applyGpsFix(HOME_AREA.lat,HOME_AREA.lng,null,'address',Date.now());
+ }
+ // 3. Try a live browser fix. A failure must not clear the fallback.
+ if(!navigator.geolocation)return;
+ SentriGeo.watchUserLocationResilient(pos=>{
+  liveGPS=true;
+  applyGpsFix(pos.lat,pos.lng,pos.accuracy,'live',Date.now());
+  saveGpsToServer(pos.lat,pos.lng,pos.accuracy,'browser');
+ },err=>{
+  setGPSAccuracy(gpsAccuracy);
+  updateChip();
+  if(err&&err.code===1&&!hasGPS){
+   actionToast('Location permission denied — enable it in your browser, or set the spot on the map instead.','error');
+  }
+ });
+}
 function haversine(a,b,c,d){return SentriGeo.haversine(a,b,c,d);}
 function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now();allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const d=haversine(userLat,userLng,r.latitude,r.longitude);if(d<=(r.radius_m||200)){if(now-(alertTimes[r.id]||0)<300000)return;alertTimes[r.id]=now;showToast(r,Math.round(d));}});}
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
@@ -1096,12 +1284,32 @@ function getFiltered(mineOnly){
  const s=(document.getElementById('searchInput')?.value||'').trim().toLowerCase();
  const st=document.getElementById('statusFilter')?.value||'';
  const ca=document.getElementById('categoryFilter')?.value||'';
+ const tf=parseInt(document.getElementById('timeFilter')?.value||'',10);
+ const cutoff=isFinite(tf)&&tf>0?Date.now()-tf*60000:null;
  return allReports.filter(r=>{
  if(mineOnly&&r.user_id!=MY_USER_ID)return false;
  if(st&&r.status!==st)return false;if(ca&&r.category!==ca)return false;
- if(s){const h=(r.title+r.location_name+r.city+(r.barangay||'')+(r.description||'')).toLowerCase();if(!h.includes(s))return false;}
+ if(cutoff!==null){const t=parseTs(r.created_at);if(t===null||t<cutoff)return false;}
+ if(s){const h=(r.title+r.location_name+r.city+(r.barangay||'')+(r.description||'')+(r.custom_type||'')).toLowerCase();if(!h.includes(s))return false;}
  return true;
  });
+}
+
+/** Parse a MySQL datetime ("2026-11-09 14:13:07") as local time. */
+function parseTs(s){
+ if(!s)return null;
+ const t=new Date(String(s).replace(' ','T')).getTime();
+ return isNaN(t)?null:t;
+}
+/** Short relative timestamp for cards ("15m ago", "2h ago", "3d ago"). */
+function timeAgoText(s){
+ const t=parseTs(s);if(t===null)return '';
+ const sec=Math.max(0,Math.round((Date.now()-t)/1000));
+ if(sec<45)return 'just now';
+ if(sec<3600)return Math.round(sec/60)+'m ago';
+ if(sec<86400)return Math.round(sec/3600)+'h ago';
+ if(sec<604800)return Math.round(sec/86400)+'d ago';
+ return new Date(t).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
 }
 
 function renderFeed(mineOnly=false){
@@ -1113,6 +1321,7 @@ function renderFeed(mineOnly=false){
  }
  feed.innerHTML=list.map((r,i)=>{
  const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+ const ago=timeAgoText(r.created_at);
  const isMine=r.user_id==MY_USER_ID,upV=r.user_vote==='up',dnV=r.user_vote==='down',hasPin=r.latitude&&r.longitude,hasPh=r.images&&r.images.length>0;
  const isVerified=r.upvotes>=2;
  return `<div class="report-card ${r.status}" style="animation-delay:${i*.04}s;" onclick="openDetail(${r.id})">
@@ -1126,7 +1335,7 @@ function renderFeed(mineOnly=false){
  <div class="card-meta">
  <span><i class="fas fa-map-location-dot"></i>${esc(r.location_name)}</span>
  <span><i class="fas fa-city"></i>${esc(r.city)}${r.province?', '+esc(r.province):''}</span>
- <span><i class="fas fa-clock"></i>${date}</span>
+ <span title="${esc(date)}"><i class="fas fa-clock"></i>${ago||date}</span>
  <span><i class="fas fa-user"></i>${esc(r.poster_name)}</span>
  ${hasPh?`<span><i class="fas fa-camera" style="color:var(--blue-accent);"></i>${r.images.length} photo${r.images.length>1?'s':''}</span>`:''}
  </div>
@@ -1136,14 +1345,14 @@ function renderFeed(mineOnly=false){
  <button class="vote-btn down ${dnV?'voted':''}" onclick="vote(${r.id},'down')"><i class="fas fa-thumbs-down"></i><span id="dn_${r.id}">${r.downvotes}</span></button>
  <button class="pin-chip" style="background:#eff6ff;color:#2563eb;border-color:#bfdbfe;font-weight:700;" onclick="crowdVerify(${r.id})"><i class="fas fa-shield-check"></i> +1 Verify</button>
  ${hasPin?`<button class="pin-chip" onclick="openMiniMap(${r.id})"><i class="fas fa-map-pin"></i> Map</button>`:''}
- ${isMine?`<button class="vote-btn" style="margin-left:auto;border-color:var(--red);color:var(--red);" onclick="deleteReport(${r.id})"><i class="fas fa-trash-can"></i></button>`:`<span class="category-tag" style="margin-left:auto;"><i class="fas ${CI[r.category]||'fa-circle-info'}"></i> ${ucFirst(r.category)}</span>`}
+ ${isMine?`<button class="vote-btn" style="margin-left:auto;border-color:var(--red);color:var(--red);" onclick="deleteReport(${r.id})"><i class="fas fa-trash-can"></i></button>`:`<span class="category-tag" style="margin-left:auto;"><i class="fas ${CI[r.category]||'fa-circle-info'}"></i> ${ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}</span>`}
  </div>
  </div>`;
  }).join('');
 }
 
-['searchInput','statusFilter','categoryFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();},200);});});
-function resetFilters(){['searchInput','statusFilter','categoryFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}
+['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();},200);});});
+function resetFilters(){['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}
 function quickFilterStatus(status){const sf=document.getElementById('statusFilter');if(sf){sf.value=status;renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}}
 
 async function crowdVerify(id){
@@ -1245,6 +1454,19 @@ function highlightPickerBarangay(brgyName){
  });
 }
 
+/** Show which barangay's officials will receive this report. */
+function updateRoutingHint(brgyName){
+ const wrap=document.getElementById('reportRoutingHint');
+ const txt=document.getElementById('reportRoutingText');
+ if(!wrap||!txt)return;
+ if(!brgyName){wrap.style.display='none';return;}
+ const own=(HOME_AREA&&HOME_AREA.barangay&&HOME_AREA.barangay===brgyName);
+ txt.textContent=own
+  ? 'This report will go to Brgy '+brgyName+' officials.'
+  : 'This report will go to Brgy '+brgyName+' officials (not your registered barangay).';
+ wrap.style.display='block';
+}
+
 function autoBrgyDetect(lat,lng){
  const seq=++_autoBrgySeq;
  SentriGeo.findBarangay(lat,lng).then(b=>{
@@ -1254,6 +1476,9 @@ function autoBrgyDetect(lat,lng){
   const ps2=document.getElementById('pinStatus2');
   if(ps2){ps2.className='pin-status set';ps2.innerHTML=`<i class="fas fa-location-dot"></i> Brgy ${esc(b.name)}`;}
   highlightPickerBarangay(b.name);
+  // Make the routing target visible: a resident may report an incident in a
+  // barangay other than their own, and the pin is what decides.
+  updateRoutingHint(b.name);
 
   // Auto-detect closest street in that barangay
   loadStreetData().then(data => {
@@ -1396,6 +1621,7 @@ function clearPin(){
  if(ps){ps.className='pin-status';ps.innerHTML='<i class="fas fa-circle-info"></i> No pin set';}
  const ps2=document.getElementById('pinStatus2');
  if(ps2){ps2.className='pin-status';ps2.innerHTML='';}
+ updateRoutingHint(null);
  document.getElementById('clearPinBtn').style.display='none';
 
  _lastPin=null;
@@ -1714,6 +1940,14 @@ function useMyLocation(){
  },err=>{
  btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
  btn.disabled=false;
+ // Offer the last known position instead of leaving the user with nothing.
+ const fb=err&&err.fallback?err.fallback:null;
+ if(fb&&confirm('Live GPS is unavailable.\n\nUse your last known location from '+formatAge(Math.round((Date.now()-fb.at)/1000))+' instead?\n\n(You can drag the pin to adjust it.)')){
+  applyGpsFix(fb.lat,fb.lng,fb.accuracy,'cached',fb.at);
+  placePin(fb.lat,fb.lng,true);
+  actionToast('Using your last known location — drag the pin to adjust it.','warn');
+  return;
+ }
  actionToast(gpsErrorMessage(err),'error');
  fallback();
  });
@@ -1724,6 +1958,9 @@ function openModal(){
  document.getElementById('modalOverlay').classList.add('open');
  initAddressSuggestions();
  if(!document.getElementById('r_city').value)document.getElementById('r_city').value='Imus';
+ // The routing hint must follow a real pin, not a stale/hand-typed barangay.
+ const hasPin=!!document.getElementById('r_latitude').value;
+ updateRoutingHint(hasPin?(document.getElementById('r_barangay').value||null):null);
 }
 function closeModal(){
  document.getElementById('modalOverlay').classList.remove('open');
@@ -1858,7 +2095,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -1895,8 +2132,28 @@ function closeDetail(){document.getElementById('detailOverlay').classList.remove
 function outsideCloseDetail(e){if(e.target===document.getElementById('detailOverlay'))closeDetail();}
 
 function copyEmergencyCoordinates(btn){
+ // The registered address is NOT a position - never emit it as coordinates.
+ if(gpsSource==='address'){
+  const addr=(HOME_AREA&&HOME_AREA.barangay)?('Brgy '+HOME_AREA.barangay+', Imus, Cavite'):'Imus, Cavite';
+  const text=`🚨 EMERGENCY LOCATION (no live GPS - registered address): ${addr}. Confirm the exact spot with the caller.`;
+  navigator.clipboard.writeText(text).then(()=>{
+  const orig=btn.innerHTML;
+  btn.innerHTML='<i class="fas fa-check"></i> Copied!';
+  btn.style.background='#10b981';
+  btn.style.color='#fff';
+  setTimeout(()=>{
+  btn.innerHTML=orig;
+  btn.style.background='#f59e0b';
+  btn.style.color='#111827';
+  },2500);
+  });
+  return;
+ }
  if(userLat!==null&&userLng!==null){
- const text=`🚨 EMERGENCY GPS LOCATION: ${userLat.toFixed(6)}, ${userLng.toFixed(6)} (via SenTri System)`;
+ // Label the source so a responder knows whether this is live or stale.
+ let suffix=' (live GPS)';
+ if(gpsSource!=='live')suffix=` (last known, ${formatAge(Math.round((Date.now()-gpsFixAt)/1000))})`;
+ const text=`🚨 EMERGENCY GPS LOCATION: ${userLat.toFixed(6)}, ${userLng.toFixed(6)}${suffix} (via SenTri System)`;
  navigator.clipboard.writeText(text).then(()=>{
  const orig=btn.innerHTML;
  btn.innerHTML='<i class="fas fa-check"></i> Copied GPS!';

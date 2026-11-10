@@ -299,6 +299,7 @@ function ensureGeoColumns($conn) {
  if (!in_array('latitude', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN latitude DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('longitude', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN longitude DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('radius_m', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN radius_m INT(11) NOT NULL DEFAULT 200");
+ if (!in_array('custom_type', $cols)) $conn->query("ALTER TABLE reports ADD COLUMN custom_type VARCHAR(100) DEFAULT NULL AFTER category");
 }
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -318,7 +319,7 @@ switch ($action) {
  $sql = "
  SELECT r.id, r.user_id, r.title, r.description, r.location_name, r.barangay,
  r.city, r.province, r.latitude, r.longitude, r.radius_m,
- r.status, r.category, r.upvotes, r.downvotes, r.created_at,
+ r.status, r.category, r.custom_type, r.upvotes, r.downvotes, r.created_at,
  CONCAT(u.first_name,' ',u.last_name) AS poster_name,
  v.vote AS user_vote
  FROM reports r
@@ -440,7 +441,7 @@ switch ($action) {
  $server_time = $meta['server_time'] ?? date('Y-m-d H:i:s');
  $latest_id = (int)($meta['latest_id'] ?? 0);
 
- $sql = "SELECT r.id, r.title, r.status, r.category, r.barangay, r.city, r.description,
+ $sql = "SELECT r.id, r.title, r.status, r.category, r.custom_type, r.barangay, r.city, r.description,
   r.created_at, r.updated_at{$esc_select}
   FROM reports r
   WHERE " . implode(' AND ', $where) . "
@@ -477,6 +478,11 @@ switch ($action) {
  $province = trim($_POST['province'] ?? '');
  $status_val = trim($_POST['status'] ?? '');
  $category = trim($_POST['category'] ?? '');
+ // Free-text incident type for the "Other" category (NOV 9 consultation).
+ $custom_type = trim((string)($_POST['other_text'] ?? ''));
+ if (function_exists('mb_substr')) $custom_type = mb_substr($custom_type, 0, 100, 'UTF-8');
+ else $custom_type = substr($custom_type, 0, 100);
+ if ($category !== 'other' || $custom_type === '') $custom_type = null;
 
  // Lat/lng: keep as string or null - 's' type in bind_param handles nullable
  // decimals correctly on all MySQL versions (null → SQL NULL, "14.35" → DECIMAL)
@@ -542,11 +548,11 @@ switch ($action) {
 
  // Type string: i=user_id, s×7=text fields, s=lat, s=lng, i=radius, s=status, s=category
  // Using 's' (not 'd') for lat/lng so PHP null becomes SQL NULL safely
- $ins = $conn->prepare("INSERT INTO reports (user_id,title,description,location_name,barangay,city,province,latitude,longitude,radius_m,status,category) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+ $ins = $conn->prepare("INSERT INTO reports (user_id,title,description,location_name,barangay,city,province,latitude,longitude,radius_m,status,category,custom_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
  if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare failed: '.$conn->error]); exit; }
- $ins->bind_param("issssssssiss",
+ $ins->bind_param("issssssssisss",
  $user_id,$title,$description,$location_name,$barangay,$city,$province,
- $lat,$lng,$rad,$status_val,$category);
+ $lat,$lng,$rad,$status_val,$category,$custom_type);
  if ($ins->execute()) {
  $new_id = (int)$conn->insert_id;
  $ins->close();
@@ -890,9 +896,17 @@ switch ($action) {
  while($rc2 = $colRes->fetch_row()) $existCols2[] = $rc2[0];
  if (!in_array('gps_lat', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_lat DECIMAL(10,7) DEFAULT NULL");
  if (!in_array('gps_lng', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_lng DECIMAL(10,7) DEFAULT NULL");
+ if (!in_array('gps_accuracy', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_accuracy DECIMAL(8,2) DEFAULT NULL AFTER gps_lng");
+ if (!in_array('gps_at', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_at DATETIME DEFAULT NULL AFTER gps_accuracy");
+ if (!in_array('gps_source', $existCols2)) $conn->query("ALTER TABLE users ADD COLUMN gps_source ENUM('browser','manual') DEFAULT NULL AFTER gps_at");
 
- $upd = $conn->prepare("UPDATE users SET gps_lat=?, gps_lng=? WHERE id=?");
- $upd->bind_param("ddi", $lat, $lng, $user_id);
+ // Accuracy + source let the UI say whether a position is live or stale.
+ $acc = isset($_POST['accuracy']) && $_POST['accuracy'] !== '' ? (float)$_POST['accuracy'] : null;
+ if ($acc !== null && (!is_finite($acc) || $acc < 0 || $acc > 100000)) $acc = null;
+ $src = isset($_POST['source']) && in_array($_POST['source'], ['browser','manual'], true) ? $_POST['source'] : 'browser';
+
+ $upd = $conn->prepare("UPDATE users SET gps_lat=?, gps_lng=?, gps_accuracy=?, gps_at=NOW(), gps_source=? WHERE id=?");
+ $upd->bind_param("dddsi", $lat, $lng, $acc, $src, $user_id);
  if ($upd->execute()) {
  $_SESSION['gps_lat'] = $lat;
  $_SESSION['gps_lng'] = $lng;
@@ -926,7 +940,7 @@ switch ($action) {
  }
  }
 
- echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng]);
+ echo json_encode(['status'=>'success','lat'=>$lat,'lng'=>$lng,'accuracy'=>$acc,'source'=>$src,'at'=>date('c')]);
  } else {
  echo json_encode(['status'=>'error','message'=>'Failed to save GPS: '.$upd->error]);
  }

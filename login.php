@@ -55,20 +55,39 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .hero-badge i{font-size:1.5rem;color:var(--gold);display:block;margin-bottom:3px;}
 .hero-badge span{font-size:0.68rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;}
 .form-wrap{max-width:480px;width:100%;margin:0 auto;padding:0 16px 28px;position:relative;z-index:2;}
-/* Two-column sign-in: the tutorial video on the left, the form on the right. */
-.auth-split{max-width:1180px;margin:auto;padding:22px 28px 28px;display:flex;gap:44px;align-items:center;justify-content:center;}
-.auth-media{flex:1 1 0;min-width:0;max-width:560px;}
-.media-frame{background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);}
-.media-video{display:block;width:100%;aspect-ratio:16/9;background:#04121f;object-fit:contain;cursor:pointer;}
-.media-caption{margin-top:14px;}
+/* Two-column sign-in: the tutorial video on the left, the form on the right.
+   The video panel can be resized (small / default / large) and expanded
+   fullscreen, but it is never hidden. */
+.auth-split{--media-w:560px;--media-h:420px;max-width:1260px;margin:auto;padding:22px 28px 28px;display:flex;gap:44px;align-items:center;justify-content:center;}
+.auth-media{flex:0 0 var(--media-w);width:var(--media-w);max-width:var(--media-w);min-width:0;display:flex;flex-direction:column;transition:flex-basis .25s ease,width .25s ease,max-width .25s ease;}
+.auth-split.media-sm{--media-w:420px;--media-h:300px;}
+.auth-split.media-lg{--media-w:700px;--media-h:540px;}
+.media-frame{position:relative;flex:0 0 auto;height:var(--media-h);background:#04121f;border-radius:16px;overflow:hidden;box-shadow:0 18px 46px rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.09);transition:height .25s ease;}
+.media-video{display:block;width:100%;height:100%;background:#04121f;object-fit:cover;cursor:pointer;}
+.media-caption{margin-top:14px;flex-shrink:0;}
+.media-controls{position:absolute;top:10px;right:10px;z-index:3;display:flex;gap:6px;opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.media-controls.show,.media-controls.always{opacity:1;pointer-events:auto;}
+.media-ctl{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.28);background:rgba(4,18,31,.62);color:#e5edf7;font-size:.78rem;font-family:'Inter',sans-serif;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s,opacity .15s;}
+.media-ctl:hover:not(:disabled){background:rgba(37,99,235,.7);}
+.media-ctl:disabled{opacity:.35;cursor:default;}
 .media-caption h3{font-family:'Poppins',sans-serif;font-size:1rem;font-weight:800;color:#fff;margin-bottom:4px;}
 .media-caption p{font-size:.8rem;line-height:1.5;color:rgba(255,255,255,.62);}
-.auth-split .form-wrap{flex:0 0 430px;max-width:430px;margin:0;padding:0;}
-.auth-split .form-card{margin-top:0;}
+.auth-split .form-wrap{flex:0 0 460px;max-width:460px;margin:0;padding:0;display:flex;}
+.auth-split .form-card{margin-top:0;height:auto;min-height:480px;display:flex;flex-direction:column;justify-content:center;padding:34px 32px 30px;}
+.auth-split .form-group{margin-bottom:16px;}
+.auth-split .form-group input{padding:12px 14px;font-size:.9rem;}
+.auth-split .form-group label{margin-bottom:5px;}
+.auth-split .btn-login{min-height:48px;font-size:.95rem;}
 @media(max-width:1000px){
-.auth-split{flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;}
-.auth-media{order:2;max-width:560px;margin:0 auto;width:100%;}
-.auth-split .form-wrap{order:1;flex:1 1 auto;max-width:480px;margin:0 auto;width:100%;}
+.auth-split,.auth-split.media-sm,.auth-split.media-lg{--media-w:100%;--media-h:auto;flex-direction:column;gap:24px;align-items:stretch;padding:0 16px 26px;min-height:0;}
+.auth-media{order:2;flex:1 1 auto;max-width:560px;margin:0 auto;width:100%;display:flex;}
+.media-frame{height:auto;}
+.media-video{height:auto;min-height:0;aspect-ratio:16/9;object-fit:contain;}
+.auth-split .form-wrap{order:1;flex:1 1 auto;max-width:480px;margin:0 auto;width:100%;display:block;}
+.auth-split .form-card{height:auto;min-height:0;padding:24px 26px 20px;}
+.auth-split .form-group{margin-bottom:11px;}
+.auth-split .form-group input{padding:9px 11px;font-size:.86rem;}
+.auth-split .btn-login{min-height:42px;font-size:.9rem;}
 }
 .form-card{background:#fff;border-radius:16px;padding:24px 26px 20px;margin-top:20px;box-shadow:0 8px 32px rgba(0,0,0,0.2);width:100%;}
 .portal-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #e5e7eb;}
@@ -185,7 +204,12 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 
 <div class="auth-split">
 <aside class="auth-media">
- <div class="media-frame">
+ <div class="media-frame" id="mediaFrame">
+  <div class="media-controls">
+   <button type="button" class="media-ctl" id="mediaSmaller" title="Make the video smaller" aria-label="Make the video smaller"><i class="fas fa-minus"></i></button>
+   <button type="button" class="media-ctl" id="mediaLarger" title="Make the video larger" aria-label="Make the video larger"><i class="fas fa-plus"></i></button>
+   <button type="button" class="media-ctl" id="mediaFull" title="Open the video fullscreen" aria-label="Open the video fullscreen"><i class="fas fa-expand"></i></button>
+  </div>
   <video class="media-video" id="tutorialVideo" src="assets/media/community-tutorial.mp4" poster="assets/media/community-tutorial-poster.jpg" autoplay muted loop playsinline preload="auto" title="Click to toggle sound"></video>
  </div>
  <div class="media-caption">
@@ -438,6 +462,73 @@ if (tv) {
   const p = tv.play();
   if (p && p.catch) p.catch(() => {});
 }
+
+// Resize / expand the tutorial video. The player stays visible at all times;
+// residents can step it down or up (remembered per browser) or open it
+// fullscreen.
+const authSplit = document.querySelector('.auth-split');
+const mediaFrame = document.getElementById('mediaFrame');
+const bSmaller = document.getElementById('mediaSmaller');
+const bLarger = document.getElementById('mediaLarger');
+const bFull = document.getElementById('mediaFull');
+const MEDIA_SIZES = ['sm','md','lg'];
+let mediaSize = 'md';
+function applyMediaSize(size) {
+  const i = MEDIA_SIZES.indexOf(size);
+  mediaSize = i === -1 ? 'md' : size;
+  if (authSplit) {
+    authSplit.classList.remove('media-sm','media-md','media-lg');
+    authSplit.classList.add('media-' + mediaSize);
+  }
+  if (bSmaller) bSmaller.disabled = mediaSize === 'sm';
+  if (bLarger) bLarger.disabled = mediaSize === 'lg';
+  try { localStorage.setItem('sentri:tutorialSize', mediaSize); } catch (e) {}
+}
+function stepMedia(delta) {
+  const i = MEDIA_SIZES.indexOf(mediaSize);
+  applyMediaSize(MEDIA_SIZES[Math.max(0, Math.min(MEDIA_SIZES.length - 1, i + delta))]);
+}
+if (bSmaller) bSmaller.addEventListener('click', () => stepMedia(-1));
+if (bLarger) bLarger.addEventListener('click', () => stepMedia(1));
+if (bFull) bFull.addEventListener('click', () => {
+  const target = mediaFrame || tv;
+  if (!target) return;
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
+  else if (target.requestFullscreen) { target.requestFullscreen().catch(() => {}); }
+  else if (tv && tv.webkitEnterFullscreen) { tv.webkitEnterFullscreen(); }
+});
+if (document.addEventListener) {
+  document.addEventListener('fullscreenchange', () => {
+    if (!bFull) return;
+    const on = !!document.fullscreenElement;
+    bFull.innerHTML = on ? '<i class="fas fa-compress"></i>' : '<i class="fas fa-expand"></i>';
+    bFull.title = on ? 'Exit fullscreen' : 'Open the video fullscreen';
+  });
+}
+// Show the resize/fullscreen controls only while the pointer is over the
+// video; they fade out when it leaves. Touch devices (no hover) keep them
+// visible so they remain usable.
+(function () {
+  const ctrl = document.querySelector('.media-controls');
+  if (!ctrl || !mediaFrame) return;
+  try {
+    if (window.matchMedia && !window.matchMedia('(hover: hover)').matches) ctrl.classList.add('always');
+  } catch (e) { ctrl.classList.add('always'); }
+  const show = () => ctrl.classList.add('show');
+  const hide = () => { if (!ctrl.classList.contains('always')) ctrl.classList.remove('show'); };
+  mediaFrame.addEventListener('mouseenter', show);
+  mediaFrame.addEventListener('mousemove', show);
+  mediaFrame.addEventListener('mouseleave', hide);
+  ctrl.addEventListener('focusin', show);
+  ctrl.addEventListener('focusout', () => {
+    if (!ctrl.contains(document.activeElement)) hide();
+  });
+})();
+
+try {
+  const saved = localStorage.getItem('sentri:tutorialSize');
+  applyMediaSize(saved === 'sm' || saved === 'lg' ? saved : 'md');
+} catch (e) { applyMediaSize('md'); }
 </script>
 </body>
 </html>
