@@ -50,6 +50,11 @@
    * @returns {Promise<geojson.FeatureCollection>}
    */
   function loadBarangays() {
+    if (_fcCache) return Promise.resolve(_fcCache);
+    if (global._SENTRI_GEOJSON) {
+      _fcCache = global._SENTRI_GEOJSON;
+      return Promise.resolve(_fcCache);
+    }
     if (_fcPromise) return _fcPromise;
     _fcPromise = fetch(_geoUrl())
       .then(function (res) {

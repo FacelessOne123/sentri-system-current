@@ -83,6 +83,14 @@ function verify_token(?string $token, mysqli $conn): ?array {
 
 function get_bearer_token(): ?string {
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    if (!$header && function_exists('apache_request_headers')) {
+        $headers = apache_request_headers();
+        $header = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    }
+    if (!$header && function_exists('getallheaders')) {
+        $headers = getallheaders();
+        $header = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    }
     if (preg_match('/Bearer\s+(\S+)/i', $header, $matches)) {
         return $matches[1];
     }
@@ -118,6 +126,14 @@ switch ($action) {
 
         if (!$user || !password_verify($password, $user['password'])) {
             mobile_respond(401, ['status' => 'error', 'message' => 'Invalid email or password']);
+        }
+
+        if (empty($user['email_verified']) && in_array($user['role'], ['community', 'user'])) {
+            mobile_respond(403, [
+                'status' => 'error',
+                'message' => 'Please verify your email before signing in. Check your inbox (or spam folder) for the verification link.',
+                'unverified' => true
+            ]);
         }
 
         $token = generate_token($user);
@@ -171,39 +187,41 @@ switch ($action) {
         $hash = password_hash($password, PASSWORD_BCRYPT);
         $role = 'community';
         $is_approved = 1;
-        $email_verified = 1;
+        $email_verified = 0;
+        $ver_token = bin2hex(random_bytes(32));
+        $token_expires = date('Y-m-d H:i:s', strtotime('+24 hours'));
         $colors = ['#0a3d62', '#1a5276', '#166534', '#b91c1c', '#6d28d9', '#d97706'];
         $avatar_color = $colors[array_rand($colors)];
 
-        $stmt = $conn->prepare("INSERT INTO users (first_name, last_name, email, password, phone_number, barangay_name, resident_address, role, is_approved, email_verified, avatar_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param('ssssssssiis', $first_name, $last_name, $email, $hash, $phone, $barangay, $address, $role, $is_approved, $email_verified, $avatar_color);
+        $muni = 'Imus';
+        $stmt = $conn->prepare("INSERT INTO users (first_name, last_name, email, password, phone_number, barangay_name, resident_address, municipality, role, is_approved, email_verified, verification_token, token_expires_at, avatar_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        if (!$stmt) {
+            mobile_respond(500, ['status' => 'error', 'message' => 'Database error: ' . $conn->error]);
+        }
+        $stmt->bind_param('sssssssssiisss', $first_name, $last_name, $email, $hash, $phone, $barangay, $address, $muni, $role, $is_approved, $email_verified, $ver_token, $token_expires, $avatar_color);
         
         if ($stmt->execute()) {
             $new_id = $conn->insert_id;
             $stmt->close();
 
-            $user = [
-                'id' => $new_id,
-                'first_name' => $first_name,
-                'last_name' => $last_name,
-                'email' => $email,
-                'role' => $role,
-                'barangay_name' => $barangay,
-                'phone_number' => $phone,
-                'resident_address' => $address,
-                'avatar_color' => $avatar_color
-            ];
-            $token = generate_token($user);
+            $emailSent = false;
+            try {
+                require_once __DIR__ . '/../core/SenTriMailer.php';
+                $emailSent = sendVerificationEmail($email, $first_name, $ver_token);
+            } catch (Throwable $e) {
+                error_log('SenTri mobile signup email error: ' . $e->getMessage());
+            }
 
             mobile_respond(201, [
                 'status' => 'success',
-                'message' => 'Account created successfully',
-                'token' => $token,
-                'user' => $user
+                'requires_verification' => true,
+                'email_sent' => $emailSent,
+                'message' => 'Account created! Please check your email and click the verification link before signing in.'
             ]);
         } else {
+            $err = $stmt->error;
             $stmt->close();
-            mobile_respond(500, ['status' => 'error', 'message' => 'Failed to create account']);
+            mobile_respond(500, ['status' => 'error', 'message' => 'Failed to create account: ' . $err]);
         }
         break;
     }
@@ -405,7 +423,7 @@ switch ($action) {
         $category = trim($input['category'] ?? 'other');
         $status = trim($input['status'] ?? 'caution');
         $location_name = trim($input['location_name'] ?? '');
-        $barangay = trim($input['barangay'] ?? $user['barangay_name'] ?? 'Bucandala I');
+        $barangay = trim($input['barangay'] ?? $user['barangay_name'] ?? 'Imus');
         $city = trim($input['city'] ?? 'Imus');
         $province = trim($input['province'] ?? 'Cavite');
         $radius_m = (int)($input['radius_m'] ?? 200);
@@ -565,33 +583,113 @@ switch ($action) {
 
     case 'address_terms': {
         $rawBrgy = trim((string)($_GET['barangay'] ?? $input['barangay'] ?? ''));
-        $brgy = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($rawBrgy) : $rawBrgy;
+        $brgy = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($rawBrgy) : null;
+        if ($brgy === null && $rawBrgy !== '') {
+            $brgy = $rawBrgy;
+        }
         $q = trim((string)($_GET['q'] ?? $input['q'] ?? ''));
 
         $terms = [];
-        $snapshotFile = __DIR__ . '/../assets/geo/imus-address-terms.json';
-        if (file_exists($snapshotFile)) {
-            $data = json_decode(file_get_contents($snapshotFile), true);
-            $bList = $data['barangays'] ?? $data;
-            if (isset($bList[$brgy]) && is_array($bList[$brgy])) {
-                foreach ($bList[$brgy] as $item) {
-                    $tName = is_array($item) ? ($item['term'] ?? '') : (string)$item;
-                    if ($q === '' || stripos($tName, $q) !== false) {
+
+        // 1. Check MySQL database table first
+        try {
+            $hasTable = $conn->query("SHOW TABLES LIKE 'barangay_address_terms'");
+            if ($hasTable && $hasTable->num_rows > 0) {
+                $hasTable->free();
+                $sql = "SELECT DISTINCT term, term_type, parent_term, latitude, longitude, barangay_name FROM barangay_address_terms WHERE is_active = 1";
+                $types = '';
+                $params = [];
+
+                $isCanonical = function_exists('sentri_barangay_is_valid') && sentri_barangay_is_valid($rawBrgy);
+                if ($isCanonical) {
+                    $sql .= " AND barangay_name = ?";
+                    $types .= 's';
+                    $params[] = $brgy;
+                } else if ($rawBrgy !== '') {
+                    $sql .= " AND (barangay_name = ? OR barangay_name LIKE ?)";
+                    $types .= 'ss';
+                    $likeBrgy = '%' . $rawBrgy . '%';
+                    $params[] = $rawBrgy;
+                    $params[] = $likeBrgy;
+                }
+
+                if ($q !== '') {
+                    $sql .= " AND (term LIKE ? OR parent_term LIKE ?)";
+                    $types .= 'ss';
+                    $likeQ = '%' . $q . '%';
+                    $params[] = $likeQ;
+                    $params[] = $likeQ;
+                }
+
+                $sql .= " ORDER BY (CASE WHEN term_type = 'street' THEN 1 WHEN term_type = 'subdivision' THEN 2 ELSE 3 END), term LIMIT 50";
+
+                $stmt = $conn->prepare($sql);
+                if ($stmt) {
+                    if (!empty($params)) {
+                        $stmt->bind_param($types, ...$params);
+                    }
+                    $stmt->execute();
+                    $res = $stmt->get_result();
+                    while ($row = $res->fetch_assoc()) {
                         $terms[] = [
-                            'term' => $tName,
-                            'type' => is_array($item) ? ($item['type'] ?? 'street') : 'street',
-                            'lat' => is_array($item) ? ($item['lat'] ?? null) : null,
-                            'lng' => is_array($item) ? ($item['lng'] ?? null) : null
+                            'term' => (string)$row['term'],
+                            'type' => (string)$row['term_type'],
+                            'parent' => $row['parent_term'] !== null ? (string)$row['parent_term'] : null,
+                            'lat' => $row['latitude'] !== null ? (float)$row['latitude'] : null,
+                            'lng' => $row['longitude'] !== null ? (float)$row['longitude'] : null,
+                            'barangay' => (string)$row['barangay_name']
                         ];
                     }
-                    if (count($terms) >= 30) break;
+                    $stmt->close();
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('mobile address_terms DB error: ' . $e->getMessage());
+        }
+
+        // 2. Snapshot JSON fallback if terms is still empty
+        if (empty($terms)) {
+            $snapshotFile = __DIR__ . '/../assets/geo/imus-address-terms.json';
+            if (file_exists($snapshotFile)) {
+                $data = json_decode(file_get_contents($snapshotFile), true);
+                $bList = $data['barangays'] ?? $data;
+
+                $targetKeys = [];
+                if ($brgy && isset($bList[$brgy])) {
+                    $targetKeys[] = $brgy;
+                } else if ($rawBrgy !== '') {
+                    $cleanRaw = preg_replace('/[^a-zA-Z0-9]/', '', strtolower($rawBrgy));
+                    foreach ($bList as $k => $items) {
+                        $cleanKey = preg_replace('/[^a-zA-Z0-9]/', '', strtolower($k));
+                        if (strpos($cleanKey, $cleanRaw) !== false || strpos($cleanRaw, $cleanKey) !== false) {
+                            $targetKeys[] = $k;
+                        }
+                    }
+                }
+
+                foreach ($targetKeys as $k) {
+                    if (isset($bList[$k]) && is_array($bList[$k])) {
+                        foreach ($bList[$k] as $item) {
+                            $tName = is_array($item) ? ($item['term'] ?? '') : (string)$item;
+                            if ($q === '' || stripos($tName, $q) !== false) {
+                                $terms[] = [
+                                    'term' => $tName,
+                                    'type' => is_array($item) ? ($item['type'] ?? 'street') : 'street',
+                                    'lat' => is_array($item) ? ($item['lat'] ?? null) : null,
+                                    'lng' => is_array($item) ? ($item['lng'] ?? null) : null,
+                                    'barangay' => $k
+                                ];
+                            }
+                            if (count($terms) >= 50) break 2;
+                        }
+                    }
                 }
             }
         }
 
         mobile_respond(200, [
             'status' => 'success',
-            'barangay' => $brgy,
+            'barangay' => $brgy ?: $rawBrgy,
             'count' => count($terms),
             'terms' => $terms
         ]);
