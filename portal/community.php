@@ -613,8 +613,8 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 /* ── Incident sub-type dropdown ── */
 .incident-fields{margin-top:14px;animation:fadeIn .25s ease;}
 .incident-fields label{display:block;font-size:.79rem;font-weight:700;color:var(--muted);margin-bottom:6px;}
-.incident-fields select{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;}
-.incident-fields select:focus{border-color:var(--blue-accent);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
+.incident-fields select,.incident-fields input[type=text]{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;box-sizing:border-box;}
+.incident-fields select:focus,.incident-fields input[type=text]:focus{border-color:var(--blue-accent);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
 
 </style>
 </head>
@@ -993,19 +993,10 @@ function actionToast(message,type){
     </select>
 </div>
 
-<!-- Other Dropdown -->
+<!-- Other -->
 <div id="other_fields" class="incident-fields" style="display: none;">
-    <label for="other_type">Select Incident Type</label>
-    <select name="other_type" id="other_type">
-        <option value="noise_complaint">Noise Complaint</option>
-        <option value="missing_person">Missing Person</option>
-        <option value="suspicious_activity">Suspicious Activity</option>
-        <option value="public_disturbance">Public Disturbance</option>
-    </select>
-    <div class="form-group" style="margin-top:10px;margin-bottom:0;">
-        <label for="other_text">Please specify <span style="font-weight:400;color:var(--muted);">(what is the incident?)</span></label>
-        <input type="text" name="other_text" id="other_text" maxlength="100" placeholder="e.g. Stray dogs, illegal dumping, damaged signage…">
-    </div>
+    <label for="other_text">What is the incident? <span style="font-weight:400;color:var(--muted);">(required)</span></label>
+    <input type="text" name="other_text" id="other_text" maxlength="100" required placeholder="e.g. Stray dogs, illegal dumping, damaged signage…">
 </div>
 
 
@@ -1991,8 +1982,7 @@ const SEVERITY_MAP = {
  flooding:{street_flooding:'caution',residential_flooding:'dangerous',flash_flood:'dangerous',river_overflow:'dangerous',other:'caution'},
  fire:{residential_fire:'dangerous',commercial_fire:'dangerous',vehicle_fire:'dangerous',electrical_fire:'dangerous',other:'caution'},
  health:{medical_emergency:'dangerous',injury:'caution',unconscious_person:'dangerous',breathing_difficulty:'dangerous',mental_health_crisis:'dangerous',other:'caution'},
- infrastructure:{road_damage:'caution',pothole:'dangerous',fallen_tree:'caution',obstructed_road:'caution',other:'caution'},
- other:{noise_complaint:'caution',missing_person:'caution',suspicious_activity:'caution',public_disturbance:'caution'}
+ infrastructure:{road_damage:'caution',pothole:'dangerous',fallen_tree:'caution',obstructed_road:'caution',other:'caution'}
 };
 
 function applySeverity(cat){
@@ -2036,10 +2026,12 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  const cat=document.getElementById('r_category').value;
  const city=document.getElementById('r_city').value.trim();
  
- // Sub-type from the dropdown (e.g. crime -> murder)
+ // Sub-type from the dropdown (e.g. crime -> murder); "Other" uses free text
  const typeSel=document.getElementById(cat+'_type');
- const incType=typeSel?typeSel.value:'';
- const incLabel=typeSel?typeSel.options[typeSel.selectedIndex].text:(CL[cat]||'Incident');
+ const otherText=cat==='other'?(document.getElementById('other_text')?.value.trim()||''):'';
+ if(cat==='other'&&!otherText){showMsg(msgEl,'error','Please specify what the incident is.');return;}
+ const incType=typeSel?typeSel.value:otherText;
+ const incLabel=typeSel?typeSel.options[typeSel.selectedIndex].text:(otherText||CL[cat]||'Incident');
 
  // Title and description are optional - auto-filled when blank
  let title=document.getElementById('r_title').value.trim();
@@ -2075,7 +2067,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
- fd.append('incident_type',incType);
+ fd.append('incident_type',incType);fd.append('other_text',otherText);
  fd.append('location_name',loc);fd.append('barangay', document.getElementById('r_barangay').value.trim());
  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);
