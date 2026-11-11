@@ -2036,10 +2036,12 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  const cat=document.getElementById('r_category').value;
  const city=document.getElementById('r_city').value.trim();
  
- // Sub-type from the dropdown (e.g. crime -> murder)
+ // Sub-type from the dropdown (e.g. crime -> murder); "Other" also accepts
+ // a free-text description (NOV 9 consultation).
  const typeSel=document.getElementById(cat+'_type');
- const incType=typeSel?typeSel.value:'';
- const incLabel=typeSel?typeSel.options[typeSel.selectedIndex].text:(CL[cat]||'Incident');
+ const otherText=cat==='other'?(document.getElementById('other_text')?.value.trim()||''):'';
+ const incType=typeSel?typeSel.value:otherText;
+ const incLabel=(cat==='other'&&otherText)?otherText:(typeSel?typeSel.options[typeSel.selectedIndex].text:(CL[cat]||'Incident'));
 
  // Title and description are optional - auto-filled when blank
  let title=document.getElementById('r_title').value.trim();
@@ -2076,6 +2078,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
  fd.append('incident_type',incType);
+ if(cat==='other') fd.append('other_text',otherText);
  fd.append('location_name',loc);fd.append('barangay', document.getElementById('r_barangay').value.trim());
  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);

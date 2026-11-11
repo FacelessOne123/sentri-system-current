@@ -479,7 +479,7 @@ tr:hover td{background:#fafafa;}
  <div class="resident-email"><?= htmlspecialchars($r['email']) ?><?= $r['phone_number'] ? ' &nbsp;&middot;&nbsp; '.$r['phone_number'] : '' ?></div>
  <?php if(!empty($r['resident_address'])): ?><div class="resident-email"><i class="fas fa-location-dot" style="margin-right:4px;color:var(--green);"></i><?= htmlspecialchars($r['resident_address']) ?></div><?php endif; ?>
  </div>
- <span style="font-size:0.73rem;color:var(--muted);"><?= date('M j, Y',strtotime($r['created_at'])) ?></span>
+ <span style="font-size:0.73rem;color:var(--muted);"><?= date('M j, Y g:i A',strtotime($r['created_at'])) ?></span>
  </div>
  <?php endforeach; endif; ?>
  </div>
