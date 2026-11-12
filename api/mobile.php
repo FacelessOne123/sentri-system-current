@@ -717,25 +717,10 @@ switch ($action) {
     }
 
     case 'weather': {
-        // Imus Doppler Radar & DRRMO Flash Warning live metrics
-        mobile_respond(200, [
-            'status' => 'success',
-            'location' => 'Imus City, Cavite',
-            'temperature' => '28.5°C',
-            'condition' => 'Scattered Thunderstorms',
-            'rainfall_rate' => '24.5 mm/h (Heavy / Torrential)',
-            'wind_gusts' => '38 km/h (Moderate Breeze)',
-            'flood_threat' => 'High Risk',
-            'pagasa_signal' => 'Signal No. 1 / Yellow Rainfall Advisory',
-            'high_risk_zones' => [
-                'Bucandala I - IV (Riverbanks)',
-                'Malagasang I & II (Low Elevation Creek)',
-                'Medicion I & II (Ilang-Ilang River Spillway)',
-                'Anabu I-C & Anabu II-B (Drainage Bottlenecks)',
-                'Toclong I & II'
-            ],
-            'emergency_advisory' => 'PAGASA Doppler Radar monitors active monsoon rainbands. Residents in low-lying riverbanks should secure belongings and prepare for preemptive evacuation if water surpasses warning markers.'
-        ]);
+        require_once dirname(__DIR__) . '/core/weather.php';
+        $force_refresh = !empty($_GET['refresh']) || (isset($_GET['force']) && $_GET['force'] === '1');
+        $weather_data = sentri_get_imus_weather($force_refresh);
+        mobile_respond(200, $weather_data);
         break;
     }
 

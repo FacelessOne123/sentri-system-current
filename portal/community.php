@@ -6,6 +6,8 @@ require_role(['community','user']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/geo.php';
+require_once __DIR__ . '/../core/weather.php';
+$live_weather = sentri_get_imus_weather();
 
 
 $identity = sentri_identity();
@@ -706,8 +708,8 @@ function actionToast(message,type){
  <!-- ── Dynamic Weather Watch & Flash Advisory Banner ── -->
  <div class="weather-flash-banner" style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);border-left:4px solid #38bdf8;border-radius:14px;padding:12px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;box-shadow:0 4px 16px rgba(0,0,0,0.18);">
  <div style="display:flex;align-items:center;gap:10px;min-width:0;">
- <span style="background:#0284c7;color:#fff;font-size:0.68rem;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;padding:3px 8px;border-radius:6px;flex-shrink:0;"><i class="fas fa-cloud-bolt"></i> Weather Watch</span>
- <span style="font-size:0.83rem;color:#f1f5f9;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><strong style="color:#38bdf8;">NCR Advisory:</strong> Heavy rainfall & thunderstorm advisory in effect. Flood risk alert for low-lying areas.</span>
+ <span style="background:#0284c7;color:#fff;font-size:0.68rem;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;padding:3px 8px;border-radius:6px;flex-shrink:0;"><i class="fas fa-cloud-bolt"></i> Imus Weather</span>
+ <span style="font-size:0.83rem;color:#f1f5f9;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><strong style="color:#38bdf8;"><?= esc($live_weather['location']) ?>:</strong> <?= esc($live_weather['condition']) ?> (<?= esc($live_weather['temperature']) ?>) &bull; <?= esc($live_weather['emergency_advisory']) ?></span>
  </div>
  <button onclick="openWeatherModal()" style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.35);color:#38bdf8;padding:6px 12px;border-radius:8px;font-size:0.76rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.15s;font-family:'Poppins',sans-serif;" onmouseover="this.style.background='rgba(56,189,248,0.25)'" onmouseout="this.style.background='rgba(56,189,248,0.15)'"><i class="fas fa-circle-info"></i> Advisory Details</button>
  </div>
@@ -2556,17 +2558,17 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
  <div style="width:40px;height:40px;border-radius:11px;background:#e0f2fe;color:#0284c7;display:flex;align-items:center;justify-content:center;font-size:1.25rem;flex-shrink:0;"><i class="fas fa-cloud-showers-heavy"></i></div>
  <div>
- <h2>Severe Weather Bulletin</h2>
- <div class="subtitle" style="margin-bottom:0;">PAGASA Doppler Radar & NCR DRRMO Flash Warning</div>
+ <h2>Imus Weather & Flood Advisory</h2>
+ <div class="subtitle" style="margin-bottom:0;"><?= esc($live_weather['source']) ?> &bull; Updated <?= esc($live_weather['updated_at']) ?></div>
  </div>
  </div>
  <div style="background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Rainfall Rate</div><div style="font-size:1.15rem;font-weight:800;color:#0284c7;">24.5 mm/h</div><div style="font-size:0.68rem;color:#e11d48;font-weight:600;">Heavy / Torrential</div></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Wind Gusts</div><div style="font-size:1.15rem;font-weight:800;color:var(--text);">38 km/h</div><div style="font-size:0.68rem;color:#059669;font-weight:600;">Moderate Breeze</div></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Flood Threat</div><div style="font-size:1.15rem;font-weight:800;color:#dc2626;">High Risk</div><div style="font-size:0.68rem;color:var(--muted);font-weight:600;">Low-Lying Zones</div></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Rainfall Rate</div><div style="font-size:1.15rem;font-weight:800;color:#0284c7;"><?= esc(explode(' (', $live_weather['rainfall_rate'])[0]) ?></div><div style="font-size:0.68rem;color:#0369a1;font-weight:600;"><?= esc(trim(explode('(', $live_weather['rainfall_rate'])[1] ?? 'Normal', ')')) ?></div></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Wind Gusts</div><div style="font-size:1.15rem;font-weight:800;color:var(--text);"><?= esc(explode(' (', $live_weather['wind_gusts'])[0]) ?></div><div style="font-size:0.68rem;color:#059669;font-weight:600;"><?= esc(trim(explode('(', $live_weather['wind_gusts'])[1] ?? 'Normal', ')')) ?></div></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Flood Threat</div><div style="font-size:1.15rem;font-weight:800;color:<?= $live_weather['flood_threat']==='Critical Risk'||$live_weather['flood_threat']==='High Risk'?'#dc2626':($live_weather['flood_threat']==='Moderate Risk'?'#d97706':'#059669') ?>;"><?= esc($live_weather['flood_threat']) ?></div><div style="font-size:0.68rem;color:var(--muted);font-weight:600;"><?= esc($live_weather['pagasa_signal']) ?></div></div>
  </div>
  <div style="border-left:3px solid #0284c7;background:#f0f9ff;border-radius:0 10px 10px 0;padding:12px 14px;margin-bottom:14px;font-size:0.83rem;color:#0369a1;line-height:1.6;">
- <strong>Precautionary Measures:</strong> Residents near Tullahan and Marikina river basins should monitor barangay warning sirens. Keep battery-powered radios tuned to official NDRRMO announcements.
+ <strong>CDRRMO & Barangay Directive:</strong> <?= esc($live_weather['emergency_advisory']) ?>
  </div>
  <div style="display:flex;justify-content:flex-end;">
  <button type="button" onclick="closeWeatherModal()" style="padding:8px 18px;border:none;background:var(--blue-accent);color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;">Acknowledge</button>
