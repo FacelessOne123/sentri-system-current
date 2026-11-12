@@ -949,18 +949,18 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  actions.innerHTML = '';
 
  if (!isResolved) {
- if (responderPending) {
- // A dispatched responder must clear the incident first.
+ if (status === 'dangerous' || responderPending) {
+ // A dispatched responder or LGU must clear dangerous incidents first.
  var waitBtn = document.createElement('button');
  waitBtn.className = 'btn-action btn-done';
  waitBtn.id = 'modalResolveBtn';
- waitBtn.title = 'The assigned first responder must resolve this incident first';
- waitBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
+ waitBtn.title = responderPending ? 'The assigned first responder must resolve this incident first' : 'Dangerous incidents must be resolved by the LGU or the assigned responder';
+ waitBtn.innerHTML = responderPending ? '<i class="fas fa-hourglass-half"></i> Awaiting Responder' : '<i class="fas fa-hourglass-half"></i> LGU / Responder resolves';
  waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:pointer;';
- waitBtn.onclick = function() { showToast('A first responder is handling this incident and must resolve it first.', 'error'); };
+ waitBtn.onclick = function() { showToast(responderPending ? 'A first responder is handling this incident and must resolve it first.' : 'Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error'); };
  actions.appendChild(waitBtn);
  } else {
- // Resolve button
+ // Resolve button (caution reports are resolvable by the barangay)
  var resolveBtn = document.createElement('button');
  resolveBtn.className = 'btn-action btn-resolve-full';
  resolveBtn.id = 'modalResolveBtn';
@@ -995,9 +995,9 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  var sel = document.createElement('select');
  sel.id = 'modalStatusSelect';
  sel.style.cssText = 'padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:\'Inter\',sans-serif;cursor:pointer;background:#fff;';
- sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (responderPending ? ' disabled title="Waiting for the assigned responder to resolve this incident"' : '') + '>✅ Mark Safe</option>';
+ sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + ((status === 'dangerous' || responderPending) ? ' disabled title="Dangerous incidents must be resolved by the LGU or the assigned responder"' : '') + '>✅ Mark Safe</option>';
  var safeOpt = sel.querySelector('option[value="safe"]');
- if (safeOpt && responderPending) safeOpt.textContent = '✅ Mark Safe (awaiting responder)';
+ if (safeOpt && (status === 'dangerous' || responderPending)) safeOpt.textContent = '✅ Mark Safe (LGU / Responder resolves)';
  sel.onchange = function() { changeStatus(this.value); };
  actions.appendChild(sel);
  }
@@ -1012,8 +1012,8 @@ function closeModal() { document.getElementById('reportModal').classList.remove(
 // ── Resolve ───────────────────────────────────────────────────────────────
 async function doResolve(btn) {
  if (!currentReportId) return;
- if (currentResponderPending) {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (currentReportStatus === 'dangerous' || currentResponderPending) {
+ showToast(currentResponderPending ? 'A first responder is handling this incident. The responder must resolve it first.' : 'Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  return;
  }
  btn.disabled = true;
@@ -1083,8 +1083,8 @@ async function doEscalate(btn) {
 // ── Change Status (dropdown) ───────────────────────────────────────────────
 async function changeStatus(newStatus) {
  if (!newStatus || !currentReportId) return;
- if (newStatus === 'safe' && currentResponderPending) {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (newStatus === 'safe' && (currentReportStatus === 'dangerous' || currentResponderPending)) {
+ showToast(currentResponderPending ? 'A first responder is handling this incident. The responder must resolve it first.' : 'Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  var s0 = document.getElementById('modalStatusSelect'); if (s0) s0.value = '';
  return;
  }
@@ -1114,8 +1114,8 @@ async function changeStatus(newStatus) {
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
  var row = btn && btn.closest ? btn.closest('tr') : null;
- if (row && row.getAttribute('data-responder-pending') === '1') {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (row && (row.getAttribute('data-status') === 'dangerous' || row.getAttribute('data-responder-pending') === '1')) {
+ showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  return;
  }
  if (!confirm('Mark this report as resolved?')) return;
@@ -1189,7 +1189,8 @@ function refreshReportRow(id, newStatus, escalated) {
  pill.className = 'pill pill-' + newStatus;
  pill.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
  }
- if (newStatus === 'safe') {
+ row.setAttribute('data-status', newStatus);
+ if (newStatus !== 'dangerous') {
  row.removeAttribute('data-responder-pending');
  var pendingChip = row.querySelector('.responder-pending-chip');
  if (pendingChip) pendingChip.remove();
@@ -1201,13 +1202,21 @@ function refreshReportRow(id, newStatus, escalated) {
  if (actionsCell) {
  // Remove old resolve/escalate buttons, leave view button
  actionsCell.querySelectorAll('.btn-resolve, .btn-escalate, .btn-resolve-pending').forEach(function(b) { b.remove(); });
- if (newStatus !== 'safe' && !rowPending) {
- // Re-add resolve button
+ if (newStatus !== 'safe') {
  var rb = document.createElement('button');
+ if (newStatus === 'dangerous') {
+ rb.className = 'btn-icon btn-resolve-pending';
+ rb.type = 'button';
+ rb.title = rowPending ? 'A first responder has been dispatched and must resolve this incident' : 'Dangerous incidents must be resolved by the LGU or the assigned responder';
+ rb.style.cssText = 'background:#fffbeb;color:#92400e;opacity:.85;cursor:pointer;';
+ rb.innerHTML = '<i class="fas fa-hourglass-half"></i>';
+ rb.onclick = function() { showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error'); };
+ } else {
  rb.className = 'btn-icon btn-resolve';
  rb.title = 'Mark Resolved';
  rb.innerHTML = '<i class="fas fa-check"></i>';
  rb.onclick = function() { quickResolve(id, rb); };
+ }
  actionsCell.appendChild(rb);
  }
  }
