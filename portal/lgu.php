@@ -1516,6 +1516,7 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  // already-resolved report can never be resolved again.
  var lguResolveBtn = document.getElementById('lguModalResolveBtn');
  var isResolved = (status === 'safe');
+ var statusSel = document.getElementById('lguRptStatusSel');
  var safeOpt = document.querySelector('#lguRptStatusSel option[value="safe"]');
  if (lguResolveBtn) {
   if (isResolved) {
@@ -1540,16 +1541,42 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
   safeOpt.title = _lguResponderPending ? 'Waiting for the assigned responder to resolve this incident' : '';
   safeOpt.textContent = (_lguResponderPending && !isResolved) ? '✅ Safe (awaiting responder)' : '✅ Safe';
  }
+ // A resolved (safe) report is final: lock dispatch and status controls.
+ var dispatchBtn = document.getElementById('lguModalDispatchBtn');
+ if (dispatchBtn) {
+  dispatchBtn.disabled = isResolved;
+  dispatchBtn.title = isResolved ? 'This incident is already resolved' : '';
+  dispatchBtn.style.opacity = isResolved ? '.55' : '';
+  dispatchBtn.style.cursor = isResolved ? 'not-allowed' : '';
+ }
+ var statusBtn = document.getElementById('lguModalStatusBtn');
+ if (statusBtn) {
+  statusBtn.disabled = isResolved;
+  statusBtn.title = isResolved ? 'This incident is already resolved' : '';
+  statusBtn.style.opacity = isResolved ? '.55' : '';
+  statusBtn.style.cursor = isResolved ? 'not-allowed' : '';
+ }
+ if (statusSel) {
+  statusSel.disabled = isResolved;
+  statusSel.title = isResolved ? 'This incident is already resolved' : '';
+ }
  // Reflect escalation state on the Escalate button
  var escBtn = document.getElementById('lguModalEscalateBtn');
  if (escBtn) {
- if (_lguEscalated) {
+ if (isResolved) {
  escBtn.disabled = true;
  escBtn.classList.remove('btn-lgu-escalate');
+ escBtn.title = 'This incident is already resolved';
+ escBtn.innerHTML = '<i class="fas fa-lock"></i> Resolved';
+ } else if (_lguEscalated) {
+ escBtn.disabled = true;
+ escBtn.classList.remove('btn-lgu-escalate');
+ escBtn.title = '';
  escBtn.innerHTML = '<i class="fas fa-check"></i> Already Escalated';
  } else {
  escBtn.disabled = false;
  escBtn.classList.add('btn-lgu-escalate');
+ escBtn.title = '';
  escBtn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalate';
  }
  }
@@ -1619,7 +1646,7 @@ document.addEventListener('DOMContentLoaded',function(){
  };
  document.getElementById('lguModalStatusBtn').onclick = async function(){
  var newStatus = document.getElementById('lguRptStatusSel').value;
- if(!newStatus||!_lguRptId) return;
+ if(!newStatus||!_lguRptId||this.disabled) return;
  if(newStatus==='safe' && _lguResponderPending){showToast('A first responder is handling this incident. The responder must resolve it first.','error');document.getElementById('lguRptStatusSel').value='';return;}
  if(!confirm('Change status to '+newStatus+'?')) return;
  var fd=new FormData(); fd.append('action','update_report_status'); fd.append('report_id',_lguRptId); fd.append('status',newStatus);
@@ -1628,7 +1655,7 @@ document.addEventListener('DOMContentLoaded',function(){
  if(data.status==='success'){closeLguModal();showToast('Status updated to '+newStatus+'.','success');location.reload();}else showToast(data.message||'Status change failed.','error');
  };
  document.getElementById('lguModalDispatchBtn').onclick = function(){
- if(!_lguRptId) return;
+ if(!_lguRptId||this.disabled) return;
  closeLguModal();
  openLguDispatch(_lguRptId);
  };

@@ -273,6 +273,8 @@ body.dark .filters button{background:#21262d;color:var(--muted);}
 .report-card.dangerous{border-left-color:var(--red);}.report-card.dangerous .card-header{background:linear-gradient(90deg,#fff0f0,transparent);}
 .report-card.caution{border-left-color:var(--orange);}.report-card.caution .card-header{background:linear-gradient(90deg,#fff8f0,transparent);}
 .report-card.safe{border-left-color:var(--green);}.report-card.safe .card-header{background:linear-gradient(90deg,#f0fff4,transparent);}
+.report-card.dimmed{opacity:.55;filter:grayscale(.35);}
+.report-card.dimmed:hover{opacity:.85;}
 body.dark .report-card{background:var(--card);}
 body.dark .report-card.dangerous .card-header{background:linear-gradient(90deg,rgba(229,62,62,.08),transparent);}
 body.dark .report-card.caution .card-header{background:linear-gradient(90deg,rgba(221,107,32,.08),transparent);}
@@ -736,7 +738,7 @@ function actionToast(message,type){
  </div>
  <div class="filters">
  <input type="text" id="searchInput" placeholder="Search location, keyword...">
- <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
+ <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous" selected>🔴 Dangerous</option><option value="caution">🟠 Caution</option><option value="safe">🟢 Safe</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
  <select id="timeFilter" title="Show only incidents from this time range">
  <option value="">Any time</option>
@@ -770,7 +772,7 @@ function actionToast(message,type){
  </div>
  <div class="filters">
  <input type="text" id="searchInput" placeholder="Search my reports...">
- <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
+ <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option><option value="safe">🟢 Safe</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
  <select id="timeFilter" title="Show only incidents from this time range">
  <option value="">Any time</option>
@@ -1265,7 +1267,7 @@ function dismissToast(t){if(!t||!t.parentElement)return;t.classList.add('fade-ou
 /* Fetch reports */
 async function fetchReports(){
  const isMine=CURRENT_VIEW==='my_reports';
- try{const res=await fetch('../api/reports.php?action=get_reports');const data=await res.json();
+ try{const res=await fetch('../api/reports.php?action=get_reports&include_safe=1');const data=await res.json();
  if(data.status==='success'){allReports=data.reports;renderFeed(isMine);if(CURRENT_VIEW==='map')renderMainMap();checkProximity();}
  else{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-triangle-exclamation"></i><p>Failed to load reports.</p></div>';}
  }catch{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-wifi"></i><p>Network error.</p></div>';}
@@ -1279,6 +1281,7 @@ function getFiltered(mineOnly){
  const cutoff=isFinite(tf)&&tf>0?Date.now()-tf*60000:null;
  return allReports.filter(r=>{
  if(mineOnly&&r.user_id!=MY_USER_ID)return false;
+ if(!mineOnly&&!st&&r.status==='safe')return false;
  if(st&&r.status!==st)return false;if(ca&&r.category!==ca)return false;
  if(cutoff!==null){const t=parseTs(r.created_at);if(t===null||t<cutoff)return false;}
  if(s){const h=(r.title+r.location_name+r.city+(r.barangay||'')+(r.description||'')+(r.custom_type||'')).toLowerCase();if(!h.includes(s))return false;}
@@ -1315,7 +1318,9 @@ function renderFeed(mineOnly=false){
  const ago=timeAgoText(r.created_at);
  const isMine=r.user_id==MY_USER_ID,upV=r.user_vote==='up',dnV=r.user_vote==='down',hasPin=r.latitude&&r.longitude,hasPh=r.images&&r.images.length>0;
  const isVerified=r.upvotes>=2;
- return `<div class="report-card ${r.status}" style="animation-delay:${i*.04}s;" onclick="openDetail(${r.id})">
+ const st=(document.getElementById('statusFilter')?.value||'');
+ const dim=(r.status==='safe'&&!st);
+ return `<div class="report-card ${r.status}${dim?' dimmed':''}" style="animation-delay:${i*.04}s;" onclick="openDetail(${r.id})">
  <div class="card-header">
  <h3>${esc(r.title)}</h3>
  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">

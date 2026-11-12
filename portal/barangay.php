@@ -322,7 +322,34 @@ tr:hover td{background:#fafafa;}
  .page-sub{display:none;}
  .badge-brgy{font-size:0.65rem;padding:4px 8px;}
 }
+/* NEW-REPORT ALERT POPUP (matches responder / LGU portals) */
+.alert-toast{position:relative;display:flex;align-items:flex-start;gap:12px;background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:0 8px 32px rgba(0,0,0,0.15);border-left:5px solid #ccc;pointer-events:auto;min-width:300px;max-width:340px;overflow:hidden;animation:alertToastSlide 0.4s cubic-bezier(0.34,1.56,0.64,1) both;}
+.alert-toast.alert-dangerous{border-left-color:#dc2626;}
+.alert-toast.alert-caution{border-left-color:#d97706;}
+.alert-toast.alert-escalated{border-left-color:#2563eb;}
+.alert-toast.alert-info{border-left-color:#64748b;}
+.alert-toast.alert-out{animation:alertToastFade 0.4s ease both;}
+.alert-toast-icon{font-size:1.3rem;flex-shrink:0;margin-top:2px;color:#dc2626;}
+.alert-toast.alert-dangerous .alert-toast-icon{color:#dc2626;}
+.alert-toast.alert-caution .alert-toast-icon{color:#d97706;}
+.alert-toast.alert-escalated .alert-toast-icon{color:#2563eb;}
+.alert-toast.alert-info .alert-toast-icon{color:#64748b;}
+.alert-toast-body{min-width:0;flex:1;padding-right:14px;}
+.alert-toast-title{font-size:0.83rem;font-weight:700;color:var(--text);margin-bottom:3px;}
+.alert-toast-text{display:flex;flex-direction:column;gap:2px;font-size:0.76rem;color:var(--muted);line-height:1.55;}
+.alert-toast-text strong{color:var(--text);font-weight:700;}
+.alert-toast-desc{font-size:0.74rem;color:var(--muted);}
+.alert-toast-link{display:inline-flex;align-items:center;gap:5px;margin-top:6px;font-size:0.75rem;font-weight:700;color:#1d4ed8;text-decoration:none;}
+.alert-toast-link:hover{text-decoration:underline;}
+.alert-toast-close{position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.78rem;padding:2px 5px;border-radius:5px;}
+.alert-toast-close:hover{background:#f1f5f9;color:var(--text);}
+.alert-toast-progress{position:absolute;bottom:0;left:0;height:3px;width:100%;background:rgba(0,0,0,0.1);animation-name:alertToastProgress;animation-timing-function:linear;animation-fill-mode:both;}
+@keyframes alertToastSlide{from{opacity:0;transform:translateX(120%);}to{opacity:1;transform:translateX(0);}}
+@keyframes alertToastFade{from{opacity:1;transform:translateX(0);}to{opacity:0;transform:translateX(120%);}}
+@keyframes alertToastProgress{from{width:100%;}to{width:0%;}}
+@media(max-width:480px){.alert-toast{min-width:0;max-width:calc(100vw - 48px);}}
 </style>
+<script src="../assets/js/sentri-report-alerts.js?v=4"></script>
 </head>
 <body>
 <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
@@ -823,7 +850,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  currentReportId = id;
  currentReportStatus = status;
  currentEscalated = !!escalated;
- currentResponderPending = !!responderPending;
+ currentResponderPending = !!responderPending && status === 'dangerous';
  document.getElementById('modalTitle').textContent = title;
 
  // Status colour
@@ -892,18 +919,18 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  actions.innerHTML = '';
 
  if (!isResolved) {
- if (responderPending) {
- // A dispatched responder must clear the incident first.
+ if (status === 'dangerous') {
+ // Dangerous incidents are cleared by the LGU or the dispatched responder.
  var waitBtn = document.createElement('button');
  waitBtn.className = 'btn-action btn-done';
  waitBtn.id = 'modalResolveBtn';
  waitBtn.disabled = true;
- waitBtn.title = 'The assigned first responder must resolve this incident first';
- waitBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
+ waitBtn.title = responderPending ? 'The assigned first responder must resolve this incident first' : 'Dangerous incidents must be resolved by the LGU or the assigned responder';
+ waitBtn.innerHTML = responderPending ? '<i class="fas fa-hourglass-half"></i> Awaiting Responder' : '<i class="fas fa-hourglass-half"></i> LGU / Responder resolves';
  waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:not-allowed;';
  actions.appendChild(waitBtn);
  } else {
- // Resolve button
+ // Resolve button (caution reports are resolvable by the barangay)
  var resolveBtn = document.createElement('button');
  resolveBtn.className = 'btn-action btn-resolve-full';
  resolveBtn.id = 'modalResolveBtn';
@@ -938,9 +965,9 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  var sel = document.createElement('select');
  sel.id = 'modalStatusSelect';
  sel.style.cssText = 'padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:\'Inter\',sans-serif;cursor:pointer;background:#fff;';
- sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (responderPending ? ' disabled title="Waiting for the assigned responder to resolve this incident"' : '') + '>✅ Mark Safe</option>';
+ sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (status === 'dangerous' ? ' disabled title="Dangerous incidents must be resolved by the LGU or the assigned responder"' : '') + '>✅ Mark Safe</option>';
  var safeOpt = sel.querySelector('option[value="safe"]');
- if (safeOpt && responderPending) safeOpt.textContent = '✅ Mark Safe (awaiting responder)';
+ if (safeOpt && status === 'dangerous') safeOpt.textContent = '✅ Mark Safe (LGU / Responder resolves)';
  sel.onchange = function() { changeStatus(this.value); };
  actions.appendChild(sel);
  }
@@ -955,8 +982,8 @@ function closeModal() { document.getElementById('reportModal').classList.remove(
 // ── Resolve ───────────────────────────────────────────────────────────────
 async function doResolve(btn) {
  if (!currentReportId) return;
- if (currentResponderPending) {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (currentReportStatus === 'dangerous') {
+ showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  return;
  }
  btn.disabled = true;
@@ -1026,8 +1053,8 @@ async function doEscalate(btn) {
 // ── Change Status (dropdown) ───────────────────────────────────────────────
 async function changeStatus(newStatus) {
  if (!newStatus || !currentReportId) return;
- if (newStatus === 'safe' && currentResponderPending) {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (newStatus === 'safe' && currentReportStatus === 'dangerous') {
+ showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  var s0 = document.getElementById('modalStatusSelect'); if (s0) s0.value = '';
  return;
  }
@@ -1057,8 +1084,8 @@ async function changeStatus(newStatus) {
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
  var row = btn && btn.closest ? btn.closest('tr') : null;
- if (row && row.getAttribute('data-responder-pending') === '1') {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (row && row.getAttribute('data-status') === 'dangerous') {
+ showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  return;
  }
  if (!confirm('Mark this report as resolved?')) return;
@@ -1132,7 +1159,8 @@ function refreshReportRow(id, newStatus, escalated) {
  pill.className = 'pill pill-' + newStatus;
  pill.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
  }
- if (newStatus === 'safe') {
+ row.setAttribute('data-status', newStatus);
+ if (newStatus !== 'dangerous') {
  row.removeAttribute('data-responder-pending');
  var pendingChip = row.querySelector('.responder-pending-chip');
  if (pendingChip) pendingChip.remove();
@@ -1144,13 +1172,21 @@ function refreshReportRow(id, newStatus, escalated) {
  if (actionsCell) {
  // Remove old resolve/escalate buttons, leave view button
  actionsCell.querySelectorAll('.btn-resolve, .btn-escalate, .btn-resolve-pending').forEach(function(b) { b.remove(); });
- if (newStatus !== 'safe' && !rowPending) {
- // Re-add resolve button
+ if (newStatus !== 'safe') {
  var rb = document.createElement('button');
+ if (newStatus === 'dangerous') {
+ rb.className = 'btn-icon btn-resolve-pending';
+ rb.type = 'button';
+ rb.disabled = true;
+ rb.title = rowPending ? 'A first responder has been dispatched and must resolve this incident' : 'Dangerous incidents must be resolved by the LGU or the assigned responder';
+ rb.style.cssText = 'background:#fffbeb;color:#92400e;opacity:.75;cursor:not-allowed;';
+ rb.innerHTML = '<i class="fas fa-hourglass-half"></i>';
+ } else {
  rb.className = 'btn-icon btn-resolve';
  rb.title = 'Mark Resolved';
  rb.innerHTML = '<i class="fas fa-check"></i>';
  rb.onclick = function() { quickResolve(id, rb); };
+ }
  actionsCell.appendChild(rb);
  }
  }
@@ -1190,6 +1226,159 @@ function applyRptFilters() {
  var cnt = document.getElementById('rptCount');
  if (cnt) cnt.textContent = visible + ' records';
 }
+
+// ── New-report popup alerts + live feed refresh ──────────────────────────
+// The server (api/reports.php poll_report_alerts) scopes rows to this
+// official's barangay and only returns dangerous / caution incidents.
+var BRGY_ALERT_ICONS = {fire:'fa-fire',crime:'fa-user-shield',accident:'fa-car-burst',flooding:'fa-water',health:'fa-heart-pulse',infrastructure:'fa-road-barrier',other:'fa-circle-exclamation'};
+var BRGY_ALERT_LABELS = {fire:'Fire',crime:'Crime',accident:'Accident',flooding:'Flooding',health:'Health',infrastructure:'Infrastructure',other:'Other'};
+var brgyAlertFeedTimer = null;
+
+function brgyAlertTone(report, reason) {
+ if (reason === 'escalated') return 'escalated';
+ if (report.status === 'caution') return 'caution';
+ if (report.status === 'dangerous') return 'dangerous';
+ return 'info';
+}
+
+function brgyAlertTime(report) {
+ var raw = report.created_at || '';
+ var d = new Date(String(raw).replace(' ', 'T'));
+ if (isNaN(d.getTime())) return raw;
+ var diff = Math.round((Date.now() - d.getTime()) / 1000);
+ if (diff >= 0 && diff < 60) return 'just now';
+ if (diff >= 60 && diff < 3600) return Math.round(diff / 60) + 'm ago';
+ if (diff >= 3600 && diff < 86400) return Math.round(diff / 3600) + 'h ago';
+ return d.toLocaleString('en-PH', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+
+function dismissBrgyAlert(el) {
+ if (!el || !el.parentNode) return;
+ el.classList.add('alert-out');
+ setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 380);
+}
+
+function renderBrgyAlert(report, label, reason) {
+ var container = document.getElementById('toastContainer');
+ if (!container) return;
+ var tone = brgyAlertTone(report, reason);
+ var category = BRGY_ALERT_LABELS[report.category] || report.category || 'Report';
+ var location = [report.barangay, report.city].filter(function (part) {
+  return part && String(part).trim() !== '';
+ }).join(', ');
+ var meta = [category, location, brgyAlertTime(report)].filter(function (part) {
+  return part && String(part).trim() !== '';
+ }).join(' \u00b7 ');
+ var description = String(report.description || '');
+ if (description.length > 120) description = description.slice(0, 119) + '\u2026';
+ var icon = reason === 'escalated' ? 'fa-arrow-up-from-bracket' : (BRGY_ALERT_ICONS[report.category] || 'fa-circle-exclamation');
+
+ var el = document.createElement('div');
+ el.className = 'alert-toast alert-' + tone;
+ el.setAttribute('role', 'alert');
+ el.setAttribute('aria-live', 'assertive');
+ el.innerHTML =
+  '<div class="alert-toast-icon"><i class="fas ' + esc(icon) + '"></i></div>' +
+  '<div class="alert-toast-body">' +
+   '<div class="alert-toast-title">' + esc(label || 'New Report') + '</div>' +
+   '<div class="alert-toast-text">' +
+    '<strong>' + esc(report.title || 'Untitled report') + '</strong>' +
+    (meta ? '<span>' + esc(meta) + '</span>' : '') +
+    (description ? '<span class="alert-toast-desc">' + esc(description) + '</span>' : '') +
+   '</div>' +
+   '<a class="alert-toast-link" href="barangay.php?view=reports">View in reports <i class="fas fa-arrow-right"></i></a>' +
+  '</div>' +
+  '<button type="button" class="alert-toast-close" aria-label="Dismiss alert"><i class="fas fa-xmark"></i></button>' +
+  '<div class="alert-toast-progress" style="animation-duration:7s;"></div>';
+
+ container.appendChild(el);
+ var close = el.querySelector('.alert-toast-close');
+ if (close) close.onclick = function () { dismissBrgyAlert(el); };
+ var visible = container.querySelectorAll('.alert-toast');
+ if (visible.length > 3) {
+  for (var i = 0; i < visible.length - 3; i++) dismissBrgyAlert(visible[i]);
+ }
+ setTimeout(function () { dismissBrgyAlert(el); }, 7000);
+}
+
+// Only the dashboard and reports views render the incident table.
+function brgyFeedView() {
+ var v = new URLSearchParams(window.location.search).get('view') || 'overview';
+ return (v === 'overview' || v === 'reports') ? v : '';
+}
+
+// Re-render the feed from the same page without a full reload, so scroll,
+// filters and any open modal survive. Errors are swallowed: the next poll retries.
+function softRefreshFeed(highlightId) {
+ if (!brgyFeedView()) return;
+ fetch(window.location.pathname + window.location.search, { credentials: 'same-origin', cache: 'no-store' })
+ .then(function (response) { return response.ok ? response.text() : null; })
+ .then(function (html) {
+  if (!html) return;
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  var searchEl = document.getElementById('rptSearch');
+  var keepSearch = searchEl ? searchEl.value : '';
+
+  var curCard = document.querySelector('.content > .card');
+  var newCard = doc.querySelector('.content > .card');
+  if (curCard && newCard) {
+   curCard.replaceWith(newCard);
+   var newSearch = document.getElementById('rptSearch');
+   if (newSearch && keepSearch) newSearch.value = keepSearch;
+  }
+
+  ['stat-grid', 'rpt-stats'].forEach(function (cls) {
+   var cur = document.querySelector('.content > .' + cls);
+   var next = doc.querySelector('.content > .' + cls);
+   if (cur && next) cur.replaceWith(next);
+  });
+
+  // Restore the active status filter button of the freshly parsed markup.
+  if (typeof activeRptStatus !== 'undefined') {
+   document.querySelectorAll('.rf-btn').forEach(function (btn) {
+    btn.classList.remove('rf-active');
+    var onclick = btn.getAttribute('onclick') || '';
+    if (onclick.indexOf("filterReports('" + activeRptStatus + "'") !== -1) btn.classList.add('rf-active');
+   });
+  }
+  if (typeof applyRptFilters === 'function') applyRptFilters();
+
+  if (highlightId) {
+   var rows = document.querySelectorAll('.content > .card tbody tr');
+   rows.forEach(function (row) {
+    var first = row.firstElementChild;
+    if (first && first.textContent.trim() === '#' + highlightId) {
+     row.style.transition = 'background 0.4s';
+     row.style.background = '#fef9c3';
+     setTimeout(function () { row.style.background = ''; }, 2600);
+    }
+   });
+  }
+ })
+ .catch(function () { /* keep the existing feed; next poll retries */ });
+}
+
+function scheduleBrgyFeedRefresh(id) {
+ if (brgyAlertFeedTimer) clearTimeout(brgyAlertFeedTimer);
+ brgyAlertFeedTimer = setTimeout(function () {
+  brgyAlertFeedTimer = null;
+  softRefreshFeed(id);
+ }, 700);
+}
+
+(function () {
+ if (!window.SentriReportAlerts) return;
+ SentriReportAlerts.create({
+  api: '../api/reports.php',
+  seenKey: 'sentri_brgy_alert_seen_v1',
+  containerId: 'toastContainer',
+  interval: 15000,
+  onAlert: function (report, label, reason) {
+   renderBrgyAlert(report, label, reason);
+   scheduleBrgyFeedRefresh(report && report.id);
+  }
+ }).start();
+})();
 </script>
 
 <!-- ADD CONTACT MODAL -->
