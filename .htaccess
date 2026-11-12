@@ -1,8 +1,4 @@
-Options -Indexes
-
 # ── SenTri Security Headers & Hardening ──────────────────────────────────────
-# Pass Authorization header through to PHP
-SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
 # NOTE: Security headers are also emitted by PHP (config/headers.php) so the
 # vulnerability scanner's headers_list() check works even if mod_headers is
 # unavailable. Apache headers here serve as an additional layer.

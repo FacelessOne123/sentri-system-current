@@ -81,26 +81,6 @@ if (in_array($view, ['overview','reports'])) {
  } else {
   $reports = [];
  }
- if (isset($_GET['ajax_reports'])) {
-  header('Content-Type: application/json');
-  ob_start();
-  if (empty($reports)) {
-   echo '<div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>';
-  } else {
-   include __DIR__.'/../portal/_report_table.php';
-  }
-  $table_html = ob_get_clean();
-  echo json_encode([
-   'status' => 'success',
-   'total' => $total,
-   'danger' => $danger,
-   'caution' => $caution,
-   'safe' => $safe,
-   'count' => count($reports),
-   'html' => $table_html
-  ]);
-  exit;
- }
 }
 
 if ($view === 'contacts') {
@@ -456,25 +436,23 @@ tr:hover td{background:#fafafa;}
 
  <?php if($view === 'overview'): ?>
  <div class="stat-grid">
- <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="stat-num" id="statTotal"><?= $total ?></div><div class="stat-lbl">Total Reports</div></div></div>
- <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num" id="statDanger"><?= $danger ?></div><div class="stat-lbl">Dangerous</div></div></div>
- <div class="stat-card"><div class="stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="stat-num" id="statCaution"><?= $caution ?></div><div class="stat-lbl">Caution</div></div></div>
- <div class="stat-card"><div class="stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="stat-num" id="statSafe"><?= $safe ?></div><div class="stat-lbl">Resolved</div></div></div>
+ <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="stat-num"><?= $total ?></div><div class="stat-lbl">Total Reports</div></div></div>
+ <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num"><?= $danger ?></div><div class="stat-lbl">Dangerous</div></div></div>
+ <div class="stat-card"><div class="stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="stat-num"><?= $caution ?></div><div class="stat-lbl">Caution</div></div></div>
+ <div class="stat-card"><div class="stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="stat-num"><?= $safe ?></div><div class="stat-lbl">Resolved</div></div></div>
  </div>
  <div class="card">
- <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta" id="recentCount"><?= count($reports) ?> records</span></div>
- <div id="brgyTableWrap">
+ <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta"><?= count($reports) ?> records</span></div>
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
- </div>
  </div>
 
  <?php elseif($view === 'reports'): ?>
  <div class="rpt-stats">
- <div class="map-stat"><div class="map-stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="map-stat-num" id="rptStatTotal"><?= $total ?></div><div class="map-stat-lbl">Total</div></div></div>
- <div class="map-stat"><div class="map-stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="map-stat-num" id="rptStatDanger"><?= $danger ?></div><div class="map-stat-lbl">Dangerous</div></div></div>
- <div class="map-stat"><div class="map-stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="map-stat-num" id="rptStatCaution"><?= $caution ?></div><div class="map-stat-lbl">Caution</div></div></div>
- <div class="map-stat"><div class="map-stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="map-stat-num" id="rptStatSafe"><?= $safe ?></div><div class="map-stat-lbl">Resolved</div></div></div>
+ <div class="map-stat"><div class="map-stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="map-stat-num"><?= $total ?></div><div class="map-stat-lbl">Total</div></div></div>
+ <div class="map-stat"><div class="map-stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="map-stat-num"><?= $danger ?></div><div class="map-stat-lbl">Dangerous</div></div></div>
+ <div class="map-stat"><div class="map-stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="map-stat-num"><?= $caution ?></div><div class="map-stat-lbl">Caution</div></div></div>
+ <div class="map-stat"><div class="map-stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="map-stat-num"><?= $safe ?></div><div class="map-stat-lbl">Resolved</div></div></div>
  </div>
  <div class="card">
  <div class="card-header">
@@ -489,10 +467,8 @@ tr:hover td{background:#fafafa;}
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
  <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
  </div>
- <div id="brgyTableWrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
- </div>
  </div>
 
  <?php elseif($view === 'contacts'): ?>
@@ -530,7 +506,7 @@ tr:hover td{background:#fafafa;}
  <div class="resident-email"><?= htmlspecialchars($r['email']) ?><?= $r['phone_number'] ? ' &nbsp;&middot;&nbsp; '.$r['phone_number'] : '' ?></div>
  <?php if(!empty($r['resident_address'])): ?><div class="resident-email"><i class="fas fa-location-dot" style="margin-right:4px;color:var(--green);"></i><?= htmlspecialchars($r['resident_address']) ?></div><?php endif; ?>
  </div>
- <span style="font-size:0.73rem;color:var(--muted);"><?= date('M j, Y g:i A',strtotime($r['created_at'])) ?></span>
+ <span style="font-size:0.73rem;color:var(--muted);"><?= date('M j, Y',strtotime($r['created_at'])) ?></span>
  </div>
  <?php endforeach; endif; ?>
  </div>
@@ -1251,58 +1227,9 @@ function applyRptFilters() {
  if (cnt) cnt.textContent = visible + ' records';
 }
 
-// ── 30s background auto-refresh for overview & reports ─────────
-(function initBarangayTablePolling(){
- var currentView = '<?= esc($view) ?>';
- if (currentView !== 'overview' && currentView !== 'reports') return;
- var pollInterval = 30000;
- var inFlight = false;
-
- async function pollTable(){
-  if (inFlight || document.hidden) return;
-  // Don't interrupt while viewing report detail modal
-  var detailModal = document.getElementById('reportModal');
-  if (detailModal && detailModal.classList.contains('show')) return;
-
-  inFlight = true;
-  try {
-   var res = await fetch('barangay.php?view=' + encodeURIComponent(currentView) + '&ajax_reports=1', {
-    credentials: 'same-origin',
-    cache: 'no-store'
-   });
-   var data = await res.json();
-   if (data && data.status === 'success') {
-    var wrap = document.getElementById('brgyTableWrap');
-    if (wrap && wrap.innerHTML !== data.html) {
-     wrap.innerHTML = data.html;
-     applyRptFilters();
-    }
-    // Update overview stats
-    if (document.getElementById('statTotal')) document.getElementById('statTotal').textContent = data.total;
-    if (document.getElementById('statDanger')) document.getElementById('statDanger').textContent = data.danger;
-    if (document.getElementById('statCaution')) document.getElementById('statCaution').textContent = data.caution;
-    if (document.getElementById('statSafe')) document.getElementById('statSafe').textContent = data.safe;
-    if (document.getElementById('recentCount')) document.getElementById('recentCount').textContent = data.count + ' records';
-    // Update reports stats
-    if (document.getElementById('rptStatTotal')) document.getElementById('rptStatTotal').textContent = data.total;
-    if (document.getElementById('rptStatDanger')) document.getElementById('rptStatDanger').textContent = data.danger;
-    if (document.getElementById('rptStatCaution')) document.getElementById('rptStatCaution').textContent = data.caution;
-    if (document.getElementById('rptStatSafe')) document.getElementById('rptStatSafe').textContent = data.safe;
-   }
-  } catch(e) {
-   // Silent background retry on next tick
-  } finally {
-   inFlight = false;
-  }
- }
-
- setInterval(pollTable, pollInterval);
- document.addEventListener('visibilitychange', function(){
-  if (document.visibilityState === 'visible') pollTable();
- });
-})();
-
-// ── New-report popup alerts via SentriReportAlerts ─────────────
+// ── New-report popup alerts + live feed refresh ──────────────────────────
+// The server (api/reports.php poll_report_alerts) scopes rows to this
+// official's barangay and only returns dangerous / caution incidents.
 var BRGY_ALERT_ICONS = {fire:'fa-fire',crime:'fa-user-shield',accident:'fa-car-burst',flooding:'fa-water',health:'fa-heart-pulse',infrastructure:'fa-road-barrier',other:'fa-circle-exclamation'};
 var BRGY_ALERT_LABELS = {fire:'Fire',crime:'Crime',accident:'Accident',flooding:'Flooding',health:'Health',infrastructure:'Infrastructure',other:'Other'};
 var brgyAlertFeedTimer = null;
