@@ -948,10 +948,10 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  var waitBtn = document.createElement('button');
  waitBtn.className = 'btn-action btn-done';
  waitBtn.id = 'modalResolveBtn';
- waitBtn.disabled = true;
  waitBtn.title = 'The assigned first responder must resolve this incident first';
  waitBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
- waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:not-allowed;';
+ waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:pointer;';
+ waitBtn.onclick = function() { showToast('A first responder is handling this incident and must resolve it first.', 'error'); };
  actions.appendChild(waitBtn);
  } else {
  // Resolve button

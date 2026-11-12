@@ -44,7 +44,7 @@
  </button>
  <?php if($r['status'] !== 'safe'): ?>
  <?php if($responder_pending): ?>
- <button class="btn-icon btn-resolve-pending" type="button" disabled title="Waiting for the dispatched responder to resolve this incident" style="background:#fffbeb;color:#92400e;opacity:.75;cursor:not-allowed;">
+ <button class="btn-icon btn-resolve-pending" type="button" onclick="showToast('A first responder is handling this incident and must resolve it first.', 'error')" title="Waiting for the dispatched responder to resolve this incident" style="background:#fffbeb;color:#92400e;opacity:.85;cursor:pointer;">
  <i class="fas fa-hourglass-half"></i>
  </button>
  <?php else: ?>
