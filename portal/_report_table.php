@@ -11,9 +11,9 @@
  $residence_full = $rep_brgy !== ''
   ? ('Brgy ' . $rep_brgy . ($rep_addr !== '' ? ', ' . $rep_addr : ''))
   : '';
- $responder_pending = !empty($r['assigned_to']) && empty($r['resolved_at']);
+ $responder_pending = $r['status'] === 'dangerous' && !empty($r['assigned_to']) && empty($r['resolved_at']);
  ?>
- <tr<?= $responder_pending ? ' data-responder-pending="1"' : '' ?>>
+ <tr data-status="<?= htmlspecialchars($r['status']) ?>"<?= $responder_pending ? ' data-responder-pending="1"' : '' ?>>
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
  <td style="font-weight:600;max-width:200px;">
  <?= htmlspecialchars(mb_strimwidth($r['title'],0,55,'…')) ?>
@@ -43,8 +43,8 @@
  <i class="fas fa-eye"></i>
  </button>
  <?php if($r['status'] !== 'safe'): ?>
- <?php if($responder_pending): ?>
- <button class="btn-icon btn-resolve-pending" type="button" disabled title="Waiting for the dispatched responder to resolve this incident" style="background:#fffbeb;color:#92400e;opacity:.75;cursor:not-allowed;">
+ <?php if($r['status'] === 'dangerous'): ?>
+ <button class="btn-icon btn-resolve-pending" type="button" disabled title="<?= $responder_pending ? 'A first responder has been dispatched and must resolve this incident' : 'Dangerous incidents must be resolved by the LGU or the assigned responder' ?>" style="background:#fffbeb;color:#92400e;opacity:.75;cursor:not-allowed;">
  <i class="fas fa-hourglass-half"></i>
  </button>
  <?php else: ?>

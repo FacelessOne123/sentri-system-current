@@ -316,6 +316,8 @@ switch ($action) {
  // (case/punctuation-insensitive) on either r.barangay or u.barangay_name.
  $brgy_sql = sentri_geo_brgy_where($conn, (string)($_GET['barangay'] ?? ''));
  $brgy_sql = $brgy_sql !== '' ? " AND $brgy_sql " : "";
+ // Safe reports are opt-in: the community overview hides them by default.
+ $safe_sql = !empty($_GET['include_safe']) ? "" : " AND r.status != 'safe' ";
  $sql = "
  SELECT r.id, r.user_id, r.title, r.description, r.location_name, r.barangay,
  r.city, r.province, r.latitude, r.longitude, r.radius_m,
@@ -325,7 +327,7 @@ switch ($action) {
  FROM reports r
  INNER JOIN users u ON r.user_id = u.id
  LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
- WHERE r.is_archived = 0 AND r.status != 'safe' $search_sql $brgy_sql
+ WHERE r.is_archived = 0 $safe_sql $search_sql $brgy_sql
  ORDER BY r.created_at DESC LIMIT ? OFFSET ?";
  $stmt = $conn->prepare($sql);
  if (!$stmt) { echo json_encode(['status'=>'error','message'=>'DB error: '.$conn->error]); exit; }
@@ -1179,8 +1181,11 @@ switch ($action) {
   if ($g['resolved_at'] !== null || $g['status'] === 'safe') {
    echo json_encode(['status'=>'error','message'=>'This incident is already resolved.']); exit;
   }
-  if ($role !== 'first_responder' && !empty($g['assigned_to'])) {
+  if ($role === 'lgu' && !empty($g['assigned_to'])) {
    echo json_encode(['status'=>'error','message'=>'A first responder is handling this incident. The responder must resolve it first.']); exit;
+  }
+  if ($role === 'barangay' && $g['status'] === 'dangerous') {
+   echo json_encode(['status'=>'error','message'=>'Dangerous incidents must be resolved by the LGU or the assigned responder.']); exit;
   }
   if ($role === 'first_responder' && (int)$g['assigned_to'] !== $user_id) {
    echo json_encode(['status'=>'error','message'=>'This report is not assigned to you.']); exit;
@@ -1190,9 +1195,16 @@ switch ($action) {
  $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
  $stmt->bind_param("ii", $report_id, $user_id);
  } else {
- // Admin overrides are unconditional; Brgy/LGU only win if no responder was
- // dispatched in the meantime (race-safe version of the guard above).
- $extra = ($role === 'admin') ? '' : ' AND assigned_to IS NULL AND resolved_at IS NULL';
+ // Admin overrides are unconditional. Barangay can only resolve a caution
+ // report (even with a unit assigned); LGU only wins if no responder was
+ // dispatched in the meantime.
+ if ($role === 'admin') {
+  $extra = '';
+ } elseif ($role === 'barangay') {
+  $extra = " AND status='caution' AND resolved_at IS NULL";
+ } else {
+  $extra = ' AND assigned_to IS NULL AND resolved_at IS NULL';
+ }
  $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0$extra");
  $stmt->bind_param("i", $report_id);
  }
@@ -1318,15 +1330,25 @@ switch ($action) {
    if ($g['resolved_at'] !== null || $g['status'] === 'safe') {
     echo json_encode(['status'=>'error','message'=>'This incident is already resolved.']); exit;
    }
-   if (!empty($g['assigned_to'])) {
+   if ($role === 'barangay' && $g['status'] === 'dangerous') {
+    echo json_encode(['status'=>'error','message'=>'Dangerous incidents must be resolved by the LGU or the assigned responder.']); exit;
+   }
+   if ($role === 'lgu' && !empty($g['assigned_to'])) {
     echo json_encode(['status'=>'error','message'=>'A first responder is handling this incident. The responder must resolve it first.']); exit;
    }
   }
  }
  $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL';
- // Race-safe version of the guard above: Brgy/LGU cannot win the resolve race
- // against a responder dispatch or a concurrent resolve. Admins override.
- $extra = ($new_status === 'safe' && $role !== 'admin') ? ' AND assigned_to IS NULL AND resolved_at IS NULL' : '';
+ // Race-safe version of the guard above: barangay may only resolve a caution
+ // report; LGU cannot win against a responder dispatch or concurrent resolve.
+ $extra = '';
+ if ($new_status === 'safe' && $role !== 'admin') {
+  if ($role === 'barangay') {
+   $extra = " AND status='caution' AND resolved_at IS NULL";
+  } else {
+   $extra = ' AND assigned_to IS NULL AND resolved_at IS NULL';
+  }
+ }
  $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0$extra");
  $s_upd->bind_param("si", $new_status, $report_id);
  $s_upd->execute();
