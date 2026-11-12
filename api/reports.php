@@ -26,7 +26,7 @@ $PREFERRED_ACTION_ROLES = [
  'assign_report'        => ['first_responder','admin'],
  'report_responded'     => ['first_responder','admin'],
  'export'               => ['admin','lgu','barangay'],
- 'poll_report_alerts'   => ['first_responder','lgu'],
+ 'poll_report_alerts'   => ['first_responder','lgu','barangay'],
  // Community portal
  'post_report'          => ['community','user'],
  'delete_report'        => ['community','user','admin'],
@@ -372,11 +372,11 @@ switch ($action) {
  echo json_encode(['status'=>'success','reports'=>$reports]);
  break;
 
- // ── Lightweight alert poll for responder + LGU portals ────────────────
+ // ── Lightweight alert poll for responder + LGU + barangay portals ───────
  // Returns only alert-worthy reports (new rows, status upgrades and LGU
  // escalations). No images / votes, so it is cheap enough to poll.
  case 'poll_report_alerts':
- if (!in_array($role, ['first_responder','lgu'], true)) {
+ if (!in_array($role, ['first_responder','lgu','barangay'], true)) {
   echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit;
  }
 
@@ -412,6 +412,24 @@ switch ($action) {
   } else {
    $where[] = "r.status = 'dangerous'";
   }
+ } elseif ($role === 'barangay') {
+  // Barangay officials are alerted only for dangerous/caution incidents inside
+  // their own territory. Scoping mirrors the portal feed (normalized r.barangay
+  // match), and an official with no assigned barangay gets no rows at all.
+  $official_brgy = '';
+  $ob_val = null;
+  $ob_stmt = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+  if ($ob_stmt) {
+   $ob_stmt->bind_param("i", $user_id);
+   $ob_stmt->execute();
+   $ob_stmt->bind_result($ob_val);
+   $ob_stmt->fetch();
+   $ob_stmt->close();
+   $official_brgy = trim((string)$ob_val);
+  }
+  $alert_brgy_where = $official_brgy !== '' ? sentri_geo_brgy_where($conn, $official_brgy) : '';
+  $where[] = $alert_brgy_where !== '' ? $alert_brgy_where : '1 = 0';
+  $where[] = "r.status IN ('dangerous','caution')";
  } else {
   $where[] = $has_esc_col
    ? "(r.status = 'dangerous' OR r.escalated_to_lgu = 1)"
