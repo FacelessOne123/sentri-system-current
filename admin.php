@@ -561,7 +561,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="table-wrap">
  <div class="loading" id="overviewLoading"><i class="fas fa-spinner"></i> Loading...</div>
  <table id="overviewTable" style="display:none;">
- <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Category</th><th>Location</th><th>Posted By</th><th>Date</th></tr></thead>
+ <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Category</th><th>Location</th><th>Posted By</th><th>Date / Time</th></tr></thead>
  <tbody id="overviewBody"></tbody>
  </table>
  </div>
@@ -626,7 +626,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="table-wrap">
  <div class="loading" id="postsLoading"><i class="fas fa-spinner"></i> Loading posts...</div>
  <table id="postsTable" style="display:none;">
- <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Category</th><th>Location</th><th>Posted By</th><th>Votes</th><th>Date</th><th>Actions</th></tr></thead>
+ <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Category</th><th>Location</th><th>Posted By</th><th>Votes</th><th>Date / Time</th><th>Actions</th></tr></thead>
  <tbody id="postsBody"></tbody>
  </table>
  </div>
@@ -1004,6 +1004,16 @@ let currentTab='overview';
 let currentLogsPage = 1;
 const logsItemsPerPage = 10;
 
+function formatAdminTimestamp(ts){
+ if(!ts) return '—';
+ var isoStr = (typeof ts === 'string' && ts.indexOf('T') === -1 && ts.indexOf(' ') !== -1) ? ts.replace(' ', 'T') : ts;
+ var d = new Date(isoStr);
+ if(isNaN(d.getTime())) return ts;
+ var time = d.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true});
+ var date = d.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
+ return time + ' ' + date;
+}
+
 // ── Toast notifications (replaces alert(); solid-fill style) ─────
 function showToast(message, type){
  type=type||'info';
@@ -1083,7 +1093,7 @@ async function loadOverview(){
  const body=document.getElementById('overviewBody');
  const top10=allReports.filter(r=>!r.is_archived).slice(0,10);
  body.innerHTML=top10.map(r=>{
- const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+ const date=formatAdminTimestamp(r.created_at);
  return `<tr>
  <td style="color:#aaa;">${r.id}</td>
  <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.title)}">${esc(r.title)}</td>
@@ -1091,7 +1101,7 @@ async function loadOverview(){
  <td style="color:var(--muted);">${r.category}</td>
  <td>${esc(r.location_name)}<br><small style="color:#aaa;">${esc(r.city)}</small></td>
  <td>${esc(r.poster_name)}</td>
- <td style="color:#888;font-size:0.78rem;">${date}</td>
+ <td style="color:#888;font-size:0.78rem;white-space:nowrap;">${date}</td>
  </tr>`;
  }).join('');
  document.getElementById('overviewLoading').style.display='none';
@@ -1173,7 +1183,7 @@ function renderUsers(){
  const body=document.getElementById('usersBody');
  if(list.length===0){body.innerHTML='<tr><td colspan="7" class="empty"><i class="fas fa-users-slash"></i><p>No users match your filters.</p></td></tr>';return;}
  body.innerHTML=list.map(u=>{
- const date=new Date(u.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+ const date=formatAdminTimestamp(u.created_at);
  const initials=(u.first_name[0]||'?').toUpperCase();
  const isPending = u.is_approved===0 && u.role!=='community' && u.role!=='admin';
  const roleLabel = u.role.replace('_',' ');
@@ -1186,7 +1196,7 @@ function renderUsers(){
  </div></td>
  <td style="color:var(--muted);"><div style="font-family:ui-monospace,Menlo,monospace;font-weight:600;color:#1a1a2e;letter-spacing:.08em;">${esc(u.official_id||'—')}</div><div style="font-size:0.72rem;color:#aaa;">${(/^official\.sentri$/.test(u.email.split('@').pop())?'ID-based sign-in':esc(u.email))}</div></td>
  <td><span class="badge ${u.role}">${roleLabel}</span></td>
- <td style="color:#888;font-size:0.78rem;">${date}</td>
+ <td style="color:#888;font-size:0.78rem;white-space:nowrap;">${date}</td>
  <td style="text-align:center;">${u.report_count}</td>
  <td><div style="display:flex;gap:6px;flex-wrap:wrap;">
  ${isPending ? `<button class="act-btn" style="background:#16a34a;color:#fff;border:none;padding:5px 10px;font-size:0.75rem;" onclick="approveUser(${u.id})"><i class="fas fa-check"></i> Approve</button><button class="act-btn del" style="font-size:0.75rem;" onclick="rejectUser(${u.id},'${esc(u.first_name)}')"><i class="fas fa-xmark"></i> Reject</button>` : ''}
@@ -1501,7 +1511,7 @@ async function loadPending(){
  if(pending.length===0){ document.getElementById('pendingEmpty').style.display='block'; return; }
  document.getElementById('pendingTable').style.display='table';
  document.getElementById('pendingBody').innerHTML=pending.map(u=>{
- const date=new Date(u.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+ const date=formatAdminTimestamp(u.created_at);
  const initials=(u.first_name[0]||'?').toUpperCase();
  const roleLabel=u.role.replace('_',' ');
  const roleBg={'barangay':'#f0fdf4','lgu':'#f0f7ff','first_responder':'#fef2f2'}[u.role]||'#f5f3ff';
@@ -1517,7 +1527,7 @@ async function loadPending(){
  <td style="font-size:0.82rem;">${esc(u.org_name||' - ')}</td>
  <td style="font-size:0.82rem;">${esc(u.position||' - ')}</td>
  <td style="font-size:0.82rem;">${esc((u.barangay_name||'')+(u.municipality?', '+u.municipality:''))}</td>
- <td style="font-size:0.78rem;color:var(--muted);">${date}</td>
+ <td style="font-size:0.78rem;color:var(--muted);white-space:nowrap;">${date}</td>
  <td>
  <div style="display:flex;gap:6px;">
  <button class="btn-action approve" onclick="approvePending(${u.id})"><i class="fas fa-check"></i> Approve</button>
@@ -1600,7 +1610,7 @@ function renderPosts(){
  }
  body.innerHTML=list.map(r=>{
  const arc=r.is_archived==1;
- const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+ const date=formatAdminTimestamp(r.created_at);
  return `<tr>
  <td style="color:#aaa;">${r.id}</td>
  <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.title)}">${esc(r.title)}</td>
@@ -1676,7 +1686,7 @@ function renderLogs(){
  
  const body = document.getElementById('logsBody');
  body.innerHTML = pageData.map((l, i) => {
- const date = new Date(l.created_at).toLocaleString('en-PH');
+ const date = formatAdminTimestamp(l.created_at);
  const ok = l.status === 'Success';
  const globalIndex = start + i + 1;
  return `<tr>
@@ -1990,7 +2000,7 @@ function renderAudit(){
  const actionStyles={archived:'background:#fff0f0;color:var(--red);',restored:'background:#f0fff4;color:var(--green);'};
  const actionIcons={archived:'fa-archive',restored:'fa-rotate-left'};
  body.innerHTML=list.map((l,i)=>{
- const date=new Date(l.performed_at).toLocaleString('en-PH');
+ const date=formatAdminTimestamp(l.performed_at);
  const style=actionStyles[l.action]||'background:#f0f2f7;color:#555;';
  const icon=actionIcons[l.action]||'fa-circle-info';
  return `<tr>

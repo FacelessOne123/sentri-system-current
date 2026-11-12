@@ -27,6 +27,18 @@ require_once __DIR__ . '/../config/address.php';
 const MOBILE_TOKEN_SECRET = 'sentri_mobile_secure_hmac_secret_cavite_2026';
 const TOKEN_EXPIRY_SECONDS = 86400 * 30; // 30 days
 
+
+function mobile_format_iso(?string $dt_str): ?string {
+    if (!$dt_str) return null;
+    try {
+        $tz = new DateTimeZone('America/New_York');
+        $dt = new DateTime($dt_str, $tz);
+        return $dt->format(DateTime::ATOM);
+    } catch (Exception $e) {
+        return $dt_str;
+    }
+}
+
 function mobile_respond(int $code, array $payload): void {
     http_response_code($code);
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -306,6 +318,12 @@ switch ($action) {
             $row['upvotes'] = (int)$row['upvotes'];
             $row['downvotes'] = (int)$row['downvotes'];
             $row['escalated_to_lgu'] = (int)($row['escalated_to_lgu'] ?? 0);
+            if (!empty($row['created_at'])) {
+                $row['created_at'] = mobile_format_iso($row['created_at']);
+            }
+            if (!empty($row['updated_at'])) {
+                $row['updated_at'] = mobile_format_iso($row['updated_at']);
+            }
             $row['images'] = [];
             $reports[$row['id']] = $row;
             $report_ids[] = $row['id'];
@@ -361,6 +379,8 @@ switch ($action) {
         if (!$report) {
             mobile_respond(404, ['status' => 'error', 'message' => 'Report not found']);
         }
+        $report['created_at'] = mobile_format_iso($report['created_at']);
+        $report['updated_at'] = mobile_format_iso($report['updated_at']);
 
         // Attach images
         $img_stmt = $conn->prepare("SELECT id, file_name, original_name, mime_type, file_size, uploaded_at FROM report_images WHERE report_id = ?");
@@ -380,25 +400,25 @@ switch ($action) {
             [
                 'step' => 'Reported',
                 'completed' => true,
-                'timestamp' => $report['created_at'],
+                'timestamp' => mobile_format_iso($report['created_at']),
                 'description' => 'Incident reported and broadcasted to neighborhood network.'
             ],
             [
                 'step' => 'Acknowledged / Assigned',
                 'completed' => !empty($report['accepted_at']),
-                'timestamp' => $report['accepted_at'],
+                'timestamp' => mobile_format_iso($report['accepted_at']),
                 'description' => !empty($report['responder_first']) ? "Assigned to {$report['responder_first']} {$report['responder_last']} ({$report['responder_agency']})" : "Pending assignment by LGU/Barangay desk."
             ],
             [
                 'step' => 'Responded',
                 'completed' => !empty($report['responded_at']),
-                'timestamp' => $report['responded_at'],
+                'timestamp' => mobile_format_iso($report['responded_at']),
                 'description' => !empty($report['responded_at']) ? 'Units arrived on scene.' : 'Responders en route.'
             ],
             [
                 'step' => 'Resolved',
                 'completed' => !empty($report['resolved_at']) || $report['status'] === 'safe',
-                'timestamp' => $report['resolved_at'],
+                'timestamp' => mobile_format_iso($report['resolved_at']),
                 'description' => !empty($report['resolved_at']) ? 'Hazard cleared and verified safe.' : 'Incident active.'
             ]
         ];
