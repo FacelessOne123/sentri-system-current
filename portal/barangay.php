@@ -20,6 +20,12 @@ $org = $prof['org_name'] ?? 'Barangay Office';
 $pos = $prof['position'] ?? 'Barangay Official';
 $juri = $brgy ?: ($city ?: 'All Areas');
 
+if (!function_exists('esc')) {
+ function esc($s) {
+  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+ }
+}
+
 function cq($conn,$sql,$types='',$params=[]){
  $s=$conn->prepare($sql);
  if($types && count($params)){
@@ -1244,7 +1250,7 @@ function applyRptFilters() {
 
 // ── 30s background auto-refresh for overview & reports ─────────
 (function initBarangayTablePolling(){
- var currentView = '<?= esc($view) ?>';
+ var currentView = '<?= htmlspecialchars($view, ENT_QUOTES, 'UTF-8') ?>';
  if (currentView !== 'overview' && currentView !== 'reports') return;
  var pollInterval = 30000;
  var inFlight = false;
