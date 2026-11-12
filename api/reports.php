@@ -374,7 +374,7 @@ switch ($action) {
  echo json_encode(['status'=>'success','reports'=>$reports]);
  break;
 
- // ── Lightweight alert poll for responder + LGU portals ────────────────
+ // ── Lightweight alert poll for responder + LGU + barangay portals ───────
  // Returns only alert-worthy reports (new rows, status upgrades and LGU
  // escalations). No images / votes, so it is cheap enough to poll.
  case 'poll_report_alerts':

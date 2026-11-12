@@ -134,6 +134,12 @@ echo "$LOGIN_HTML" | grep -q 'id="mediaFull"' && p "login tutorial video can go 
 PORTAL_HTML=$(curl -s -b "$GJJ" "$BASE/portal/community.php")
 echo "$PORTAL_HTML" | grep -q 'id="timeFilter"' && p "feed has a time-range filter" || f "time-range filter missing"
 echo "$PORTAL_HTML" | grep -q 'id="other_text"' && p "Other category has a free-text input" || f "Other free-text input missing"
+grep -q "other_text',otherText" portal/community.php \
+  && p "report form actually submits the custom Other text" \
+  || f "report form does not submit other_text"
+grep -q "date('M j, Y g:i A'" portal/_report_table.php \
+  && p "barangay/LGU report table shows the time" \
+  || f "report table date is still date-only"
 
 # The free-text type must round-trip to the database.
 if [[ -n $MYSQL_CMD && -n ${GTC:-} ]]; then
