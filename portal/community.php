@@ -7,6 +7,13 @@ require_approved();
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/geo.php';
 require_once __DIR__ . '/../core/weather.php';
+
+if (!function_exists('esc')) {
+    function esc($s): string {
+        return htmlspecialchars((string)($s ?? ''), ENT_QUOTES, 'UTF-8');
+    }
+}
+
 $live_weather = sentri_get_imus_weather();
 
 
@@ -47,14 +54,6 @@ if ($user_barangay !== '') {
  if ($center !== null) { $home_area_lat = $center[0]; $home_area_lng = $center[1]; }
 }
 
-// Age of the last known fix, computed server-side so browser clocks and
-// timezones cannot produce a negative "2h ago".
-$saved_gps_age = null;
-if ($saved_gps_at !== null) {
- $ts = strtotime((string)$saved_gps_at);
- if ($ts !== false) $saved_gps_age = max(0, time() - $ts);
-}
-
 // Last known position for this user (a previous browser fix), so the app
 // has a location immediately on load even before a live fix arrives.
 $saved_gps_lat=$saved_gps_lng=null; $saved_gps_at=null; $saved_gps_source=null; $saved_gps_accuracy=null;
@@ -78,6 +77,14 @@ if(sentri_table_has_column($conn,'users','gps_lat')&&sentri_table_has_column($co
   $gr?$gr->free():null;
   $gs->close();
  }
+}
+
+// Age of the last known fix, computed server-side so browser clocks and
+// timezones cannot produce a negative "2h ago".
+$saved_gps_age = null;
+if ($saved_gps_at !== null) {
+ $ts = strtotime((string)$saved_gps_at);
+ if ($ts !== false) $saved_gps_age = max(0, time() - $ts);
 }
 
 // Barangay change lock: current value + seconds remaining, measured with DB
