@@ -303,6 +303,12 @@ switch ($action) {
             $query .= " AND r.created_at >= NOW() - INTERVAL 30 DAY";
         }
 
+        if (!empty($_GET['mine']) || !empty($_GET['mine_only'])) {
+            $query .= " AND r.user_id = ?";
+            $params[] = $auth_uid;
+            $types .= "i";
+        }
+
         $query .= " ORDER BY r.created_at DESC LIMIT ?";
         $params[] = $limit;
         $types .= "i";
