@@ -250,6 +250,10 @@ switch ($action) {
     }
 
     case 'get_reports': {
+        $token = get_bearer_token();
+        $auth_user = verify_token($token, $conn);
+        $auth_uid = $auth_user ? (int)$auth_user['id'] : 0;
+
         $category = trim($_GET['category'] ?? '');
         $status = trim($_GET['status'] ?? '');
         $barangay = trim($_GET['barangay'] ?? '');
@@ -258,13 +262,15 @@ switch ($action) {
         $limit = min(max((int)($_GET['limit'] ?? 100), 1), 200);
 
         $query = "SELECT r.*, u.first_name, u.last_name, u.avatar_color, 
-                         resp.first_name AS responder_first, resp.last_name AS responder_last, resp.responder_type AS responder_agency
+                         resp.first_name AS responder_first, resp.last_name AS responder_last, resp.responder_type AS responder_agency,
+                         v.vote AS user_vote
                   FROM reports r 
                   LEFT JOIN users u ON r.user_id = u.id 
                   LEFT JOIN users resp ON r.assigned_to = resp.id
+                  LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
                   WHERE r.is_archived = 0";
-        $params = [];
-        $types = "";
+        $params = [$auth_uid];
+        $types = "i";
 
         if ($category && $category !== 'all') {
             $query .= " AND r.category = ?";
@@ -317,6 +323,7 @@ switch ($action) {
             $row['radius_m'] = (int)($row['radius_m'] ?? 200);
             $row['upvotes'] = (int)$row['upvotes'];
             $row['downvotes'] = (int)$row['downvotes'];
+            $row['user_vote'] = !empty($row['user_vote']) ? (string)$row['user_vote'] : null;
             $row['escalated_to_lgu'] = (int)($row['escalated_to_lgu'] ?? 0);
             if (!empty($row['created_at'])) {
                 $row['created_at'] = mobile_format_iso($row['created_at']);
@@ -360,18 +367,24 @@ switch ($action) {
 
     case 'report_detail':
     case 'get_timeline': {
+        $token = get_bearer_token();
+        $auth_user = verify_token($token, $conn);
+        $auth_uid = $auth_user ? (int)$auth_user['id'] : 0;
+
         $report_id = (int)($_GET['report_id'] ?? $input['report_id'] ?? 0);
         if (!$report_id) {
             mobile_respond(400, ['status' => 'error', 'message' => 'Report ID required']);
         }
 
         $stmt = $conn->prepare("SELECT r.*, u.first_name, u.last_name, u.avatar_color, u.email as reporter_email,
-                                       resp.first_name AS responder_first, resp.last_name AS responder_last, resp.responder_type AS responder_agency
+                                       resp.first_name AS responder_first, resp.last_name AS responder_last, resp.responder_type AS responder_agency,
+                                       v.vote AS user_vote
                                 FROM reports r 
                                 LEFT JOIN users u ON r.user_id = u.id 
                                 LEFT JOIN users resp ON r.assigned_to = resp.id
+                                LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
                                 WHERE r.id = ? AND r.is_archived = 0 LIMIT 1");
-        $stmt->bind_param('i', $report_id);
+        $stmt->bind_param('ii', $auth_uid, $report_id);
         $stmt->execute();
         $report = $stmt->get_result()->fetch_assoc();
         $stmt->close();
@@ -379,6 +392,7 @@ switch ($action) {
         if (!$report) {
             mobile_respond(404, ['status' => 'error', 'message' => 'Report not found']);
         }
+        $report['user_vote'] = !empty($report['user_vote']) ? (string)$report['user_vote'] : null;
         $report['created_at'] = mobile_format_iso($report['created_at']);
         $report['updated_at'] = mobile_format_iso($report['updated_at']);
 
@@ -570,10 +584,41 @@ switch ($action) {
             mobile_respond(400, ['status' => 'error', 'message' => 'Report ID required']);
         }
 
-        $v_stmt = $conn->prepare("INSERT INTO report_votes (report_id, user_id, vote) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE vote = VALUES(vote)");
-        $v_stmt->bind_param('iis', $report_id, $user['id'], $vote_type);
-        $v_stmt->execute();
-        $v_stmt->close();
+        $uid = (int)$user['id'];
+
+        // Check existing vote to support toggle behavior (same as web portal)
+        $chk = $conn->prepare("SELECT id, vote FROM report_votes WHERE report_id = ? AND user_id = ? LIMIT 1");
+        $chk->bind_param('ii', $report_id, $uid);
+        $chk->execute();
+        $ex_res = $chk->get_result();
+        $ex_vote = $ex_res->fetch_assoc();
+        $chk->close();
+
+        $new_user_vote = null;
+        if ($ex_vote) {
+            if ($ex_vote['vote'] === $vote_type) {
+                // Tapping the active vote cancels/toggles it off
+                $del = $conn->prepare("DELETE FROM report_votes WHERE id = ?");
+                $del->bind_param('i', $ex_vote['id']);
+                $del->execute();
+                $del->close();
+                $new_user_vote = null;
+            } else {
+                // Switching vote from up to down or vice-versa
+                $upd = $conn->prepare("UPDATE report_votes SET vote = ?, created_at = NOW() WHERE id = ?");
+                $upd->bind_param('si', $vote_type, $ex_vote['id']);
+                $upd->execute();
+                $upd->close();
+                $new_user_vote = $vote_type;
+            }
+        } else {
+            // New vote
+            $ins = $conn->prepare("INSERT INTO report_votes (report_id, user_id, vote) VALUES (?, ?, ?)");
+            $ins->bind_param('iis', $report_id, $uid, $vote_type);
+            $ins->execute();
+            $ins->close();
+            $new_user_vote = $vote_type;
+        }
 
         $count_stmt = $conn->prepare("SELECT 
             SUM(CASE WHEN vote = 'up' THEN 1 ELSE 0 END) AS up_total,
@@ -596,7 +641,7 @@ switch ($action) {
             'status' => 'success',
             'upvotes' => $up,
             'downvotes' => $down,
-            'user_vote' => $vote_type
+            'user_vote' => $new_user_vote
         ]);
         break;
     }
