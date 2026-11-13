@@ -31,7 +31,7 @@ const TOKEN_EXPIRY_SECONDS = 86400 * 30; // 30 days
 function mobile_format_iso(?string $dt_str): ?string {
     if (!$dt_str) return null;
     try {
-        $tz = new DateTimeZone('America/New_York');
+        $tz = new DateTimeZone('Asia/Manila');
         $dt = new DateTime($dt_str, $tz);
         return $dt->format(DateTime::ATOM);
     } catch (Exception $e) {

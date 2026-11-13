@@ -956,12 +956,20 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
   fetch('../api/reports.php?action=get_lifecycle&report_id=' + id).then(r=>r.json()).then(data=>{
  if (data.status === 'success' && data.report) {
  var rep = data.report;
+ var parsePhtDate = function(s) {
+  if (!s) return null;
+  var d = new Date(String(s).replace(' ', 'T'));
+  return isNaN(d.getTime()) ? null : d;
+ };
+ var citizenDate = parsePhtDate(rep.created_at);
+ var respondedDate = parsePhtDate(rep.responded_at);
+ var resolvedDate = parsePhtDate(rep.resolved_at);
  var steps = [
- { title: 'Citizen Reported', icon: 'fa-bullhorn', color: '#3b82f6', done: true, time: rep.created_at ? new Date(rep.created_at).toLocaleString('en-PH') : date, desc: 'Reported by ' + (rep.reporter_name || reporter) },
+ { title: 'Citizen Reported', icon: 'fa-bullhorn', color: '#3b82f6', done: true, time: citizenDate ? citizenDate.toLocaleString('en-PH') : date, desc: 'Reported by ' + (rep.reporter_name || reporter) },
  { title: 'Barangay / LGU Escalation', icon: 'fa-building-shield', color: '#f59e0b', done: !!rep.escalated_to_lgu || rep.status === 'dangerous' || !!escalated, time: (rep.escalated_to_lgu || escalated) ? 'Escalated to LGU' : 'Monitored locally', desc: (rep.escalated_to_lgu || escalated) ? 'Prioritized for municipal response' : 'Barangay tier monitoring' },
  { title: 'LGU Dispatch to Unit', icon: 'fa-truck-fast', color: '#8b5cf6', done: !!rep.assigned_to, time: rep.assigned_to ? ('Unit: ' + (rep.responder_name || 'Unit') + (rep.responder_agency ? ' (' + rep.responder_agency.toUpperCase() + ')' : '')) : 'Pending assignment', desc: rep.assigned_to ? 'Emergency unit assigned' : 'Awaiting LGU dispatch' },
- { title: 'Unit Response & En Route', icon: 'fa-person-running', color: '#06b6d4', done: !!rep.responded_at || !!rep.accepted_at, time: rep.responded_at ? new Date(rep.responded_at).toLocaleTimeString('en-PH') : (rep.accepted_at ? 'Accepted' : 'Standby'), desc: rep.responded_at ? 'Responders arrived on scene' : 'Dispatched unit in transit' },
- { title: 'Scene Cleared & Resolved', icon: 'fa-circle-check', color: '#10b981', done: (rep.status === 'safe' || !!rep.resolved_at || isResolved), time: rep.resolved_at ? new Date(rep.resolved_at).toLocaleString('en-PH') : (rep.status === 'safe' ? 'Resolved' : 'Active'), desc: (rep.status === 'safe' || !!rep.resolved_at || isResolved) ? 'Hazard safely resolved' : 'Active emergency resolution in progress' }
+ { title: 'Unit Response & En Route', icon: 'fa-person-running', color: '#06b6d4', done: !!rep.responded_at || !!rep.accepted_at, time: respondedDate ? respondedDate.toLocaleTimeString('en-PH') : (rep.accepted_at ? 'Accepted' : 'Standby'), desc: rep.responded_at ? 'Responders arrived on scene' : 'Dispatched unit in transit' },
+ { title: 'Scene Cleared & Resolved', icon: 'fa-circle-check', color: '#10b981', done: (rep.status === 'safe' || !!rep.resolved_at || isResolved), time: resolvedDate ? resolvedDate.toLocaleString('en-PH') : (rep.status === 'safe' ? 'Resolved' : 'Active'), desc: (rep.status === 'safe' || !!rep.resolved_at || isResolved) ? 'Hazard safely resolved' : 'Active emergency resolution in progress' }
  ];
 
  var tlHtml = '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">' +
