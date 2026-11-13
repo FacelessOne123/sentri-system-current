@@ -1494,7 +1494,7 @@ switch ($action) {
   $filter_brgy = trim((string)$off_brgy); // Strictly enforce assigned barangay export
  }
 
- $where_clauses = ["r.is_archived = 0"];
+ $where_clauses = ["(r.is_archived = 0 OR r.status = 'safe' OR r.is_archived = 1)"];
  if ($filter_status && in_array($filter_status, ['dangerous','caution','safe'])) {
  $where_clauses[] = "r.status = '".$conn->real_escape_string($filter_status)."'";
  }
