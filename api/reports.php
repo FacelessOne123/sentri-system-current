@@ -1181,11 +1181,11 @@ switch ($action) {
   if ($g['resolved_at'] !== null || $g['status'] === 'safe') {
    echo json_encode(['status'=>'error','message'=>'This incident is already resolved.']); exit;
   }
-  if ($role === 'lgu' && !empty($g['assigned_to'])) {
-   echo json_encode(['status'=>'error','message'=>'A first responder is handling this incident. The responder must resolve it first.']); exit;
-  }
   if ($role === 'barangay' && $g['status'] === 'dangerous') {
    echo json_encode(['status'=>'error','message'=>'Dangerous incidents must be resolved by the LGU or the assigned responder.']); exit;
+  }
+  if ($role === 'lgu' && !empty($g['assigned_to'])) {
+   echo json_encode(['status'=>'error','message'=>'A first responder is handling this incident. The responder must resolve it first.']); exit;
   }
   if ($role === 'first_responder' && (int)$g['assigned_to'] !== $user_id) {
    echo json_encode(['status'=>'error','message'=>'This report is not assigned to you.']); exit;
@@ -1340,7 +1340,6 @@ switch ($action) {
  }
  $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL';
  // Race-safe version of the guard above: barangay may only resolve a caution
- // report; LGU cannot win against a responder dispatch or concurrent resolve.
  $extra = '';
  if ($new_status === 'safe' && $role !== 'admin') {
   if ($role === 'barangay') {

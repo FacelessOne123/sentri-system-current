@@ -36,3 +36,13 @@ if (!function_exists('mb_strlen')) {
         return strlen($string);
     }
 }
+
+if (!function_exists('esc')) {
+    /**
+     * Global HTML escaping helper for PHP templates and portals.
+     */
+    function esc($s): string {
+        return htmlspecialchars((string)($s ?? ''), ENT_QUOTES, 'UTF-8');
+    }
+}
+

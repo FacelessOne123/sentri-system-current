@@ -134,6 +134,7 @@ if ($sentri_res = $conn->query("SELECT DATEDIFF(CURDATE(), DATE(created_at)) AS 
 <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
 <script src="assets/vendor/leaflet/leaflet.js"></script>
 <script src="assets/js/sentri-geo.js"></script>
+<script src="assets/js/sentri-offices.js?v=2"></script>
 <style>
 :root{
  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
@@ -959,7 +960,10 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div style="font-size:.7rem;color:#6b7280;margin-top:4px;line-height:1.5;">Auto-generated from <b>first + last name</b>: 5 digits + the creation year (e.g. <code>12345</code> + <code>2026</code> = <code>123452026</code>). Officials sign in with this ID on their portals instead of an email. Overridable — must stay 9 unique digits.</div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label><input id="coOrg" type="text" placeholder="e.g. Brgy. Bucandala I Hall" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label>
+ <input id="coOrg" type="text" list="coOrgList" autocomplete="off" placeholder="e.g. Brgy. Bucandala I Hall" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ <datalist id="coOrgList"></datalist>
+ </div>
  <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Position / Rank *</label>
  <select id="coPosition" onchange="coPositionChanged()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></select>
  <input id="coPositionOther" type="text" placeholder="Specify position / rank" style="display:none;width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;margin-top:6px;">
@@ -1338,17 +1342,44 @@ function coPositionChanged(){
  document.getElementById('coPositionOther').style.display=(sel.value===CO_OTHER)?'block':'none';
 }
 let coPyramid=null;
-function coInitMap(){
- if(coMap||!window.L||!window.SentriGeo) return;
+let coOrgAc=null;
+
+function coInitOrgCombobox(){
  const coOrg=document.getElementById('coOrg');
- if(window.SentriOffices&&!coOrg.getAttribute('data-sentri-ac')){
- SentriOffices.combobox(coOrg,function(){
- return SentriOffices.poolFor({
- role:document.getElementById('coRole').value,
- responderType:document.getElementById('coResponderType').value
- });
- });
+ if(!coOrg||!window.SentriOffices) return;
+ if(!coOrgAc&&!coOrg.getAttribute('data-sentri-ac')){
+  coOrgAc=SentriOffices.combobox(coOrg,function(){
+   return SentriOffices.poolFor({
+    role:document.getElementById('coRole').value,
+    responderType:document.getElementById('coResponderType').value,
+    barangay:document.getElementById('coBarangay').value
+   });
+  });
  }
+ coUpdateOrgDatalist();
+}
+
+function coUpdateOrgDatalist(){
+ const role=document.getElementById('coRole').value;
+ const brgy=document.getElementById('coBarangay').value;
+ const list=document.getElementById('coOrgList');
+ if(!list||!window.SentriOffices) return;
+ SentriOffices.poolFor({
+  role:role,
+  responderType:document.getElementById('coResponderType').value,
+  barangay:brgy
+ }).then(function(pool){
+  var html='';
+  for(var i=0;i<pool.length;i++){
+   html+='<option value="'+String(pool[i]).replace(/"/g,'&quot;')+'">';
+  }
+  list.innerHTML=html;
+ }).catch(function(){});
+}
+
+function coInitMap(){
+ coInitOrgCombobox();
+ if(coMap||!window.L||!window.SentriGeo) return;
  coMap=L.map('coMap',{scrollWheelZoom:false}).setView([14.4243,120.9399],12);
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
  {maxZoom:19,attribution:'© OpenStreetMap'}).addTo(coMap);
@@ -1372,14 +1403,17 @@ function coSelectFeature(f,l){
  if(l.bringToFront)l.bringToFront();
  document.getElementById('coMunicipality').value='Imus';
  const role=document.getElementById('coRole').value;
+ const bName=f.properties.name||'';
  // LGU accounts are citywide: clicking only pins the city, barangay stays empty.
- document.getElementById('coBarangay').value=(role==='lgu')?'':(f.properties.name||'');
+ document.getElementById('coBarangay').value=(role==='lgu')?'':bName;
  // Auto-suggest the office unit: a barangay official's office is their hall.
- if(role!=='lgu'&&f.properties.name){
+ if(role!=='lgu'&&bName){
  const coOrg=document.getElementById('coOrg');
- const hall=(window.SentriOffices?SentriOffices.barangayHall(f.properties.name):'');
+ const hall=(window.SentriOffices?SentriOffices.barangayHall(bName):('Brgy. '+bName+' Hall, Imus'));
  const isOtherHall=coOrg.value===''||coOrg.value.indexOf('Hall, Imus')>-1||coOrg.value.indexOf('Hall')>-1;
  if(hall&&(isOtherHall))coOrg.value=hall;
+ coUpdateOrgDatalist();
+ if(coOrgAc&&coOrgAc.refresh)coOrgAc.refresh();
  }
 }
 function coClearTerritory(){
@@ -1389,11 +1423,13 @@ function coClearTerritory(){
  coSelLayer.setStyle({weight:1.5,color:'#2563eb',opacity:0.7,fillOpacity:0.08});
  coSelLayer=null;
  }
+ coUpdateOrgDatalist();
 }
 function openCreateOfficialModal(){
  document.getElementById('createOfficialForm').reset();
  document.getElementById('createOfficialMsg').style.display='none';
  coRoleChanged();
+ coInitOrgCombobox();
  coInitMap();
  coClearTerritory();
  document.getElementById('createOfficialModalOverlay').style.display='flex';
@@ -1413,6 +1449,7 @@ function coRoleChanged(){
  }else{
  rtWrap.style.display='none';
  }
+ coUpdateOrgDatalist();
  const hint=document.getElementById('coMapHint');
  hint.innerHTML=(role==='lgu')
  ?'<b>LGU = citywide.</b> Click the barangay polygon inside the city to pin its municipality — the account covers the whole city.'
