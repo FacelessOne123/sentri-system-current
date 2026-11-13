@@ -99,8 +99,8 @@ if($avRes&&$avRes->num_rows>0){$as=$conn->prepare("SELECT avatar_color FROM user
 function cq($conn,$sql,$t='',$p=[]){$s=$conn->prepare($sql);if($t&&$p){$refs=[];foreach($p as &$v)$refs[]=&$v;array_unshift($refs,$t);call_user_func_array([$s,'bind_param'],$refs);}$s->execute();$s->bind_result($n);$s->fetch();$s->close();return(int)$n;}
 $total_reports=cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0 AND status!='safe'");
 $danger_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
-$safe_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
-$my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=? AND is_archived=0 AND status!='safe'",'i',[$uid]);
+$safe_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' OR is_archived=1");
+$my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=?",'i',[$uid]);
 
 /* ── Per-view data ────────────────────────────────────────────── */
 $contacts = [];

@@ -564,6 +564,19 @@ switch ($action) {
  $rate->bind_param("i",$user_id); $rate->execute(); $rate->bind_result($cnt); $rate->fetch(); $rate->close();
  if ($cnt >= 10) { echo json_encode(['status'=>'error','message'=>'Posting limit reached (10/hr).']); exit; }
 
+ // Enforce 1-minute rate limit cooldown per account
+ $cd = $conn->prepare("SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS elapsed FROM reports WHERE user_id=? ORDER BY created_at DESC LIMIT 1");
+ $cd->bind_param("i", $user_id);
+ $cd->execute();
+ $cd_res = $cd->get_result()->fetch_assoc();
+ $cd->close();
+ if ($cd_res && $cd_res['elapsed'] !== null && (int)$cd_res['elapsed'] < 60) {
+     $wait_secs = max(1, 60 - (int)$cd_res['elapsed']);
+     http_response_code(429);
+     echo json_encode(['status'=>'error', 'message'=>"Rate limit: please wait {$wait_secs}s before submitting another report."]);
+     exit;
+ }
+
  ensureGeoColumns($conn);
 
  // Type string: i=user_id, s×7=text fields, s=lat, s=lng, i=radius, s=status, s=category
@@ -1192,7 +1205,7 @@ switch ($action) {
   }
  }
  if ($role === 'first_responder') {
- $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW(), is_archived=1 WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
  $stmt->bind_param("ii", $report_id, $user_id);
  } else {
  // Admin overrides are unconditional. Barangay can only resolve a caution
@@ -1205,7 +1218,7 @@ switch ($action) {
  } else {
   $extra = ' AND assigned_to IS NULL AND resolved_at IS NULL';
  }
- $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0$extra");
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW(), is_archived=1 WHERE id=? AND is_archived=0$extra");
  $stmt->bind_param("i", $report_id);
  }
  $stmt->execute();
@@ -1338,8 +1351,9 @@ switch ($action) {
    }
   }
  }
- $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL';
- // Race-safe version of the guard above: barangay may only resolve a caution
+ $res_at = ($new_status === 'safe') ? ', resolved_at=NOW(), is_archived=1' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL, is_archived=0';
+ // Race-safe version of the guard above: barangay may only resolve caution
+ // reports; LGU cannot win against a responder dispatch or concurrent resolve.
  $extra = '';
  if ($new_status === 'safe' && $role !== 'admin') {
   if ($role === 'barangay') {

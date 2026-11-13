@@ -12,11 +12,15 @@
   ? ('Brgy ' . $rep_brgy . ($rep_addr !== '' ? ', ' . $rep_addr : ''))
   : '';
  $responder_pending = $r['status'] === 'dangerous' && !empty($r['assigned_to']) && empty($r['resolved_at']);
+ $img_cnt = (int)($r['image_count'] ?? 0);
  ?>
- <tr data-status="<?= htmlspecialchars($r['status']) ?>"<?= $responder_pending ? ' data-responder-pending="1"' : '' ?>>
+ <tr data-status="<?= htmlspecialchars($r['status']) ?>" data-archived="<?= (int)($r['is_archived'] ?? 0) ?>"<?= $responder_pending ? ' data-responder-pending="1"' : '' ?>>
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
  <td style="font-weight:600;max-width:200px;">
  <?= htmlspecialchars(mb_strimwidth($r['title'],0,55,'…')) ?>
+ <?php if($img_cnt > 0): ?>
+ <span title="<?= $img_cnt ?> attached photo<?= $img_cnt > 1 ? 's' : '' ?>" style="margin-left:4px;display:inline-flex;align-items:center;gap:3px;font-size:0.65rem;font-weight:700;color:#2563eb;background:#eff6ff;padding:1px 6px;border-radius:4px;border:1px solid #bfdbfe;vertical-align:middle;"><i class="fas fa-camera"></i> <?= $img_cnt ?></span>
+ <?php endif; ?>
  <?php if($escalated): ?>
  <span title="Escalated to LGU" style="margin-left:4px;display:inline-flex;align-items:center;gap:3px;font-size:0.65rem;font-weight:700;color:#92400e;background:#fef3c7;padding:1px 6px;border-radius:4px;border:1px solid #fde68a;vertical-align:middle;"><i class="fas fa-arrow-up-from-bracket"></i> LGU</span>
  <?php endif; ?>

@@ -31,7 +31,7 @@ const TOKEN_EXPIRY_SECONDS = 86400 * 30; // 30 days
 function mobile_format_iso(?string $dt_str): ?string {
     if (!$dt_str) return null;
     try {
-        $tz = new DateTimeZone('America/New_York');
+        $tz = new DateTimeZone('Asia/Manila');
         $dt = new DateTime($dt_str, $tz);
         return $dt->format(DateTime::ATOM);
     } catch (Exception $e) {
@@ -261,6 +261,9 @@ switch ($action) {
         $search = trim($_GET['q'] ?? '');
         $limit = min(max((int)($_GET['limit'] ?? 100), 1), 200);
 
+        $is_mine = (!empty($_GET['mine']) || !empty($_GET['mine_only']));
+        $allow_archived = !empty($_GET['include_archived']) || ($status === 'safe') || ($status === 'archived');
+
         $query = "SELECT r.*, u.first_name, u.last_name, u.avatar_color, 
                          resp.first_name AS responder_first, resp.last_name AS responder_last, resp.responder_type AS responder_agency,
                          v.vote AS user_vote
@@ -268,9 +271,21 @@ switch ($action) {
                   LEFT JOIN users u ON r.user_id = u.id 
                   LEFT JOIN users resp ON r.assigned_to = resp.id
                   LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
-                  WHERE r.is_archived = 0";
+                  WHERE ";
         $params = [$auth_uid];
         $types = "i";
+
+        if ($is_mine) {
+            $query .= "r.user_id = ?";
+            $params[] = $auth_uid;
+            $types .= "i";
+        } else {
+            if ($allow_archived) {
+                $query .= "1=1";
+            } else {
+                $query .= "r.is_archived = 0 AND r.status != 'safe'";
+            }
+        }
 
         if ($category && $category !== 'all') {
             $query .= " AND r.category = ?";
@@ -303,11 +318,6 @@ switch ($action) {
             $query .= " AND r.created_at >= NOW() - INTERVAL 30 DAY";
         }
 
-        if (!empty($_GET['mine']) || !empty($_GET['mine_only'])) {
-            $query .= " AND r.user_id = ?";
-            $params[] = $auth_uid;
-            $types .= "i";
-        }
 
         $query .= " ORDER BY r.created_at DESC LIMIT ?";
         $params[] = $limit;
@@ -458,6 +468,20 @@ switch ($action) {
             mobile_respond(401, ['status' => 'error', 'message' => 'Unauthorized']);
         }
 
+        // Enforce 1-minute rate limit cooldown per account
+        $cd_stmt = $conn->prepare("SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS elapsed FROM reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
+        $cd_stmt->bind_param('i', $user['id']);
+        $cd_stmt->execute();
+        $cd_res = $cd_stmt->get_result()->fetch_assoc();
+        $cd_stmt->close();
+        if ($cd_res && $cd_res['elapsed'] !== null && (int)$cd_res['elapsed'] < 60) {
+            $wait_secs = max(1, 60 - (int)$cd_res['elapsed']);
+            mobile_respond(429, [
+                'status' => 'error',
+                'message' => "Please wait {$wait_secs}s before submitting another report."
+            ]);
+        }
+
         $title = trim($input['title'] ?? '');
         $description = trim($input['description'] ?? '');
         $category = trim($input['category'] ?? 'other');
@@ -483,29 +507,38 @@ switch ($action) {
             $status = 'caution';
         }
 
-        $stmt = $conn->prepare("INSERT INTO reports (user_id, title, description, location_name, barangay, city, province, latitude, longitude, radius_m, category, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param('issssssddiss', $user['id'], $title, $description, $location_name, $barangay, $city, $province, $latitude, $longitude, $radius_m, $category, $status);
+        $is_archived = ($status === 'safe') ? 1 : 0;
+        $stmt = $conn->prepare("INSERT INTO reports (user_id, title, description, location_name, barangay, city, province, latitude, longitude, radius_m, category, status, is_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param('issssssddissi', $user['id'], $title, $description, $location_name, $barangay, $city, $province, $latitude, $longitude, $radius_m, $category, $status, $is_archived);
 
         if ($stmt->execute()) {
             $report_id = $conn->insert_id;
             $stmt->close();
 
-            // Handle optional image upload
+            // Handle optional image upload (accepts 'image', 'photo', or 'photos')
             $uploaded_image_url = null;
+            $img_file = null;
             if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                $img_file = $_FILES['image'];
+            } elseif (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
+                $img_file = $_FILES['photo'];
+            } elseif (isset($_FILES['photos']) && !is_array($_FILES['photos']['name']) && $_FILES['photos']['error'] === UPLOAD_ERR_OK) {
+                $img_file = $_FILES['photos'];
+            }
+            if ($img_file) {
                 $upload_dir = __DIR__ . '/../uploads/reports/';
                 if (!is_dir($upload_dir)) {
                     mkdir($upload_dir, 0755, true);
                 }
-                $ext = strtolower(pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION));
+                $ext = strtolower(pathinfo($img_file['name'], PATHINFO_EXTENSION));
                 $safe_exts = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
                 if (in_array($ext, $safe_exts, true)) {
                     $new_name = 'report_' . $report_id . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
                     $dest = $upload_dir . $new_name;
-                    if (move_uploaded_file($_FILES['image']['tmp_name'], $dest)) {
+                    if (move_uploaded_file($img_file['tmp_name'], $dest)) {
                         $fsize = filesize($dest);
                         $mime = mime_content_type($dest);
-                        $orig = $_FILES['image']['name'];
+                        $orig = $img_file['name'];
 
                         $img_stmt = $conn->prepare("INSERT INTO report_images (report_id, file_name, original_name, mime_type, file_size) VALUES (?, ?, ?, ?, ?)");
                         $img_stmt->bind_param('isssi', $report_id, $new_name, $orig, $mime, $fsize);
@@ -558,17 +591,22 @@ switch ($action) {
             $stmt->close();
             mobile_respond(200, ['status' => 'success', 'message' => 'Response timestamp recorded']);
         } elseif ($action_type === 'resolve') {
-            $stmt = $conn->prepare("UPDATE reports SET status = 'safe', resolved_at = NOW() WHERE id = ?");
+            $stmt = $conn->prepare("UPDATE reports SET status = 'safe', resolved_at = NOW(), is_archived = 1 WHERE id = ?");
             $stmt->bind_param('i', $report_id);
             $stmt->execute();
             $stmt->close();
-            mobile_respond(200, ['status' => 'success', 'message' => 'Incident resolved and verified safe']);
+            mobile_respond(200, ['status' => 'success', 'message' => 'Incident resolved and verified safe (archived)']);
         } else {
             if (!in_array($new_status, ['dangerous', 'caution', 'safe'], true)) {
                 mobile_respond(400, ['status' => 'error', 'message' => 'Invalid status']);
             }
-            $stmt = $conn->prepare("UPDATE reports SET status = ? WHERE id = ?");
-            $stmt->bind_param('si', $new_status, $report_id);
+            if ($new_status === 'safe') {
+                $stmt = $conn->prepare("UPDATE reports SET status = 'safe', resolved_at = NOW(), is_archived = 1 WHERE id = ?");
+                $stmt->bind_param('i', $report_id);
+            } else {
+                $stmt = $conn->prepare("UPDATE reports SET status = ?, is_archived = 0 WHERE id = ?");
+                $stmt->bind_param('si', $new_status, $report_id);
+            }
             $stmt->execute();
             $stmt->close();
             mobile_respond(200, ['status' => 'success', 'message' => 'Status updated']);

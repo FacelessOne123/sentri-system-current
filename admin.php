@@ -1263,46 +1263,29 @@ const CO_POSITIONS={
  ],
  lgu:[
  {g:'Command / Department Heads',items:[
- 'City DRRMO Head (RA 10121)','City Health Officer',
- 'City Social Welfare & Development Officer','City Engineer',
- 'City Administrator','Public Information Officer']},
- {g:'Operations / Field',items:[
- 'DRRMO Operations & Warning Officer','DRRMO Search & Rescue Officer',
- 'City Sanitation Officer']},
- {g:'Support / Admin',items:['Administrative Officer']},
- {g:'Other',items:['__other__']}
+ 'City Administrator']}
  ],
  first_responder:{
  bfp:[
- {g:'Command',items:['Fire Marshal (Station Head)']},
- {g:'Senior Fire Officer',items:['Senior Fire Officer I (SFO1)','Senior Fire Officer II (SFO2)','Senior Fire Officer III (SFO3)','Senior Fire Officer IV (SFO4)']},
- {g:'Fire Officer',items:['Fire Officer I (FO1)','Fire Officer II (FO2)','Fire Officer III (FO3)']},
- {g:'Specialty',items:['Arson Investigator']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['Fire Marshal (Station Head)']}
+ ],
  pnp:[
- {g:'Command / Station Leadership',items:['Station Commander','Police Major','Police Captain','Police Lieutenant']},
- {g:'Senior Non-Commissioned',items:['Police Executive Master Sergeant','Police Chief Master Sergeant','Police Master Sergeant']},
- {g:'Operational / Patrol',items:['Patrol Corporal','Patrolman / Patrolwoman']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['Station Commander']}
+ ],
  ems:[
- {g:'Command',items:['EMS Chief']},
- {g:'Operations',items:['Team Leader','Paramedic','EMT-Basic','EMS Dispatcher','EMS Driver']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['EMS Chief']}
+ ],
  drrmo:[
- {g:'Command',items:['DRRMO Head']},
- {g:'Operations',items:['Operations & Warning Officer','Search & Rescue Officer','Rescue Team Leader']},
- {g:'Support',items:['Administrative Officer']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['DRRMO Head']}
+ ],
  mdrrmo:[
- {g:'Command',items:['MDRRMO Head']},
- {g:'Operations',items:['Operations Officer','Rescue Team Leader','Rescue Technician','Communications Officer']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['MDRRMO Head']}
+ ],
  hospital:[
- {g:'Medical Leadership',items:['Emergency Department Head','Facility Administrator']},
- {g:'Clinical Staff',items:['ER Physician on Duty','ER Head Nurse','Duty Nurse','Medical Technologist']},
- {g:'Other',items:['__other__']}],
+ {g:'Medical Leadership',items:['Emergency Department Head']}
+ ],
  other:[
- {g:'Other',items:['Other (volunteer / other agency)']}
+ {g:'Command',items:['Lead Responder']}
  ]
  },
  community:[
@@ -1339,7 +1322,21 @@ function coPopulatePositions(){
 }
 function coPositionChanged(){
  const sel=document.getElementById('coPosition');
+ const role=document.getElementById('coRole').value;
  document.getElementById('coPositionOther').style.display=(sel.value===CO_OTHER)?'block':'none';
+ if(role==='lgu'||sel.value==='City Administrator'){
+  const coMuni=document.getElementById('coMunicipality');
+  const coBrgy=document.getElementById('coBarangay');
+  const coOrg=document.getElementById('coOrg');
+  if(coMuni) coMuni.value='Imus';
+  if(coBrgy) coBrgy.value='';
+  if(coOrg){
+   coOrg.value='City Government of Imus';
+   coOrg.readOnly=true;
+   coOrg.style.background='#f3f4f6';
+   coOrg.style.color='#374151';
+  }
+ }
 }
 let coPyramid=null;
 let coOrgAc=null;
@@ -1417,11 +1414,16 @@ function coSelectFeature(f,l){
  }
 }
 function coClearTerritory(){
+ const role=document.getElementById('coRole').value;
  document.getElementById('coBarangay').value='';
- document.getElementById('coMunicipality').value='';
+ if(role==='lgu'){
+  document.getElementById('coMunicipality').value='Imus';
+ }else{
+  document.getElementById('coMunicipality').value='';
+ }
  if(coSelLayer&&coMapLayer){
- coSelLayer.setStyle({weight:1.5,color:'#2563eb',opacity:0.7,fillOpacity:0.08});
- coSelLayer=null;
+  coSelLayer.setStyle({weight:1.5,color:'#2563eb',opacity:0.7,fillOpacity:0.08});
+  coSelLayer=null;
  }
  coUpdateOrgDatalist();
 }
@@ -1443,19 +1445,40 @@ function coRoleChanged(){
  const role=document.getElementById('coRole').value;
  const rt=document.getElementById('coResponderType');
  const rtWrap=document.getElementById('coRtypeWrap');
+ const coOrg=document.getElementById('coOrg');
+ const coMuni=document.getElementById('coMunicipality');
+ const coBrgy=document.getElementById('coBarangay');
  if(role==='first_responder'){
- rtWrap.style.display='';
- if(!rt.value)rt.value='bfp';
+  rtWrap.style.display='';
+  if(!rt.value)rt.value='bfp';
  }else{
- rtWrap.style.display='none';
+  rtWrap.style.display='none';
+ }
+ if(role==='lgu'){
+  if(coMuni) coMuni.value='Imus';
+  if(coBrgy) coBrgy.value='';
+  if(coOrg){
+   coOrg.value='City Government of Imus';
+   coOrg.readOnly=true;
+   coOrg.style.background='#f3f4f6';
+   coOrg.style.color='#374151';
+  }
+ }else{
+  if(coOrg && coOrg.readOnly){
+   coOrg.readOnly=false;
+   coOrg.style.background='#fafafa';
+   coOrg.style.color='';
+   if(coOrg.value==='City Government of Imus') coOrg.value='';
+   if(coMuni && coMuni.value==='Imus') coMuni.value='';
+  }
  }
  coUpdateOrgDatalist();
  const hint=document.getElementById('coMapHint');
  hint.innerHTML=(role==='lgu')
- ?'<b>LGU = citywide.</b> Click the barangay polygon inside the city to pin its municipality — the account covers the whole city.'
- :(role==='community')
- ?'<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident\'s purok.'
- :'<b>Click the official\'s barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.';
+  ? "<b>LGU = citywide.</b> Automatically locked to Imus City and City Government of Imus."
+  :(role==='community')
+  ? "<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident's purok."
+  : "<b>Click the official's barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.";
  coPopulatePositions();
 }
 function coShowMsg(type,text){

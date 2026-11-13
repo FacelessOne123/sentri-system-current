@@ -55,10 +55,10 @@ $BRGY_COND = brgy_sql('r.barangay') . " = ?";
 // Stats - strictly scoped to this barangay official's assigned territory.
 // If no barangay is assigned, stats remain 0 to prevent unauthorized citywide data leak.
 if ($brgy) {
- $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key]);
  $danger = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
  $caution = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
- $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key]);
 } else {
  $total = 0; $danger = 0; $caution = 0; $safe = 0;
 }
@@ -79,7 +79,7 @@ if (in_array($view, ['overview','reports'])) {
  $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
  if ($brgy) {
   $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1){$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
   $s->bind_param("s", $brgy_key);
   $s->execute(); $res=$s->get_result();
   while($row=$res->fetch_assoc()) $reports[]=$row;
@@ -117,7 +117,7 @@ $map_reports = [];
 if ($view === 'map') {
  if ($brgy) {
   $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
   $s->bind_param("s", $brgy_key);
   $s->execute(); $res=$s->get_result();
   while($row=$res->fetch_assoc()) $map_reports[]=$row;
@@ -125,7 +125,7 @@ if ($view === 'map') {
  }
 }
 $map_total_all = $brgy
- ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key])
+ ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key])
  : 0;
 
 $nav_items = [
@@ -309,6 +309,12 @@ tr:hover td{background:#fafafa;}
 /* OVERLAY */
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1050;}
 .overlay.show{display:block;}
+/* LIGHTBOX PREVIEW */
+.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:2000;justify-content:center;align-items:center;cursor:zoom-out;padding:20px;}
+.lightbox.open{display:flex;}
+.lightbox img{max-width:90vw;max-height:90vh;border-radius:12px;object-fit:contain;box-shadow:0 10px 40px rgba(0,0,0,0.6);}
+.lightbox-close{position:absolute;top:20px;right:24px;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:1.3rem;cursor:pointer;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;transition:background 0.2s;}
+.lightbox-close:hover{background:rgba(255,255,255,0.3);}
 /* RESPONSIVE */
 @media(max-width:1000px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
 @media(max-width:860px){
@@ -375,6 +381,12 @@ tr:hover td{background:#fafafa;}
  <!-- populated dynamically by openModal() based on report state -->
  </div>
  </div>
+</div>
+
+<!-- ═══ LIGHTBOX PREVIEW ═══ -->
+<div class="lightbox" id="lightbox" onclick="closePhotoPreview()">
+ <button class="lightbox-close" onclick="closePhotoPreview()"><i class="fas fa-xmark"></i></button>
+ <img id="lightboxImg" src="" alt="Photo Preview">
 </div>
 
 <aside class="sidebar" id="sidebar">
@@ -466,10 +478,10 @@ tr:hover td{background:#fafafa;}
  <span class="card-meta" id="rptCount"><?= count($reports) ?> records</span>
  </div>
  <div class="reports-filter-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
- <button class="rf-btn rf-active" onclick="filterReports('all',this)">All</button>
+ <button class="rf-btn rf-active" onclick="filterReports('all',this)">All Active</button>
  <button class="rf-btn" onclick="filterReports('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="rf-btn" onclick="filterReports('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
- <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+ <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
  <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
  </div>
@@ -542,10 +554,10 @@ tr:hover td{background:#fafafa;}
  <div class="map-wrap">
  <div class="map-controls">
  <h3><i class="fas fa-map-location-dot" style="color:var(--green);margin-right:6px;"></i>Incident Map<?= $brgy ? ' - '.htmlspecialchars($brgy) : '' ?></h3>
- <button class="filter-btn active-all" onclick="filterMap('all',this)">All</button>
+ <button class="filter-btn active-all" onclick="filterMap('all',this)">All Active</button>
  <button class="filter-btn" onclick="filterMap('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="filter-btn" onclick="filterMap('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
- <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+ <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <button class="filter-btn" id="toggleHazardRings" onclick="toggleHazardBuffer(this)" title="Toggle 250m/150m safety hazard buffer rings"><i class="fas fa-bullseye" style="color:#ef4444;font-size:0.7rem;"></i> Hazard Buffers</button>
  <button class="filter-btn" id="toggleHeatmap" onclick="toggleHeatmapDensity(this)" title="Toggle incident intensity cluster overlay"><i class="fas fa-fire-flame-curved" style="color:#f59e0b;font-size:0.7rem;"></i> Density Heatmap</button>
  <div style="position:relative;margin-left:auto;">
@@ -570,6 +582,7 @@ tr:hover td{background:#fafafa;}
  return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],
  'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),
  'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
+ 'is_archived'=>(int)($r['is_archived']??0),
  'reporter'=>htmlspecialchars(trim($r['first_name'].' '.$r['last_name']),ENT_QUOTES),
  'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),
  'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),
@@ -777,7 +790,15 @@ tr:hover td{background:#fafafa;}
  function updateMapFilter(){
  allMapMarkers.forEach(function(m){
  var r = m.reportData;
- var matchStatus = (currentMapStatus === 'all' || r.status === currentMapStatus);
+ var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
+ var matchStatus = false;
+ if(currentMapStatus === 'all'){
+  matchStatus = !isArchivedOrSafe;
+ } else if(currentMapStatus === 'safe' || currentMapStatus === 'archived'){
+  matchStatus = isArchivedOrSafe;
+ } else {
+  matchStatus = (r.status === currentMapStatus && !r.is_archived);
+ }
  var matchQuery = true;
  if(currentMapQuery){
  var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'') + ' ' + (r.reporter||'')).toLowerCase();
@@ -874,18 +895,57 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+esc(residence)+'</div></div>':'')+
  '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+esc(date)+'</div></div>'+
  (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+esc(desc)+'</div></div>':'')+
- '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
+ '<div id="brgyModalPhotosWrap" style="margin-top:14px;display:none;"></div>' +
+  '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
 
  try {
- fetch('../api/reports.php?action=get_lifecycle&report_id=' + id).then(r=>r.json()).then(data=>{
+  fetch('../api/reports.php?action=get_report_images&report_id=' + id).then(function(r){ return r.json(); }).then(function(data){
+   var pw = document.getElementById('brgyModalPhotosWrap');
+   if (!pw) return;
+   if (data && data.status === 'success' && Array.isArray(data.images) && data.images.length > 0) {
+    pw.style.display = 'block';
+    var count = data.images.length;
+    var h = '<div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">' +
+     '<i class="fas fa-camera" style="color:var(--green,#16a34a);"></i> Attached Photos (' + count + ')' +
+     '</div>' +
+     '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:10px;">';
+    data.images.forEach(function(img, idx) {
+     var imgUrl = '../' + img.url;
+     h += '<div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);aspect-ratio:4/3;background:#0f172a;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.1);" onclick="openPhotoPreview(\'' + imgUrl.replace(/'/g, "\\'") + '\')">' +
+      '<img src="' + imgUrl + '" alt="Incident Photo ' + (idx + 1) + '" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy" onerror="this.parentElement.style.display=\'none\'">' +
+      '<div style="position:absolute;bottom:5px;right:6px;background:rgba(0,0,0,0.65);color:#fff;font-size:0.65rem;font-weight:600;padding:2px 7px;border-radius:12px;backdrop-filter:blur(2px);display:flex;align-items:center;gap:3px;"><i class="fas fa-magnifying-glass-plus"></i> ' + (idx+1) + '/' + count + '</div>' +
+      '</div>';
+    });
+    h += '</div>';
+    pw.innerHTML = h;
+   } else {
+    pw.style.display = 'none';
+    pw.innerHTML = '';
+   }
+  }).catch(function(){
+   var pw = document.getElementById('brgyModalPhotosWrap');
+   if (pw) pw.style.display = 'none';
+  });
+ } catch(e) {}
+
+ try {
+  fetch('../api/reports.php?action=get_lifecycle&report_id=' + id).then(r=>r.json()).then(data=>{
  if (data.status === 'success' && data.report) {
  var rep = data.report;
+ var parsePhtDate = function(s) {
+  if (!s) return null;
+  var d = new Date(String(s).replace(' ', 'T'));
+  return isNaN(d.getTime()) ? null : d;
+ };
+ var citizenDate = parsePhtDate(rep.created_at);
+ var respondedDate = parsePhtDate(rep.responded_at);
+ var resolvedDate = parsePhtDate(rep.resolved_at);
  var steps = [
- { title: 'Citizen Reported', icon: 'fa-bullhorn', color: '#3b82f6', done: true, time: rep.created_at ? new Date(rep.created_at).toLocaleString('en-PH') : date, desc: 'Reported by ' + (rep.reporter_name || reporter) },
+ { title: 'Citizen Reported', icon: 'fa-bullhorn', color: '#3b82f6', done: true, time: citizenDate ? citizenDate.toLocaleString('en-PH') : date, desc: 'Reported by ' + (rep.reporter_name || reporter) },
  { title: 'Barangay / LGU Escalation', icon: 'fa-building-shield', color: '#f59e0b', done: !!rep.escalated_to_lgu || rep.status === 'dangerous' || !!escalated, time: (rep.escalated_to_lgu || escalated) ? 'Escalated to LGU' : 'Monitored locally', desc: (rep.escalated_to_lgu || escalated) ? 'Prioritized for municipal response' : 'Barangay tier monitoring' },
  { title: 'LGU Dispatch to Unit', icon: 'fa-truck-fast', color: '#8b5cf6', done: !!rep.assigned_to, time: rep.assigned_to ? ('Unit: ' + (rep.responder_name || 'Unit') + (rep.responder_agency ? ' (' + rep.responder_agency.toUpperCase() + ')' : '')) : 'Pending assignment', desc: rep.assigned_to ? 'Emergency unit assigned' : 'Awaiting LGU dispatch' },
- { title: 'Unit Response & En Route', icon: 'fa-person-running', color: '#06b6d4', done: !!rep.responded_at || !!rep.accepted_at, time: rep.responded_at ? new Date(rep.responded_at).toLocaleTimeString('en-PH') : (rep.accepted_at ? 'Accepted' : 'Standby'), desc: rep.responded_at ? 'Responders arrived on scene' : 'Dispatched unit in transit' },
- { title: 'Scene Cleared & Resolved', icon: 'fa-circle-check', color: '#10b981', done: (rep.status === 'safe' || !!rep.resolved_at || isResolved), time: rep.resolved_at ? new Date(rep.resolved_at).toLocaleString('en-PH') : (rep.status === 'safe' ? 'Resolved' : 'Active'), desc: (rep.status === 'safe' || !!rep.resolved_at || isResolved) ? 'Hazard safely resolved' : 'Active emergency resolution in progress' }
+ { title: 'Unit Response & En Route', icon: 'fa-person-running', color: '#06b6d4', done: !!rep.responded_at || !!rep.accepted_at, time: respondedDate ? respondedDate.toLocaleTimeString('en-PH') : (rep.accepted_at ? 'Accepted' : 'Standby'), desc: rep.responded_at ? 'Responders arrived on scene' : 'Dispatched unit in transit' },
+ { title: 'Scene Cleared & Resolved', icon: 'fa-circle-check', color: '#10b981', done: (rep.status === 'safe' || !!rep.resolved_at || isResolved), time: resolvedDate ? resolvedDate.toLocaleString('en-PH') : (rep.status === 'safe' ? 'Resolved' : 'Active'), desc: (rep.status === 'safe' || !!rep.resolved_at || isResolved) ? 'Hazard safely resolved' : 'Active emergency resolution in progress' }
  ];
 
  var tlHtml = '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">' +
@@ -984,6 +1044,18 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
 document.getElementById('reportModal').addEventListener('click', function(e) { if(e.target===this) closeModal(); });
 
 function closeModal() { document.getElementById('reportModal').classList.remove('show'); }
+
+function openPhotoPreview(url) {
+ var lb = document.getElementById('lightbox');
+ var img = document.getElementById('lightboxImg');
+ if (!lb || !img) return;
+ img.src = url;
+ lb.classList.add('open');
+}
+function closePhotoPreview() {
+ var lb = document.getElementById('lightbox');
+ if (lb) lb.classList.remove('open');
+}
 
 // ── Resolve ───────────────────────────────────────────────────────────────
 async function doResolve(btn) {
@@ -1224,8 +1296,17 @@ function applyRptFilters() {
  rows.forEach(function(row) {
  var statusEl = row.querySelector('.pill');
  var status = statusEl ? statusEl.className.replace(/pill\s*/g,'').replace('pill-','').trim() : '';
+ var isArchivedOrSafe = (status === 'safe' || row.getAttribute('data-archived') === '1');
+ var matchStatus = false;
+ if(activeRptStatus === 'all'){
+  matchStatus = !isArchivedOrSafe;
+ } else if(activeRptStatus === 'safe' || activeRptStatus === 'archived'){
+  matchStatus = isArchivedOrSafe;
+ } else {
+  matchStatus = (status === activeRptStatus && row.getAttribute('data-archived') !== '1');
+ }
  var text = row.textContent.toLowerCase();
- var show = (activeRptStatus === 'all' || status === activeRptStatus) && (!q || text.includes(q));
+ var show = matchStatus && (!q || text.includes(q));
  row.style.display = show ? '' : 'none';
  if (show) visible++;
  });
