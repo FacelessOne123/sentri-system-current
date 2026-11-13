@@ -848,7 +848,7 @@ function actionToast(message,type){
  </div>
 
   <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
- [$pm_type,$pm_text]=$profile_msg?explode(':',$profile_msg,2):['','']; ?>
+  <?php [$pm_type,$pm_text]=$profile_msg?explode(':',$profile_msg,2):['','']; ?>
  <div class="profile-grid">
  <div class="profile-card">
  <div class="profile-avatar-section">
