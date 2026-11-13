@@ -661,12 +661,12 @@ function actionToast(message,type){
  <div class="brand-icon-s" style="background:rgba(243,156,18,.2);border-color:rgba(243,156,18,.4);"><i class="fas fa-shield-halved" style="color:#f39c12;"></i></div>
  <div><div class="brand-name-s">SenTri</div><div class="brand-sub">Community Portal</div></div>
  </div>
- <button class="toggle-btn" onclick="closeSidebar()"><i class="fas fa-xmark"></i></button>
+ <button type="button" class="toggle-btn" onclick="closeSidebar()" aria-label="Close navigation menu"><i class="fas fa-xmark" style="pointer-events:none;"></i></button>
  </div>
  <nav class="menu">
  <?php foreach($nav as $key=>$item): ?>
- <a href="javascript:void(0)" onclick="showTab('<?= $key ?>')" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
- <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
+ <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
+ <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i> <?= $item['label'] ?>
  <?php if($key==='my_reports'&&$my_count>0): ?><span class="menu-badge"><?= $my_count ?></span><?php endif; ?>
  </a>
  <?php endforeach; ?>
@@ -691,7 +691,7 @@ function actionToast(message,type){
 <div class="main" id="main">
  <div class="topbar">
  <div class="topbar-left">
- <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
+ <button type="button" class="ham-btn" onclick="openSidebar()" aria-label="Open navigation menu"><i class="fas fa-bars" style="pointer-events:none;"></i></button>
  <h1><i id="commPageIcon" class="fas <?= $nav[$view]['icon']??'fa-house' ?>" style="color:var(--blue-accent);"></i><span id="commPageTitle"><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?></span></h1>
  </div>
  <div class="right-top">

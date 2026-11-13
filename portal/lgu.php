@@ -548,8 +548,8 @@ tr:hover td{background:#fafafa;}
  <?php elseif($key === 'profile'): ?>
  <div class="sb-section">Account</div>
  <?php endif; ?>
- <a href="javascript:void(0)" onclick="showTab('<?= $key ?>')" id="nav-<?= $key ?>" class="<?= $view===$key ? 'active' : '' ?>">
- <i class="fas <?= $item['icon'] ?>"></i>
+ <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key ? 'active' : '' ?>">
+ <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i>
  <span><?= $item['label'] ?></span>
  </a>
  <?php endforeach; ?>
@@ -576,7 +576,7 @@ tr:hover td{background:#fafafa;}
    <div class="gov-strip"></div>
    <div class="topbar-header-row">
     <div class="topbar-left">
-     <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
+     <button type="button" class="ham-btn" onclick="openSidebar()" aria-label="Open sidebar menu"><i class="fas fa-bars" style="pointer-events:none;"></i></button>
      <div style="min-width:0;">
       <div class="page-title" id="lguPageTitle"><?= htmlspecialchars($page_titles[$view] ?? 'LGU Portal') ?></div>
       <div class="page-sub"><?= htmlspecialchars($org) ?><?= $city ? ' - '.htmlspecialchars($city) : '' ?></div>

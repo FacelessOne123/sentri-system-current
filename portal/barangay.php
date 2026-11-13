@@ -173,12 +173,12 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .sb-seal{width:40px;height:40px;border-radius:50%;background:rgba(243,156,18,0.2);border:2px solid rgba(243,156,18,0.45);display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--gold);flex-shrink:0;}
 .sb-title{font-size:0.96rem;font-weight:800;line-height:1.2;}
 .sb-sub{font-size:0.58rem;color:rgba(255,255,255,0.45);letter-spacing:1.5px;text-transform:uppercase;}
-.sb-close{background:none;border:none;color:rgba(255,255,255,0.6);font-size:1.1rem;cursor:pointer;padding:4px 6px;border-radius:6px;display:none;flex-shrink:0;}
+.sb-close{background:none;border:none;color:rgba(255,255,255,0.7);font-size:1.2rem;cursor:pointer;padding:8px 12px;border-radius:8px;display:none;flex-shrink:0;min-width:44px;min-height:44px;align-items:center;justify-content:center;touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
 .sb-juri{padding:10px 16px;background:rgba(0,0,0,0.2);border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0;}
 .sb-juri p{font-size:0.65rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;}
 .sb-juri strong{font-size:0.82rem;color:#fff;font-weight:700;display:block;word-break:break-word;}
 .sb-nav{padding:12px 8px;flex:1;overflow-y:auto;}
-.sb-nav a{display:flex;align-items:center;gap:10px;color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.84rem;font-weight:500;padding:10px 12px;border-radius:10px;transition:all 0.18s;margin-bottom:2px;white-space:nowrap;}
+.sb-nav a{display:flex;align-items:center;gap:10px;color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.84rem;font-weight:500;padding:12px 14px;border-radius:10px;transition:all 0.18s;margin-bottom:3px;white-space:nowrap;touch-action:manipulation;-webkit-tap-highlight-color:rgba(255,255,255,0.15);cursor:pointer;}
 .sb-nav a:hover{background:rgba(255,255,255,0.1);color:#fff;}
 .sb-nav a.active{background:rgba(255,255,255,0.15);color:#fff;font-weight:700;}
 .sb-nav a i{width:18px;text-align:center;font-size:0.9rem;flex-shrink:0;}
@@ -196,7 +196,7 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .topbar{background:#fff;border-bottom:4px solid var(--green);padding:0 24px;min-height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 10px rgba(0,0,0,0.07);gap:10px;}
 .topbar-header-row{display:contents;}
 .topbar-left{display:flex;align-items:center;gap:12px;min-width:0;}
-.ham-btn{background:none;border:none;font-size:1.15rem;color:var(--muted);cursor:pointer;padding:7px;border-radius:8px;display:none;flex-shrink:0;}
+.ham-btn{background:none;border:none;font-size:1.25rem;color:var(--muted);cursor:pointer;padding:10px 12px;border-radius:8px;display:none;flex-shrink:0;align-items:center;justify-content:center;min-width:44px;min-height:44px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
 .ham-btn:hover{background:#f3f4f6;}
 .page-title{font-size:1rem;font-weight:800;color:var(--green-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .page-sub{font-size:0.72rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -402,7 +402,7 @@ tr:hover td{background:#fafafa;}
  <div class="sb-seal"><i class="fas fa-house-flag"></i></div>
  <div><div class="sb-title">SenTri</div><div class="sb-sub">Barangay Portal</div></div>
  </div>
- <button class="sb-close" onclick="closeSidebar()"><i class="fas fa-xmark"></i></button>
+ <button type="button" class="sb-close" onclick="closeSidebar()" aria-label="Close sidebar menu"><i class="fas fa-xmark" style="pointer-events:none;"></i></button>
  </div>
  <div class="sb-juri">
  <p>Jurisdiction</p>
@@ -412,8 +412,8 @@ tr:hover td{background:#fafafa;}
  <?php foreach($nav_items as $key => $item): ?>
  <?php if($key === 'contacts'): ?><div class="sb-section">Management</div><?php endif; ?>
  <?php if($key === 'profile'): ?><div class="sb-section">Account</div><?php endif; ?>
- <a href="javascript:void(0)" onclick="showTab('<?= $key ?>')" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
- <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
+ <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
+ <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i> <?= $item['label'] ?>
  </a>
  <?php endforeach; ?>
  </nav>
@@ -430,7 +430,7 @@ tr:hover td{background:#fafafa;}
  <div class="topbar">
   <div class="topbar-header-row">
    <div class="topbar-left">
-    <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
+    <button type="button" class="ham-btn" onclick="openSidebar()" aria-label="Open sidebar menu"><i class="fas fa-bars" style="pointer-events:none;"></i></button>
     <div style="min-width:0;">
      <div class="page-title" id="brgyPageTitle"><?= htmlspecialchars($page_titles[$view] ?? 'Barangay Portal') ?></div>
      <div class="page-sub"><?= htmlspecialchars($org) ?><?= $city ? ' - '.htmlspecialchars($city) : '' ?></div>
@@ -868,6 +868,23 @@ tr:hover td{background:#fafafa;}
 
 <script>
 
+// ── Sidebar toggling (fast mobile touch support) ──────────────────────────
+function openSidebar(){
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('overlay');
+  if (sb) sb.classList.add('open');
+  if (ov) ov.classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSidebar(){
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('overlay');
+  if (sb) sb.classList.remove('open');
+  if (ov) ov.classList.remove('show');
+  document.body.style.overflow = '';
+}
+
 // ── Client-side Tab Navigation ───────────────────────────────────────────
 const tabTitles = {
   overview: 'Barangay Dashboard',
@@ -896,10 +913,32 @@ function showTab(name) {
       }
     }, 80);
   }
-  if (typeof closeSidebar === 'function') closeSidebar();
+  closeSidebar();
 }
 
 window.addEventListener('DOMContentLoaded', function(){
+  var ham = document.querySelector('.ham-btn');
+  if (ham) {
+    ham.addEventListener('touchstart', function(e){
+      openSidebar();
+      e.preventDefault();
+    }, {passive: false});
+  }
+  var closeBtn = document.querySelector('.sb-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('touchstart', function(e){
+      closeSidebar();
+      e.preventDefault();
+    }, {passive: false});
+  }
+  var overlay = document.getElementById('overlay');
+  if (overlay) {
+    overlay.addEventListener('touchstart', function(e){
+      closeSidebar();
+      e.preventDefault();
+    }, {passive: false});
+  }
+
   var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
   if (hash && tabTitles[hash]) {
     showTab(hash);
@@ -1335,9 +1374,7 @@ function updateEscalateBadgeInRow(id) {
  // No-op - escalation doesn't change the row's status pill, just a note
 }
 
-// ── Sidebar & filter ──────────────────────────────────────────────────────
-function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.style.overflow='hidden';}
-function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.style.overflow='';}
+// ── Report filtering ─────────────────────────────────────────────────────
 
 var activeRptStatus = 'all';
 function filterReports(status, btn) {
