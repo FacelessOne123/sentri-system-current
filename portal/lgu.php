@@ -785,7 +785,7 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
  <div class="table-wrap">
- <table>
+ <table id="lguReportsTable">
  <thead><tr><th>#</th><th>Title</th><th>Category</th><th>Status</th><th>Barangay</th><th>Reported By</th><th>Date</th><th>Actions</th></tr></thead>
  <tbody>
  <?php foreach($all_reports as $r):
@@ -819,6 +819,7 @@ tr:hover td{background:#fafafa;}
  </tbody>
  </table>
  </div>
+ <div id="lguReportsPager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--border);background:#f8fafc;"></div>
  <?php endif; ?>
  </div>
 
@@ -829,12 +830,26 @@ tr:hover td{background:#fafafa;}
  <?php
  $type_colors = ['hospital'=>['#ecfdf5','#059669'],'fire'=>['#fef2f2','#dc2626'],'police'=>['#eff6ff','#2563eb'],'barangay'=>['#f0fdf4','#166534'],'municipal'=>['#f0f7ff','#0a3d62'],'other'=>['#f5f3ff','#7c3aed']];
  $type_icons = ['hospital'=>'fa-hospital','fire'=>'fa-fire-extinguisher','police'=>'fa-shield','barangay'=>'fa-house-flag','municipal'=>'fa-landmark','other'=>'fa-phone'];
+ // Barangay names available for the contacts filter (barangay-typed rows only).
+ $brgy_names = [];
+ foreach($contacts as $c){ if($c['type']==='barangay' && trim((string)$c['barangay'])!==''){ $brgy_names[trim($c['barangay'])] = true; } }
+ $brgy_names = array_keys($brgy_names); sort($brgy_names, SORT_NATURAL | SORT_FLAG_CASE);
  ?>
  <div class="card">
  <div class="card-header">
  <h3><i class="fas fa-address-book" style="color:var(--navy);margin-right:6px;"></i>Emergency Contacts</h3>
- <div style="display:flex;align-items:center;gap:10px;">
- <span class="card-meta"><?= count($contacts) ?> contacts</span>
+ <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+ <span class="card-meta" id="contactCount"><?= count($contacts) ?> contacts</span>
+ <select id="contactScopeSel" onchange="filterContacts()" title="Filter contacts by type" style="padding:5px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:0.78rem;font-weight:600;font-family:'Inter',sans-serif;background:#fff;cursor:pointer;outline:none;">
+ <option value="lgu" selected>LGU</option>
+ <option value="barangay">Brgy</option>
+ </select>
+ <input type="text" id="contactBrgyInput" list="contactBrgyList" oninput="filterContacts()" placeholder="Type barangay…" title="Search barangay contacts" style="display:none;width:150px;padding:5px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:0.78rem;font-weight:600;font-family:'Inter',sans-serif;background:#fff;outline:none;">
+ <datalist id="contactBrgyList">
+ <?php foreach($brgy_names as $bn): ?>
+ <option value="<?= htmlspecialchars($bn) ?>"></option>
+ <?php endforeach; ?>
+ </datalist>
  <button onclick="openLguAddContact()" style="background:var(--navy);color:#fff;border:none;padding:6px 13px;border-radius:8px;font-size:0.78rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:'Inter',sans-serif;"><i class="fas fa-plus"></i> Add</button>
  </div>
  </div>
@@ -844,7 +859,7 @@ tr:hover td{background:#fafafa;}
  $tc = $type_colors[$c['type']] ?? $type_colors['other'];
  $ti = $type_icons[$c['type']] ?? 'fa-phone';
  ?>
- <div class="contact-row">
+ <div class="contact-row" data-type="<?= htmlspecialchars($c['type']) ?>" data-barangay="<?= htmlspecialchars(trim((string)($c['barangay'] ?? ''))) ?>">
  <div class="contact-icon" style="background:<?= $tc[0] ?>;color:<?= $tc[1] ?>;"><i class="fas <?= $ti ?>"></i></div>
  <div style="flex:1;min-width:0;">
  <div class="contact-name"><?= htmlspecialchars($c['name']) ?></div>
@@ -858,6 +873,7 @@ tr:hover td{background:#fafafa;}
  <button onclick="lguDeleteContact(<?= $c['id'] ?>,'<?= addslashes(htmlspecialchars($c['name'])) ?>')" style="flex-shrink:0;background:#fef2f2;color:#dc2626;border:1.5px solid #fecaca;padding:4px 10px;border-radius:7px;font-size:0.74rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;"><i class="fas fa-trash"></i></button>
  </div>
  <?php endforeach; endif; ?>
+ <div class="empty" id="contactFilterEmpty" style="display:none;"><i class="fas fa-address-book"></i>No contacts match this filter.</div>
  </div>
 
  </div>
@@ -1725,6 +1741,7 @@ async function lguSaveContact(){
  var btn=document.getElementById('lgu_cn_saveBtn');btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Saving…';
  var fd=new FormData();fd.append('action','create');fd.append('name',name);fd.append('type',type);
  fd.append('city',city);fd.append('contact_number',phone);fd.append('contact_email',email);
+ if(type==='barangay'){fd.append('barangay',(document.getElementById('lgu_cn_barangay').value||'').trim());}
  try{
  var res=await fetch('../api/contacts.php',{method:'POST',body:fd});
  var data=await res.json();
@@ -1732,27 +1749,105 @@ async function lguSaveContact(){
  else{err.textContent=data.message||'Save failed.';err.style.display='block';btn.disabled=false;btn.innerHTML='<i class="fas fa-floppy-disk"></i> Save Contact';}
  }catch(e){err.textContent='Request failed.';err.style.display='block';btn.disabled=false;btn.innerHTML='<i class="fas fa-floppy-disk"></i> Save Contact';}
 }
-// ── Table Filtering & Search ────────────────────────────────────────────────
-var currentTableFilter = 'all';
-var currentTableQuery = '';
-
-function applyTableFilters(){
- var rows = document.querySelectorAll('.table-wrap table tbody tr');
+// ── Contacts type filter (LGU default / Brgy) ───────────────────────────────
+function toggleLguContactBrgy(){
+ var t=document.getElementById('lgu_cn_type'), w=document.getElementById('lgu_cn_brgy_wrap');
+ if(t&&w) w.style.display = (t.value==='barangay') ? '' : 'none';
+}
+function filterContacts(){
+ var scopeEl=document.getElementById('contactScopeSel');
+ var brgyEl=document.getElementById('contactBrgyInput');
+ var rows=document.querySelectorAll('.contact-row');
+ if(!scopeEl) return;
+ var scope=scopeEl.value;
+ var q=brgyEl ? brgyEl.value.trim().toLowerCase() : '';
+ if(brgyEl) brgyEl.style.display = (scope==='barangay') ? '' : 'none';
+ if(scope!=='barangay' && brgyEl) brgyEl.value = '';
+ var shown=0;
  rows.forEach(function(row){
+ var type=(row.getAttribute('data-type')||'').toLowerCase();
+ var brgy=(row.getAttribute('data-barangay')||'').toLowerCase();
+ var show = (scope==='barangay') ? (type==='barangay' && (!q || brgy.indexOf(q)!==-1)) : true;
+ row.style.display = show ? '' : 'none';
+ if(show) shown++;
+ });
+ var cnt=document.getElementById('contactCount');
+ if(cnt) cnt.textContent = shown+' contact'+(shown===1?'':'s');
+ var empty=document.getElementById('contactFilterEmpty');
+ if(empty) empty.style.display = (shown===0) ? 'flex' : 'none';
+}
+// ── Table Filtering & Search + Pagination (10 reports per page) ─────────────
+var currentTableFilter = '';
+var currentTableQuery = '';
+var LGU_REPORTS_PER_PAGE = 10;
+var lguReportPage = 1;
+var lguFilteredRows = [];
+
+function collectLguFilteredRows(){
+ var rows = Array.prototype.slice.call(document.querySelectorAll('#lguReportsTable tbody tr'));
+ return rows.filter(function(row){
  var st = row.getAttribute('data-status') || '';
  var isArchivedOrSafe = (st === 'safe' || row.getAttribute('data-archived') === '1');
- var matchStatus = false;
+ var matchStatus = true;
  if(currentTableFilter === 'all'){
   matchStatus = !isArchivedOrSafe;
  } else if(currentTableFilter === 'safe' || currentTableFilter === 'archived'){
   matchStatus = isArchivedOrSafe;
- } else {
+ } else if(currentTableFilter !== ''){
   matchStatus = (st === currentTableFilter && row.getAttribute('data-archived') !== '1');
  }
  var text = row.textContent.toLowerCase();
  var matchQuery = (!currentTableQuery || text.indexOf(currentTableQuery) !== -1);
- row.style.display = (matchStatus && matchQuery) ? '' : 'none';
+ return matchStatus && matchQuery;
  });
+}
+
+function applyTableFilters(){
+ lguReportPage = 1;
+ renderLguReportPage();
+}
+
+function renderLguReportPage(){
+ var pager = document.getElementById('lguReportsPager');
+ if(!pager) return;
+ lguFilteredRows = collectLguFilteredRows();
+ var total = lguFilteredRows.length;
+ var pages = Math.max(1, Math.ceil(total / LGU_REPORTS_PER_PAGE));
+ if(lguReportPage > pages) lguReportPage = pages;
+ if(lguReportPage < 1) lguReportPage = 1;
+
+ document.querySelectorAll('#lguReportsTable tbody tr').forEach(function(r){ r.style.display = 'none'; });
+ var start = (lguReportPage - 1) * LGU_REPORTS_PER_PAGE;
+ var pageRows = lguFilteredRows.slice(start, start + LGU_REPORTS_PER_PAGE);
+ pageRows.forEach(function(r){ r.style.display = ''; });
+
+ var from = total === 0 ? 0 : start + 1;
+ var to = start + pageRows.length;
+ var meta = '<div style="font-size:0.78rem;color:var(--muted);font-weight:600;">' +
+  (total === 0 ? 'No reports match your filters.' : ('Showing ' + from + '&ndash;' + to + ' of ' + total + ' reports')) +
+  '</div>';
+ var btns = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
+ var prevDisabled = lguReportPage <= 1;
+ btns += '<button class="filter-btn" ' + (prevDisabled ? 'disabled style="opacity:.45;cursor:not-allowed;"' : 'onclick="gotoLguReportPage(' + (lguReportPage - 1) + ')"') + '><i class="fas fa-chevron-left"></i> Prev</button>';
+ // Compact window of page numbers (max 7)
+ var winStart = Math.max(1, lguReportPage - 3);
+ var winEnd = Math.min(pages, winStart + 6);
+ winStart = Math.max(1, winEnd - 6);
+ for(var p = winStart; p <= winEnd; p++){
+  var active = (p === lguReportPage);
+  btns += '<button class="filter-btn' + (active ? ' active-all' : '') + '" onclick="gotoLguReportPage(' + p + ')">' + p + '</button>';
+ }
+ var nextDisabled = lguReportPage >= pages;
+ btns += '<button class="filter-btn" ' + (nextDisabled ? 'disabled style="opacity:.45;cursor:not-allowed;"' : 'onclick="gotoLguReportPage(' + (lguReportPage + 1) + ')"') + '>Next <i class="fas fa-chevron-right"></i></button>';
+ btns += '</div>';
+ pager.style.display = 'flex';
+ pager.innerHTML = meta + btns;
+}
+
+function gotoLguReportPage(page){
+ lguReportPage = page;
+ renderLguReportPage();
+ try { window.scrollTo({ top: document.querySelector('#lguReportsPager').offsetTop - 80, behavior: 'smooth' }); } catch(e) {}
 }
 
 function filterTableReports(status, btn){
@@ -1766,6 +1861,11 @@ function searchTableReports(query){
  currentTableQuery = query.toLowerCase().trim();
  applyTableFilters();
 }
+
+// Initialise pagination on the All Incident Reports view
+document.addEventListener('DOMContentLoaded', function(){
+ if(document.getElementById('lguReportsPager')) renderLguReportPage();
+});
 </script>
 
 <!-- ── LGU REPORT ACTION MODAL ── -->
@@ -1867,12 +1967,15 @@ function searchTableReports(query){
  <div><label class="lgu-cn-label">Name *</label><input id="lgu_cn_name" type="text" class="lgu-cn-input" placeholder="e.g. Imus City Police Station"></div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
  <div><label class="lgu-cn-label">Type *</label>
- <select id="lgu_cn_type" class="lgu-cn-input" style="background:#fff;">
+ <select id="lgu_cn_type" class="lgu-cn-input" style="background:#fff;" onchange="toggleLguContactBrgy()">
  <option value="lgu">LGU</option><option value="hospital">Hospital</option>
  <option value="police">Police</option><option value="fire">Fire</option>
  <option value="barangay">Barangay</option><option value="traffic">Traffic</option><option value="other">Other</option>
  </select></div>
  <div><label class="lgu-cn-label">City *</label><input id="lgu_cn_city" type="text" class="lgu-cn-input" placeholder="City/Municipality"></div>
+ </div>
+ <div id="lgu_cn_brgy_wrap" style="display:none;"><label class="lgu-cn-label">Barangay</label><input id="lgu_cn_barangay" type="text" class="lgu-cn-input" placeholder="e.g. Anabu I-A" list="lgu_cn_brgy_list">
+ <datalist id="lgu_cn_brgy_list"><?php foreach(($brgy_names ?? []) as $bn): ?><option value="<?= htmlspecialchars($bn) ?>"></option><?php endforeach; ?></datalist>
  </div>
  <div><label class="lgu-cn-label">Contact Number</label><input id="lgu_cn_phone" type="tel" class="lgu-cn-input" placeholder="+63 9XX XXX XXXX"></div>
  <div><label class="lgu-cn-label">Email</label><input id="lgu_cn_email" type="email" class="lgu-cn-input" placeholder="contact@example.com"></div>
