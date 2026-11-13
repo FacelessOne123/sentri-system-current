@@ -633,6 +633,10 @@ tr:hover td{background:#fafafa;}
  <?php if($avg_resp_time > 0): ?>
  <div style="font-size:1.4rem;font-weight:900;line-height:1.2;"><?= $avg_resp_time ?> <span style="font-size:0.82rem;font-weight:600;color:rgba(255,255,255,0.85);">mins</span></div>
  <div style="font-size:0.7rem;color:#d1d5db;margin-top:2px;"><i class="fas fa-route"></i> Accepted &rarr; responded telemetry</div>
+ <?php else: ?>
+ <div style="font-size:1.4rem;font-weight:900;line-height:1.2;color:rgba(255,255,255,0.6);">&mdash;</div>
+ <div style="font-size:0.7rem;color:rgba(255,255,255,0.55);margin-top:2px;">No dispatch telemetry data yet</div>
+ <?php endif; ?>
  </div>
  </div>
  </div>
@@ -1369,17 +1373,6 @@ tr:hover td{background:#fafafa;}
  } catch(e) { btn.disabled=false; }
  }
  </script>
-
- <?php else: ?>
- <!-- ── COMING SOON ── -->
- <div class="card">
- <div class="coming-soon">
- <i class="fas <?= $nav_items[$view]['icon'] ?? 'fa-gear' ?>"></i>
- <h3><?= htmlspecialchars($page_titles[$view] ?? ucfirst($view)) ?></h3>
- <p>This section is under development.</p>
- </div>
- </div>
- <?php endif; ?>
 
  </div><!-- /content -->
 </div><!-- /main -->
