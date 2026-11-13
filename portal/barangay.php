@@ -498,7 +498,7 @@ tr:hover td{background:#fafafa;}
  </div>
  <div id="brgyTableWrap" class="brgy-table-wrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
- <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
+ <?php else: ?><?php include __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
  </div>
 
@@ -1386,7 +1386,7 @@ function filterReports(status, btn) {
 function searchReports(q) { applyRptFilters(); }
 function applyRptFilters() {
  var q = (document.getElementById('rptSearch')||{value:''}).value.toLowerCase();
- var rows = document.querySelectorAll('tbody tr');
+ var rows = document.querySelectorAll('#brgyTableWrap tbody tr');
  var visible = 0;
  rows.forEach(function(row) {
  var statusEl = row.querySelector('.pill');
@@ -1408,6 +1408,10 @@ function applyRptFilters() {
  var cnt = document.getElementById('rptCount');
  if (cnt) cnt.textContent = visible + ' records';
 }
+
+document.addEventListener('DOMContentLoaded', function(){
+ applyRptFilters();
+});
 
 // ── 30s background auto-refresh for overview & reports ─────────
 (function initBarangayTablePolling(){
