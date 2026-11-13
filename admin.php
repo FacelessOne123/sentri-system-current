@@ -1495,10 +1495,10 @@ function coRoleChanged(){
  coUpdateOrgDatalist();
  const hint=document.getElementById('coMapHint');
  hint.innerHTML=(role==='lgu')
-  ?'<b>LGU = citywide.</b> Automatically locked to Imus City and City Government of Imus.'
+  ? "<b>LGU = citywide.</b> Automatically locked to Imus City and City Government of Imus."
   :(role==='community')
-  ?'<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident's purok.'
-  :'<b>Click the official's barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.';
+  ? "<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident's purok."
+  : "<b>Click the official's barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.";
  coPopulatePositions();
 }
 function coShowMsg(type,text){
