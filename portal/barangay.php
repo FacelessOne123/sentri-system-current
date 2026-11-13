@@ -67,82 +67,61 @@ $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'f
 $type_icons = ['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
 $type_colors = ['lgu'=>['#f0f7ff','#0a3d62'],'hospital'=>['#ecfdf5','#059669'],'traffic'=>['#fffbeb','#d97706'],'barangay'=>['#f0fdf4','#166534'],'police'=>['#eff6ff','#2563eb'],'fire'=>['#fef2f2','#dc2626'],'other'=>['#f5f3ff','#7c3aed']];
 
-// Per-view data
-$reports = $contacts = $residents = [];
+// Per-view data (preloaded for client-side tabs)
+$reports = $contacts = $residents = $map_reports = [];
 
-if (in_array($view, ['overview','reports'])) {
- $limit = ($view === 'overview') ? 20 : 100;
- // Ensure escalated_to_lgu column exists (added in a later migration)
- $db_b = $conn->query("SELECT DATABASE()")->fetch_row()[0];
- $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
- $has_esc_col = ($bc && $bc->num_rows > 0);
- $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- if ($brgy) {
-  $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1){$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
-  $s->bind_param("s", $brgy_key);
-  $s->execute(); $res=$s->get_result();
-  while($row=$res->fetch_assoc()) $reports[]=$row;
-  $s->close();
- } else {
-  $reports = [];
- }
- if (isset($_GET['ajax_reports'])) {
-  header('Content-Type: application/json');
-  ob_start();
-  if (empty($reports)) {
-   echo '<div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>';
-  } else {
-   include __DIR__.'/../portal/_report_table.php';
-  }
-  $table_html = ob_get_clean();
-  echo json_encode([
-   'status' => 'success',
-   'total' => $total,
-   'danger' => $danger,
-   'caution' => $caution,
-   'safe' => $safe,
-   'count' => count($reports),
-   'html' => $table_html
-  ]);
-  exit;
- }
+// Ensure escalated_to_lgu column exists (added in a later migration)
+$db_b = $conn->query("SELECT DATABASE()")->fetch_row()[0];
+$bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
+$has_esc_col = ($bc && $bc->num_rows > 0);
+$esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
+
+if ($brgy) {
+    $brgy_where = " AND $BRGY_COND";
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1){$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT 100");
+    $s->bind_param("s", $brgy_key);
+    $s->execute(); $res=$s->get_result();
+    while($row=$res->fetch_assoc()) $reports[]=$row;
+    $s->close();
+
+    $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
+    $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+    $res=$s->get_result();
+    while($r=$res->fetch_assoc()) $contacts[]=$r;
+    $s->close();
+
+    $q = "SELECT id,first_name,last_name,email,phone_number,resident_address,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
+    $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
+    $res=$s->get_result();
+    while($r=$res->fetch_assoc()) $residents[]=$r;
+    $s->close();
+
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+    $s->bind_param("s", $brgy_key);
+    $s->execute(); $res=$s->get_result();
+    while($row=$res->fetch_assoc()) $map_reports[]=$row;
+    $s->close();
 }
 
-if ($view === 'contacts') {
- if ($brgy) {
-  $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
-  $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
-  $res=$s->get_result();
-  while($r=$res->fetch_assoc()) $contacts[]=$r;
-  $s->close();
- } else {
-  $contacts = [];
- }
-}
-
-if ($view === 'residents') {
- if ($brgy) {
-  $q = "SELECT id,first_name,last_name,email,phone_number,resident_address,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
-  $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
-  $res=$s->get_result();
-  while($r=$res->fetch_assoc()) $residents[]=$r;
-  $s->close();
- } else {
-  $residents = [];
- }
-}
-
-$map_reports = [];
-if ($view === 'map') {
- if ($brgy) {
-  $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
-  $s->bind_param("s", $brgy_key);
-  $s->execute(); $res=$s->get_result();
-  while($row=$res->fetch_assoc()) $map_reports[]=$row;
-  $s->close();
- }
+if (isset($_GET['ajax_reports'])) {
+    header('Content-Type: application/json');
+    ob_start();
+    if (empty($reports)) {
+        echo '<div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>';
+    } else {
+        include __DIR__.'/../portal/_report_table.php';
+    }
+    $table_html = ob_get_clean();
+    echo json_encode([
+        'status' => 'success',
+        'total' => $total,
+        'danger' => $danger,
+        'caution' => $caution,
+        'safe' => $safe,
+        'count' => count($reports),
+        'html' => $table_html
+    ]);
+    exit;
 }
 $map_total_all = $brgy
  ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key])
@@ -174,6 +153,14 @@ $page_titles = [
 <?= csrf_meta_tag() ?>
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
+<script src="../assets/vendor/leaflet/leaflet.js"></script>
+<script src="../assets/js/sentri-geo.js"></script>
+<style>
+.tab-panel { display: none; }
+.tab-panel.active { display: block; animation: fadeInView 0.22s ease both; }
+@keyframes fadeInView { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
 <style>
 :root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;--sentri-danger:#b91c1c;--sentri-caution:#b45309;--sentri-safe:#166534;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
@@ -425,7 +412,7 @@ tr:hover td{background:#fafafa;}
  <?php foreach($nav_items as $key => $item): ?>
  <?php if($key === 'contacts'): ?><div class="sb-section">Management</div><?php endif; ?>
  <?php if($key === 'profile'): ?><div class="sb-section">Account</div><?php endif; ?>
- <a href="barangay.php?view=<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
+ <a href="javascript:void(0)" onclick="showTab('<?= $key ?>')" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
  <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
  </a>
  <?php endforeach; ?>
@@ -445,7 +432,7 @@ tr:hover td{background:#fafafa;}
    <div class="topbar-left">
     <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
     <div style="min-width:0;">
-     <div class="page-title"><?= htmlspecialchars($page_titles[$view] ?? 'Barangay Portal') ?></div>
+     <div class="page-title" id="brgyPageTitle"><?= htmlspecialchars($page_titles[$view] ?? 'Barangay Portal') ?></div>
      <div class="page-sub"><?= htmlspecialchars($org) ?><?= $city ? ' - '.htmlspecialchars($city) : '' ?></div>
     </div>
    </div>
@@ -472,7 +459,7 @@ tr:hover td{background:#fafafa;}
  </div>
  <?php endif; ?>
 
- <?php if($view === 'overview'): ?>
+ <div class="tab-panel <?= $view==='overview'?'active':'' ?>" id="tab-overview">
  <div class="stat-grid">
  <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="stat-num" id="statTotal"><?= $total ?></div><div class="stat-lbl">Total Reports</div></div></div>
  <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num" id="statDanger"><?= $danger ?></div><div class="stat-lbl">Dangerous</div></div></div>
@@ -481,13 +468,15 @@ tr:hover td{background:#fafafa;}
  </div>
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta" id="recentCount"><?= count($reports) ?> records</span></div>
- <div id="brgyTableWrap">
+ <div id="brgyTableWrapOverview" class="brgy-table-wrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
  </div>
 
- <?php elseif($view === 'reports'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='reports'?'active':'' ?>" id="tab-reports">
  <div class="rpt-stats">
  <div class="map-stat"><div class="map-stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="map-stat-num" id="rptStatTotal"><?= $total ?></div><div class="map-stat-lbl">Total</div></div></div>
  <div class="map-stat"><div class="map-stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="map-stat-num" id="rptStatDanger"><?= $danger ?></div><div class="map-stat-lbl">Dangerous</div></div></div>
@@ -507,13 +496,15 @@ tr:hover td{background:#fafafa;}
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
  <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
  </div>
- <div id="brgyTableWrap">
+ <div id="brgyTableWrap" class="brgy-table-wrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
  </div>
 
- <?php elseif($view === 'contacts'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-address-book" style="color:var(--green);margin-right:6px;"></i>Emergency Contacts</h3><span class="card-meta"><?= count($contacts) ?> contacts</span></div>
  <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:flex-end;">
@@ -536,7 +527,9 @@ tr:hover td{background:#fafafa;}
  <?php endforeach; endif; ?>
  </div>
 
- <?php elseif($view === 'residents'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='residents'?'active':'' ?>" id="tab-residents">
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-users" style="color:var(--green);margin-right:6px;"></i>Registered Residents<?= $brgy ? ' - '.htmlspecialchars($brgy) : '' ?></h3><span class="card-meta"><?= count($residents) ?> residents</span></div>
  <?php if(empty($residents)): ?><div class="empty"><i class="fas fa-users"></i><p>No registered residents found<?= $brgy ? ' in '.htmlspecialchars($brgy) : '' ?>.</p></div>
@@ -554,7 +547,9 @@ tr:hover td{background:#fafafa;}
  </div>
 
 
- <?php elseif($view === 'map'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='map'?'active':'' ?>" id="tab-map">
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
@@ -849,7 +844,9 @@ tr:hover td{background:#fafafa;}
  }
  </script>
 
- <?php elseif($view === 'profile'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-id-card" style="color:var(--green);margin-right:6px;"></i>My Profile</h3></div>
  <div style="padding:24px;">
@@ -864,14 +861,51 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
 
- <?php else: ?>
- <div class="card"><div class="coming-soon"><i class="fas <?= $nav_items[$view]['icon'] ?? 'fa-gear' ?>"></i><h3><?= htmlspecialchars($page_titles[$view] ?? ucfirst($view)) ?></h3><p>This section is under development.</p></div></div>
- <?php endif; ?>
+</div>
 
  </div>
 </div>
 
 <script>
+
+// ── Client-side Tab Navigation ───────────────────────────────────────────
+const tabTitles = {
+  overview: 'Barangay Dashboard',
+  reports: 'Incident Reports',
+  map: 'Incident Map',
+  contacts: 'Emergency Contacts',
+  residents: 'Residents',
+  profile: 'My Profile'
+};
+
+function showTab(name) {
+  if (!tabTitles[name]) return;
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.sb-nav a').forEach(function(a){ a.classList.remove('active'); });
+  var target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+  var titleEl = document.getElementById('brgyPageTitle');
+  if (titleEl) titleEl.textContent = tabTitles[name];
+  try { history.replaceState(null, '', '#tab=' + name); } catch(e){}
+  if (name === 'map') {
+    setTimeout(function(){
+      if (typeof lmap !== 'undefined' && lmap) {
+        lmap.invalidateSize();
+      }
+    }, 80);
+  }
+  if (typeof closeSidebar === 'function') closeSidebar();
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
+  if (hash && tabTitles[hash]) {
+    showTab(hash);
+  }
+});
+
 // Escape user-controlled values before they are concatenated into innerHTML.
 function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -1359,11 +1393,12 @@ function applyRptFilters() {
    });
    var data = await res.json();
    if (data && data.status === 'success') {
-    var wrap = document.getElementById('brgyTableWrap');
-    if (wrap && wrap.innerHTML !== data.html) {
-     wrap.innerHTML = data.html;
-     applyRptFilters();
-    }
+    document.querySelectorAll('.brgy-table-wrap').forEach(function(wrap){
+     if (wrap.innerHTML !== data.html) {
+      wrap.innerHTML = data.html;
+     }
+    });
+    applyRptFilters();
     // Update overview stats
     if (document.getElementById('statTotal')) document.getElementById('statTotal').textContent = data.total;
     if (document.getElementById('statDanger')) document.getElementById('statDanger').textContent = data.danger;
@@ -1445,7 +1480,7 @@ function renderBrgyAlert(report, label, reason) {
     (meta ? '<span>' + esc(meta) + '</span>' : '') +
     (description ? '<span class="alert-toast-desc">' + esc(description) + '</span>' : '') +
    '</div>' +
-   '<a class="alert-toast-link" href="barangay.php?view=reports">View in reports <i class="fas fa-arrow-right"></i></a>' +
+   '<a class="alert-toast-link" href="javascript:void(0)" onclick="showTab('reports')">View in reports <i class="fas fa-arrow-right"></i></a>' +
   '</div>' +
   '<button type="button" class="alert-toast-close" aria-label="Dismiss alert"><i class="fas fa-xmark"></i></button>' +
   '<div class="alert-toast-progress" style="animation-duration:7s;"></div>';

@@ -104,7 +104,7 @@ $my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=?",'i',[$uid]);
 
 /* ── Per-view data ────────────────────────────────────────────── */
 $contacts = [];
-if($view==='contacts'){$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");if($cs)while($r=$cs->fetch_assoc())$contacts[]=$r;}
+$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");if($cs)while($r=$cs->fetch_assoc())$contacts[]=$r;
 
 $profile_msg = '';
 if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_profile'])){
@@ -625,6 +625,10 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 .incident-fields select{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;}
 .incident-fields select:focus{border-color:var(--blue-accent);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
 
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; animation: fadeInView 0.22s ease both; }
+@keyframes fadeInView { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
@@ -661,7 +665,7 @@ function actionToast(message,type){
  </div>
  <nav class="menu">
  <?php foreach($nav as $key=>$item): ?>
- <a href="community.php?view=<?= $key ?>" <?= $view===$key?'class="active"':'' ?>>
+ <a href="javascript:void(0)" onclick="showTab('<?= $key ?>')" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
  <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
  <?php if($key==='my_reports'&&$my_count>0): ?><span class="menu-badge"><?= $my_count ?></span><?php endif; ?>
  </a>
@@ -688,14 +692,12 @@ function actionToast(message,type){
  <div class="topbar">
  <div class="topbar-left">
  <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
- <h1><i class="fas <?= $nav[$view]['icon']??'fa-house' ?>" style="color:var(--blue-accent);"></i><span><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?></span></h1>
+ <h1><i id="commPageIcon" class="fas <?= $nav[$view]['icon']??'fa-house' ?>" style="color:var(--blue-accent);"></i><span id="commPageTitle"><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?></span></h1>
  </div>
  <div class="right-top">
- <?php if(in_array($view,['overview','my_reports','map'])): ?>
- <div class="gps-chip" id="gpsChip"><span class="gps-dot" id="gpsDot"></span><span id="gpsLabel">GPS Off</span><span id="gpsAcc" style="display:none;margin-left:3px;font-size:.6rem;font-weight:700;letter-spacing:.3px;" title="GPS accuracy — &lt;12m good / &lt;50m ok / weak"></span></div>
- <button class="post-btn" onclick="openModal()"><i class="fas fa-plus"></i> <span>Post Report</span></button>
- <?php endif; ?>
- <div class="user-info" onclick="window.location='community.php?view=profile'" title="My Profile">
+ <div class="gps-chip" id="gpsChip" style="display:<?= in_array($view,['overview','my_reports','map'])?'inline-flex':'none' ?>;"><span class="gps-dot" id="gpsDot"></span><span id="gpsLabel">GPS Off</span><span id="gpsAcc" style="display:none;margin-left:3px;font-size:.6rem;font-weight:700;letter-spacing:.3px;" title="GPS accuracy — &lt;12m good / &lt;50m ok / weak"></span></div>
+ <button class="post-btn" id="commPostBtn" onclick="openModal()" style="display:<?= in_array($view,['overview','my_reports','map'])?'inline-flex':'none' ?>;"><i class="fas fa-plus"></i> <span>Post Report</span></button>
+ <div class="user-info" onclick="showTab('profile')" title="My Profile">
  <div class="avatar" id="topAvatar" style="background:<?= htmlspecialchars($avatar_color) ?>"><?= strtoupper(substr($fname,0,1).substr($lname,0,1)) ?></div>
  <span class="user-name"><?= htmlspecialchars($fname) ?></span>
  </div>
@@ -704,12 +706,12 @@ function actionToast(message,type){
 
  <div class="content">
 
- <?php if($view==='overview'): ?>
+ <div class="tab-panel <?= $view==='overview'?'active':'' ?>" id="tab-overview">
  <div class="stats-row">
  <div class="stat-card" style="cursor:pointer;" onclick="resetFilters()" title="Click to view all reports"><div class="stat-icon blue"><i class="fas fa-clipboard-list"></i></div><div><strong><?= $total_reports ?></strong><span>Total Reports</span></div></div>
  <div class="stat-card" style="cursor:pointer;" onclick="quickFilterStatus('dangerous')" title="Click to filter dangerous areas"><div class="stat-icon red"><i class="fas fa-circle-exclamation"></i></div><div><strong><?= $danger_count ?></strong><span>Dangerous Areas</span></div></div>
  <div class="stat-card" style="cursor:pointer;" onclick="quickFilterStatus('safe')" title="Click to filter safe areas"><div class="stat-icon green"><i class="fas fa-circle-check"></i></div><div><strong><?= $safe_count ?></strong><span>Safe Areas</span></div></div>
- <div class="stat-card" style="cursor:pointer;" onclick="location.href='community.php?view=my_reports'" title="Click to view your submitted reports"><div class="stat-icon orange"><i class="fas fa-pen-to-square"></i></div><div><strong><?= $my_count ?></strong><span>My Reports</span></div></div>
+ <div class="stat-card" style="cursor:pointer;" onclick="showTab('my_reports')" title="Click to view your submitted reports"><div class="stat-icon orange"><i class="fas fa-pen-to-square"></i></div><div><strong><?= $my_count ?></strong><span>My Reports</span></div></div>
  </div>
 
  <!-- ── Dynamic Weather Watch & Flash Advisory Banner ── -->
@@ -772,16 +774,18 @@ function actionToast(message,type){
  </div>
  <div id="feed"><div class="loading"><i class="fas fa-spinner"></i> Loading community reports…</div></div>
 
- <?php elseif($view==='my_reports'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='my_reports'?'active':'' ?>" id="tab-my_reports">
  <div class="my-reports-hdr">
  <div class="mh-icon"><i class="fas fa-file-lines"></i></div>
  <div><h2>My Reports</h2><p>All <?= $my_count ?> report<?= $my_count!==1?'s':'' ?> you've submitted</p></div>
  </div>
  <div class="filters">
- <input type="text" id="searchInput" placeholder="Search my reports...">
- <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
- <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
- <select id="timeFilter" title="Show only incidents from this time range">
+ <input type="text" id="mySearchInput" placeholder="Search my reports...">
+ <select id="myStatusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
+ <select id="myCategoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+ <select id="myTimeFilter" title="Show only incidents from this time range">
  <option value="">Any time</option>
  <option value="15">Last 15 min</option>
  <option value="60">Last hour</option>
@@ -789,11 +793,13 @@ function actionToast(message,type){
  <option value="10080">Last 7 days</option>
  <option value="43200">Last 30 days</option>
  </select>
- <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
+ <button onclick="resetMyFilters()"><i class="fas fa-rotate"></i> Reset</button>
  </div>
- <div id="feed"><div class="loading"><i class="fas fa-spinner"></i> Loading your reports…</div></div>
+ <div id="myFeed"><div class="loading"><i class="fas fa-spinner"></i> Loading your reports…</div></div>
 
- <?php elseif($view==='map'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='map'?'active':'' ?>" id="tab-map">
  <div id="mapWrap">
  <div id="incidentMap"></div>
  <div class="map-legend">
@@ -803,7 +809,9 @@ function actionToast(message,type){
  </div>
  </div>
 
- <?php elseif($view==='contacts'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
  <div class="contacts-hdr">
  <div class="ch-icon"><i class="fas fa-phone-volume"></i></div>
  <div><h2>Emergency Contacts</h2><p>Local emergency services, hospitals, and responder hotlines</p></div>
@@ -837,7 +845,9 @@ function actionToast(message,type){
  </div>
  <?php endforeach; endif; ?>
 
- <?php elseif($view==='profile'):
+ </div>
+
+  <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
  [$pm_type,$pm_text]=$profile_msg?explode(':',$profile_msg,2):['','']; ?>
  <div class="profile-grid">
  <div class="profile-card">
@@ -855,7 +865,7 @@ function actionToast(message,type){
  <div class="profile-card">
  <?php if($pm_text): ?><div class="pf-msg <?= htmlspecialchars($pm_type) ?>" style="display:block;"><?= htmlspecialchars($pm_text) ?></div><?php endif; ?>
  <div id="pfMsg" class="pf-msg"></div>
- <form method="post" action="community.php?view=profile">
+ <form method="post" action="community.php#tab=profile">
  <input type="hidden" name="save_profile" value="1">
  <div class="pf-section-label">Personal Information</div>
  <div class="form-row">
@@ -896,7 +906,7 @@ function actionToast(message,type){
  </form>
  </div>
  </div>
- <?php endif; ?>
+ </div>
 
 
  </div>
@@ -1133,7 +1143,60 @@ function actionToast(message,type){
 <script src="../assets/js/sentri-geo.js?v=<?= filemtime(__DIR__ . '/../assets/js/sentri-geo.js') ?>"></script>
 <script>
 const MY_USER_ID = <?= $uid ?>;
-const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
+
+// ── Client-side Tab Routing ──────────────────────────────────────────────
+const commTabMeta = {
+  overview: { title: 'Community Feed', icon: 'fa-house' },
+  my_reports: { title: 'My Reports', icon: 'fa-file-lines' },
+  map: { title: 'Incidents Map', icon: 'fa-map-location-dot' },
+  contacts: { title: 'Emergency Contacts', icon: 'fa-address-book' },
+  profile: { title: 'My Profile', icon: 'fa-id-card' }
+};
+
+function showTab(name) {
+  if (!commTabMeta[name]) return;
+  CURRENT_VIEW = name;
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.menu a').forEach(function(a){ a.classList.remove('active'); });
+  var target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+  
+  var titleEl = document.getElementById('commPageTitle');
+  if (titleEl) titleEl.textContent = commTabMeta[name].title;
+  var iconEl = document.getElementById('commPageIcon');
+  if (iconEl) iconEl.className = 'fas ' + commTabMeta[name].icon;
+  
+  var isReportTab = ['overview', 'my_reports', 'map'].includes(name);
+  var gps = document.getElementById('gpsChip');
+  if (gps) gps.style.display = isReportTab ? 'inline-flex' : 'none';
+  var post = document.getElementById('commPostBtn');
+  if (post) post.style.display = isReportTab ? 'inline-flex' : 'none';
+  
+  try { history.replaceState(null, '', '#tab=' + name); } catch(e){}
+  
+  if (name === 'map') {
+    setTimeout(function(){
+      renderMainMap();
+      if (typeof mainMap !== 'undefined' && mainMap) {
+        mainMap.invalidateSize();
+      }
+    }, 80);
+  } else if (name === 'overview' || name === 'my_reports') {
+    renderFeed();
+  }
+  if (typeof closeSidebar === 'function') closeSidebar();
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
+  if (hash && commTabMeta[hash]) {
+    showTab(hash);
+  }
+});
+
+let CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
 const INIT_COLOR = '<?= htmlspecialchars($avatar_color) ?>';
 const DM_KEY = `sentri_dm_${MY_USER_ID}`;
 
@@ -1289,11 +1352,11 @@ async function fetchReports(){
  }catch{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-wifi"></i><p>Network error.</p></div>';}
 }
 
-function getFiltered(mineOnly){
- const s=(document.getElementById('searchInput')?.value||'').trim().toLowerCase();
- const st=document.getElementById('statusFilter')?.value||'';
- const ca=document.getElementById('categoryFilter')?.value||'';
- const tf=parseInt(document.getElementById('timeFilter')?.value||'',10);
+function getFiltered(mineOnly, searchId, statusId, catId, timeId){
+ const s=(document.getElementById(searchId||'searchInput')?.value||'').trim().toLowerCase();
+ const st=document.getElementById(statusId||'statusFilter')?.value||'';
+ const ca=document.getElementById(catId||'categoryFilter')?.value||'';
+ const tf=parseInt(document.getElementById(timeId||'timeFilter')?.value||'',10);
  const cutoff=isFinite(tf)&&tf>0?Date.now()-tf*60000:null;
  return allReports.filter(r=>{
  if(mineOnly&&r.user_id!=MY_USER_ID)return false;
@@ -1321,9 +1384,9 @@ function timeAgoText(s){
  return new Date(t).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
 }
 
-function renderFeed(mineOnly=false){
- const feed=document.getElementById('feed');if(!feed)return;
- const list=getFiltered(mineOnly);
+function renderFeedContainer(feedId, mineOnly, searchId, statusId, catId, timeId){
+ const feed=document.getElementById(feedId);if(!feed)return;
+ const list=getFiltered(mineOnly, searchId, statusId, catId, timeId);
  if(!list.length){
  feed.innerHTML=`<div class="empty"><i class="fas fa-binoculars"></i><p>${mineOnly?"You haven't posted any reports yet.":'No reports match your filters.'}</p></div>`;
  return;
@@ -1360,7 +1423,18 @@ function renderFeed(mineOnly=false){
  }).join('');
 }
 
-['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();},200);});});
+function renderFeed(mineOnly=false){
+ renderFeedContainer('feed', false, 'searchInput', 'statusFilter', 'categoryFilter', 'timeFilter');
+ renderFeedContainer('myFeed', true, 'mySearchInput', 'myStatusFilter', 'myCategoryFilter', 'myTimeFilter');
+}
+
+function resetMyFilters(){
+ ['mySearchInput','myStatusFilter','myCategoryFilter','myTimeFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+ renderFeedContainer('myFeed', true, 'mySearchInput', 'myStatusFilter', 'myCategoryFilter', 'myTimeFilter');
+}
+
+['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeedContainer('feed',false,'searchInput','statusFilter','categoryFilter','timeFilter');if(curView==='map')renderInlineMap();},200);});});
+['mySearchInput','myStatusFilter','myCategoryFilter','myTimeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='mySearchInput'?'input':'change',()=>{clearTimeout(window._ftMy);window._ftMy=setTimeout(()=>{renderFeedContainer('myFeed',true,'mySearchInput','myStatusFilter','myCategoryFilter','myTimeFilter');},200);});});
 function resetFilters(){['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}
 function quickFilterStatus(status){const sf=document.getElementById('statusFilter');if(sf){sf.value=status;renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}}
 
@@ -2552,7 +2626,7 @@ updateChip();
 startGPS();
 initAddressSuggestions();
 if(document.getElementById('colorPalette'))buildPalette();
-if(['overview','my_reports','map'].includes(CURRENT_VIEW)){fetchReports();setInterval(fetchReports,60000);}
+fetchReports();setInterval(fetchReports,60000);
 if(CURRENT_VIEW==='map')setTimeout(()=>renderMainMap(),300);
 if(document.fonts&&document.fonts.ready){document.fonts.ready.then(()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});}
 window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});

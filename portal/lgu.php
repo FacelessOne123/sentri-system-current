@@ -54,214 +54,114 @@ $brgy_unspecified = (strcasecmp($brgy_filter, 'Unspecified') === 0);
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
 
-// ── Per-view data ──────────────────────────────────────────────────────────
-$danger_reports = $all_reports = $brgy_stats = $contacts = [];
+// ── Pre-loaded data for seamless client-side tabs ──────────────────────────
+$danger_reports = $all_reports = $brgy_stats = $contacts = $map_reports = $responders = [];
 
-if ($view === 'overview' || $view === 'all_reports') {
- $limit = ($view === 'overview') ? 15 : 100;
- $status_filter = ($view === 'overview') ? "AND r.status='dangerous'" : "";
- $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- $brgy_cond = '';
- $bind_brgy = false;
- if ($view === 'all_reports' && $brgy_filter !== '') {
- if ($brgy_unspecified) {
- $brgy_cond = " AND (r.barangay IS NULL OR TRIM(r.barangay)='')"; // group label fallback
- } else {
- $brgy_cond = " AND r.barangay = ?";
- $bind_brgy = true;
- }
- }
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
- if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) {
- if($view==='overview') $danger_reports[]=$row; else $all_reports[]=$row;
- }
- $s->close();
+$esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
+
+// Load dangerous reports for Overview
+$s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.status='dangerous' ORDER BY r.created_at DESC LIMIT 15");
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()) $danger_reports[]=$row;
+$s->close();
+
+// Load all reports for All Reports tab
+$brgy_cond = '';
+$bind_brgy = false;
+if ($brgy_filter !== '') {
+    if ($brgy_unspecified) {
+        $brgy_cond = " AND (r.barangay IS NULL OR TRIM(r.barangay)='')";
+    } else {
+        $brgy_cond = " AND r.barangay = ?";
+        $bind_brgy = true;
+    }
 }
+$s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) $brgy_cond ORDER BY r.created_at DESC LIMIT 100");
+if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()) $all_reports[]=$row;
+$s->close();
 
-if ($view === 'overview' || $view === 'barangays') {
- $bs = $conn->query("SELECT COALESCE(barangay,'Unspecified') as b, COUNT(*) as c, SUM(status='dangerous') as d FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1) GROUP BY b ORDER BY c DESC LIMIT 15");
- if ($bs) while($r=$bs->fetch_assoc()) $brgy_stats[]=$r;
-}
+// Barangay summaries
+$bs = $conn->query("SELECT COALESCE(barangay,'Unspecified') as b, COUNT(*) as c, SUM(status='dangerous') as d FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1) GROUP BY b ORDER BY c DESC LIMIT 15");
+if ($bs) while($r=$bs->fetch_assoc()) $brgy_stats[]=$r;
 
-if ($view === 'contacts') {
- $cs = $conn->query("SELECT id,name,type,contact_number,contact_email,barangay,city,is_active FROM emergency_contacts ORDER BY type,name");
- if ($cs) while($r=$cs->fetch_assoc()) $contacts[]=$r;
-}
+// Emergency Contacts
+$cs = $conn->query("SELECT id,name,type,contact_number,contact_email,barangay,city,is_active FROM emergency_contacts ORDER BY type,name");
+if ($cs) while($r=$cs->fetch_assoc()) $contacts[]=$r;
 
-// ── SLA & Telemetry KPIs (all DB-derived; no fabricated fallbacks) ──
+// SLA KPIs
 $sla_row = $conn->query("SELECT AVG(TIMESTAMPDIFF(MINUTE, accepted_at, responded_at)) as avg_resp, COUNT(CASE WHEN status='safe' OR is_archived=1 THEN 1 END) as safe_cnt, COUNT(*) as total_cnt FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1)")->fetch_assoc();
-$avg_resp_time = round((float)($sla_row['avg_resp'] ?? 0), 1); // 0.0 = no accepted→responded telemetry yet
+$avg_resp_time = round((float)($sla_row['avg_resp'] ?? 0), 1);
 $resolution_rate = !empty($sla_row['total_cnt']) ? round(($sla_row['safe_cnt'] / $sla_row['total_cnt']) * 100, 1) : null;
 $active_deployed_units = (int)cq($conn, "SELECT COUNT(DISTINCT assigned_to) FROM reports WHERE is_archived=0 AND status='dangerous' AND assigned_to IS NOT NULL");
 
-
-// ── MAP ──────────────────────────────────────────────────────────────────
-$map_reports = [];
-if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
- // fallback: all reports including no-coords for the sidebar count
-}
+// Map reports
+$s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()) $map_reports[]=$row;
+$s->close();
 $map_total = cq($conn,"SELECT COUNT(*) FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1)");
 
-// ── PROFILE ───────────────────────────────────────────────────────────────
+// Responders
+if ($has_assigned_to) {
+    $s=$conn->prepare("SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,u.org_name,u.`position`,u.responder_type,u.municipality,u.barangay_name,u.is_approved,COUNT(r.id) as active_count FROM users u LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous' WHERE u.role='first_responder' GROUP BY u.id ORDER BY u.is_approved ASC, u.responder_type, u.org_name");
+} else {
+    $s=$conn->prepare("SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,u.org_name,u.`position`,u.responder_type,u.municipality,u.barangay_name,u.is_approved,0 as active_count FROM users u WHERE u.role='first_responder' ORDER BY u.is_approved ASC, u.responder_type, u.org_name");
+}
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()){ $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
+$s->close();
+
+// Profile save POST
 $profile_msg = '';
-if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_profile'])) {
- $p_fname = trim($_POST['first_name'] ?? '');
- $p_lname = trim($_POST['last_name'] ?? '');
- $p_phone = trim($_POST['phone'] ?? '');
- $p_org = trim($_POST['org_name'] ?? '');
- $p_pos = trim($_POST['position'] ?? '');
- $p_muni = trim($_POST['municipality'] ?? '');
- $p_pw = $_POST['new_password'] ?? '';
- $p_pw2 = $_POST['confirm_password'] ?? '';
- if ($p_pw && $p_pw !== $p_pw2) {
- $profile_msg = 'error:Passwords do not match.';
- } elseif (!$p_fname || !$p_lname) {
- $profile_msg = 'error:Name fields are required.';
- } else {
- if ($p_pw) {
- $h = password_hash($p_pw, PASSWORD_BCRYPT, ['cost'=>10]);
- $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=?,password=? WHERE id=?");
- $su->bind_param("sssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$h,$uid);
- } else {
- $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=? WHERE id=?");
- $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
- }
- $su->execute(); $su->close();
- $fname = htmlspecialchars($p_fname,ENT_QUOTES,'UTF-8'); $org=$p_org?:$org; $city=$p_muni?:$city; $pos=$p_pos?:$pos;
- $stmt2=$conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
- $stmt2->bind_param("i",$uid); $stmt2->execute();
- $prof=$stmt2->get_result()->fetch_assoc(); $stmt2->close();
- $profile_msg = 'success:Profile updated successfully.';
- }
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_profile'])) {
+    $p_fname = trim($_POST['first_name'] ?? '');
+    $p_lname = trim($_POST['last_name'] ?? '');
+    $p_phone = trim($_POST['phone'] ?? '');
+    $p_org = trim($_POST['org_name'] ?? '');
+    $p_pos = trim($_POST['position'] ?? '');
+    $p_muni = trim($_POST['municipality'] ?? '');
+    $p_pw = $_POST['new_password'] ?? '';
+    $p_pw2 = $_POST['confirm_password'] ?? '';
+    if ($p_pw && $p_pw !== $p_pw2) {
+        $profile_msg = 'error:Passwords do not match.';
+    } elseif (!$p_fname || !$p_lname) {
+        $profile_msg = 'error:Name fields are required.';
+    } else {
+        if ($p_pw) {
+            $h = password_hash($p_pw, PASSWORD_BCRYPT, ['cost'=>10]);
+            $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=?,password=? WHERE id=?");
+            $su->bind_param("sssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$h,$uid);
+        } else {
+            $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=? WHERE id=?");
+            $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
+        }
+        $su->execute(); $su->close();
+        $fname = htmlspecialchars($p_fname,ENT_QUOTES,'UTF-8'); $org=$p_org?:$org; $city=$p_muni?:$city; $pos=$p_pos?:$pos;
+        $stmt2=$conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
+        $stmt2->bind_param("i",$uid); $stmt2->execute();
+        $prof=$stmt2->get_result()->fetch_assoc(); $stmt2->close();
+        $profile_msg = 'success:Profile updated successfully.';
+    }
 }
 
-// ── RESPONDERS ────────────────────────────────────────────────────────────
-$responders = [];
-if ($view === 'responders') {
- if ($has_assigned_to) {
- $s=$conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- COUNT(r.id) as active_count
- FROM users u
- LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
- WHERE u.role='first_responder'
- GROUP BY u.id
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- } else {
- $s=$conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- 0 as active_count
- FROM users u
- WHERE u.role='first_responder'
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()){ $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
- $s->close();
-}
-
-// ── RESPONDER APPROVE/REJECT (POST) ──────────────────────────────────────
-if ($view === 'responders' && $_SERVER['REQUEST_METHOD']==='POST') {
- header('Content-Type: application/json');
- $act = $_POST['action'] ?? '';
- $tid = (int)($_POST['user_id'] ?? 0);
- if (!$tid) { echo json_encode(['status'=>'error','message'=>'Invalid user.']); exit; }
- if ($act === 'approve_responder') {
- $s=$conn->prepare("UPDATE users SET is_approved=1 WHERE id=? AND role='first_responder'");
- $s->bind_param("i",$tid); $s->execute(); $s->close();
- echo json_encode(['status'=>'success','message'=>'Responder approved.']); exit;
- }
- if ($act === 'reject_responder') {
- $s=$conn->prepare("DELETE FROM users WHERE id=? AND role='first_responder' AND is_approved=0");
- $s->bind_param("i",$tid); $s->execute(); $s->close();
- echo json_encode(['status'=>'success','message'=>'Responder rejected.']); exit;
- }
-}
-
-$map_reports = [];
-if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
-}
-
-$profile_msg = '';
-if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_profile'])) {
- $p_fname = trim($_POST['first_name'] ?? '');
- $p_lname = trim($_POST['last_name'] ?? '');
- $p_phone = trim($_POST['phone'] ?? '');
- $p_org = trim($_POST['org_name'] ?? '');
- $p_pos = trim($_POST['position'] ?? '');
- $p_muni = trim($_POST['municipality'] ?? '');
- $p_pw = $_POST['new_password'] ?? '';
- $p_pw2 = $_POST['confirm_password'] ?? '';
- if ($p_pw && $p_pw !== $p_pw2) {
- $profile_msg = 'error:Passwords do not match.';
- } elseif (!$p_fname || !$p_lname) {
- $profile_msg = 'error:Name fields are required.';
- } else {
- if ($p_pw) {
- $hash = password_hash($p_pw, PASSWORD_BCRYPT, ['cost'=>10]);
- $su = $conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=?,password=? WHERE id=?");
- $su->bind_param("sssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$hash,$uid);
- } else {
- $su = $conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=? WHERE id=?");
- $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
- }
- $su->execute(); $su->close();
- $fname = htmlspecialchars($p_fname, ENT_QUOTES, 'UTF-8');
- $org = $p_org ?: $org;
- $city = $p_muni ?: $city;
- $pos = $p_pos ?: $pos;
- // Refresh prof
- $stmt2 = $conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
- $stmt2->bind_param("i",$uid); $stmt2->execute();
- $prof = $stmt2->get_result()->fetch_assoc(); $stmt2->close();
- $profile_msg = 'success:Profile updated successfully.';
- }
-}
-
-$responders = [];
-if ($view === 'responders') {
- if ($has_assigned_to) {
- $s = $conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- COUNT(r.id) as active_count
- FROM users u
- LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
- WHERE u.role='first_responder'
- GROUP BY u.id
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- } else {
- $s = $conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- 0 as active_count
- FROM users u
- WHERE u.role='first_responder'
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) { $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
- $s->close();
+// Responder approve/reject POST
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action']) && in_array($_POST['action'], ['approve_responder', 'reject_responder'])) {
+    header('Content-Type: application/json');
+    $act = $_POST['action'] ?? '';
+    $tid = (int)($_POST['user_id'] ?? 0);
+    if (!$tid) { echo json_encode(['status'=>'error','message'=>'Invalid user.']); exit; }
+    if ($act === 'approve_responder') {
+        $s=$conn->prepare("UPDATE users SET is_approved=1 WHERE id=? AND role='first_responder'");
+        $s->bind_param("i",$tid); $s->execute(); $s->close();
+        echo json_encode(['status'=>'success','message'=>'Responder approved.']); exit;
+    }
+    if ($act === 'reject_responder') {
+        $s=$conn->prepare("DELETE FROM users WHERE id=? AND role='first_responder' AND is_approved=0");
+        $s->bind_param("i",$tid); $s->execute(); $s->close();
+        echo json_encode(['status'=>'success','message'=>'Responder rejected.']); exit;
+    }
 }
 
 $nav_items = [
@@ -292,6 +192,14 @@ $page_titles = [
 <?= csrf_meta_tag() ?>
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
+<script src="../assets/vendor/leaflet/leaflet.js"></script>
+<script src="../assets/js/sentri-geo.js"></script>
+<style>
+.tab-panel { display: none; }
+.tab-panel.active { display: block; animation: fadeInView 0.22s ease both; }
+@keyframes fadeInView { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
 <style>
 :root{
  --navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;
@@ -640,7 +548,7 @@ tr:hover td{background:#fafafa;}
  <?php elseif($key === 'profile'): ?>
  <div class="sb-section">Account</div>
  <?php endif; ?>
- <a href="lgu.php?view=<?= $key ?>" class="<?= $view===$key ? 'active' : '' ?>">
+ <a href="javascript:void(0)" onclick="showTab('<?= $key ?>')" id="nav-<?= $key ?>" class="<?= $view===$key ? 'active' : '' ?>">
  <i class="fas <?= $item['icon'] ?>"></i>
  <span><?= $item['label'] ?></span>
  </a>
@@ -670,7 +578,7 @@ tr:hover td{background:#fafafa;}
     <div class="topbar-left">
      <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
      <div style="min-width:0;">
-      <div class="page-title"><?= htmlspecialchars($page_titles[$view] ?? 'LGU Portal') ?></div>
+      <div class="page-title" id="lguPageTitle"><?= htmlspecialchars($page_titles[$view] ?? 'LGU Portal') ?></div>
       <div class="page-sub"><?= htmlspecialchars($org) ?><?= $city ? ' - '.htmlspecialchars($city) : '' ?></div>
      </div>
     </div>
@@ -684,7 +592,7 @@ tr:hover td{background:#fafafa;}
 
  <div class="content">
 
- <?php if($view === 'overview'): ?>
+ <div class="tab-panel <?= $view==='overview'?'active':'' ?>" id="tab-overview">
  <!-- ── OVERVIEW ── -->
  <div class="stat-grid">
  <div class="stat-card">
@@ -725,10 +633,7 @@ tr:hover td{background:#fafafa;}
  <?php if($avg_resp_time > 0): ?>
  <div style="font-size:1.4rem;font-weight:900;line-height:1.2;"><?= $avg_resp_time ?> <span style="font-size:0.82rem;font-weight:600;color:rgba(255,255,255,0.85);">mins</span></div>
  <div style="font-size:0.7rem;color:#d1d5db;margin-top:2px;"><i class="fas fa-route"></i> Accepted &rarr; responded telemetry</div>
- <?php else: ?>
- <div style="font-size:1.4rem;font-weight:900;line-height:1.2;color:rgba(255,255,255,0.6);">&mdash;</div>
- <div style="font-size:0.7rem;color:rgba(255,255,255,0.55);margin-top:2px;">No dispatch telemetry data yet</div>
- <?php endif; ?>
+ </div>
  </div>
  </div>
  <div style="background:linear-gradient(135deg,#064e3b 0%,#059669 100%);color:#fff;border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 4px 16px rgba(5,150,105,0.18);">
@@ -845,7 +750,9 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
 
- <?php elseif($view === 'all_reports'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='all_reports'?'active':'' ?>" id="tab-all_reports">
  <!-- ── ALL REPORTS ── -->
  <div class="card">
  <div class="card-header">
@@ -914,7 +821,9 @@ tr:hover td{background:#fafafa;}
  <?php endif; ?>
  </div>
 
- <?php elseif($view === 'contacts'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
  <!-- ── CONTACTS ── -->
  <?php
  $type_colors = ['hospital'=>['#ecfdf5','#059669'],'fire'=>['#fef2f2','#dc2626'],'police'=>['#eff6ff','#2563eb'],'barangay'=>['#f0fdf4','#166534'],'municipal'=>['#f0f7ff','#0a3d62'],'other'=>['#f5f3ff','#7c3aed']];
@@ -950,7 +859,9 @@ tr:hover td{background:#fafafa;}
  <?php endforeach; endif; ?>
  </div>
 
- <?php elseif($view === 'barangays'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='barangays'?'active':'' ?>" id="tab-barangays">
  <!-- ── BARANGAY SUMMARIES ──
  Normalization cross-check: the official perimeters in assets/geo/imus-barangays.geojson use
  designated names (e.g. "Anabu I-A", "Bayan Luma I", "Mariano Espeleta I"). Community reports
@@ -984,7 +895,9 @@ tr:hover td{background:#fafafa;}
  <?php endforeach; endif; ?>
  </div>
 
- <?php elseif($view === 'map'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='map'?'active':'' ?>" id="tab-map">
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
@@ -1254,7 +1167,9 @@ tr:hover td{background:#fafafa;}
  }
  </script>
 
- <?php elseif($view === 'profile'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
  <!-- ── MY PROFILE ── -->
  <style>
  .profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
@@ -1328,7 +1243,9 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
 
- <?php elseif($view === 'responders'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='responders'?'active':'' ?>" id="tab-responders">
  <!-- ── RESPONDER UNITS ── -->
  <style>
  .rtype-badge{display:inline-block;padding:2px 10px;border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:1px;text-transform:uppercase;}
@@ -1468,6 +1385,46 @@ tr:hover td{background:#fafafa;}
 </div><!-- /main -->
 
 <script>
+
+// ── Client-side Tab Navigation ───────────────────────────────────────────
+const lguTabTitles = {
+  overview: 'LGU Operations Dashboard',
+  all_reports: 'All Incident Reports',
+  map: 'Incident Map',
+  contacts: 'Emergency Contacts',
+  barangays: 'Barangay Summaries',
+  responders: 'Responder Units',
+  profile: 'My Profile'
+};
+
+function showTab(name) {
+  if (!lguTabTitles[name]) return;
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.sb-nav a').forEach(function(a){ a.classList.remove('active'); });
+  var target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+  var titleEl = document.getElementById('lguPageTitle');
+  if (titleEl) titleEl.textContent = lguTabTitles[name];
+  try { history.replaceState(null, '', '#tab=' + name); } catch(e){}
+  if (name === 'map') {
+    setTimeout(function(){
+      if (typeof lmap !== 'undefined' && lmap) {
+        lmap.invalidateSize();
+      }
+    }, 80);
+  }
+  if (typeof closeSidebar === 'function') closeSidebar();
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
+  if (hash && lguTabTitles[hash]) {
+    showTab(hash);
+  }
+});
+
 // Escape user-controlled values before they are concatenated into innerHTML.
 function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function openSidebar(){
