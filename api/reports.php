@@ -762,125 +762,155 @@ switch ($action) {
  break;
 
  case 'admin_create_official':
- // Provision an official government account (barangay / LGU / first responder).
- // Created pre-approved with email_verified=1 and force_password_reset=1 so
- // the official must set their own password at first sign-in.
- if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+		// Provision an official government account (barangay / LGU / first responder)
+		// or a community member account.
+		if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
 
- $new_role = trim($_POST['role'] ?? '');
- if (!in_array($new_role, ['barangay','lgu','first_responder','community'], true)) {
- echo json_encode(['status'=>'error','message'=>'Invalid portal role.']); exit;
- }
+		$new_role = trim($_POST['role'] ?? '');
+		if (!in_array($new_role, ['barangay','lgu','first_responder','community'], true)) {
+			echo json_encode(['status'=>'error','message'=>'Invalid portal role.']); exit;
+		}
 
- $c_first = trim($_POST['first_name'] ?? '');
- $c_last = trim($_POST['last_name'] ?? '');
- $c_email = trim($_POST['email'] ?? '');
- $c_official_id = trim($_POST['official_id'] ?? '');
- $c_org = trim($_POST['org_name'] ?? '') ?: null;
- $c_position = trim($_POST['position'] ?? '') ?: null;
- $c_brgy = trim($_POST['barangay_name'] ?? '') ?: null;
- $c_muni = trim($_POST['municipality'] ?? '') ?: null;
- $c_rtype = trim($_POST['responder_type'] ?? '') ?: null;
- $c_pw = trim($_POST['password'] ?? '');
- $c_email_creds = (($_POST['email_creds'] ?? '1') === '1');
+		$c_first = trim($_POST['first_name'] ?? '');
+		$c_last = trim($_POST['last_name'] ?? '');
+		$c_email = trim($_POST['email'] ?? '');
+		$c_official_id = trim($_POST['official_id'] ?? '');
+		$c_org = trim($_POST['org_name'] ?? '') ?: null;
+		$c_position = trim($_POST['position'] ?? '') ?: null;
+		$c_brgy = trim($_POST['barangay_name'] ?? '') ?: null;
+		$c_muni = trim($_POST['municipality'] ?? '') ?: null;
+		$c_rtype = trim($_POST['responder_type'] ?? '') ?: null;
+		$c_pw = trim($_POST['password'] ?? '');
+		$c_email_creds = (($_POST['email_creds'] ?? '1') === '1');
 
- if ($c_first==='' || $c_last==='') {
- echo json_encode(['status'=>'error','message'=>'First name and last name are required.']); exit;
- }
- if ($c_email !== '' && !filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
- echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
- }
- if ($new_role==='barangay' && (!$c_brgy || !$c_muni)) {
- echo json_encode(['status'=>'error','message'=>'Barangay and city/municipality are required for barangay accounts.']); exit;
- }
- if ($new_role==='lgu' && !$c_muni) {
- echo json_encode(['status'=>'error','message'=>'City/municipality is required for LGU accounts.']); exit;
- }
- if ($new_role==='first_responder') {
- $valid_types = ['bfp','pnp','ems','drrmo','mdrrmo','hospital','other'];
- if (!$c_rtype || !in_array($c_rtype, $valid_types, true)) {
- echo json_encode(['status'=>'error','message'=>'A valid responder type is required for first responder accounts.']); exit;
- }
- }
- if ($c_pw !== '' && strlen($c_pw) < 8) {
- echo json_encode(['status'=>'error','message'=>'Initial password must be at least 8 characters.']); exit;
- }
+		if ($c_first==='' || $c_last==='') {
+			echo json_encode(['status'=>'error','message'=>'First name and last name are required.']); exit;
+		}
 
- // Official ID: name-derived 5 digits + creation year (e.g. 12345 + 2026 =
- // 123452026). Officials then sign in with THIS instead of an email. An
- // admin-provided value may override the generated one; uniqueness enforced.
- if ($c_official_id !== '') {
- if (!preg_match('/^\d{9}$/', $c_official_id)) {
- echo json_encode(['status'=>'error','message'=>'Official ID must be exactly 9 digits.']); exit;
- }
- $chk = $conn->prepare("SELECT id FROM users WHERE official_id=? LIMIT 1");
- $chk->bind_param('s', $c_official_id); $chk->execute(); $chk->store_result();
- if ($chk->num_rows > 0) { $chk->close(); echo json_encode(['status'=>'error','message'=>'That Official ID is already taken.']); exit; }
- $chk->close();
- } else {
- $c_official_id = sentri_generate_official_id($conn, $c_first, $c_last);
- }
- if ($c_email !== '') {
- $chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
- $chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
- if ($chk->num_rows > 0) {
- $chk->close();
- echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
- }
- $chk->close();
- } else {
- // No email on file: officials log in with their Official ID. A placeholder
- // address keeps NOT-NULL constraints and outbox mail satisfied.
- $c_email = $c_official_id . '@official.sentri';
- }
+		if ($new_role === 'community') {
+			if ($c_email === '') {
+				echo json_encode(['status'=>'error','message'=>'Email address is required for community accounts.']); exit;
+			}
+			if (!filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
+				echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
+			}
+			$c_official_id = null;
+			$c_org = null;
+			$c_rtype = null;
+		} else {
+			if ($c_email !== '' && !filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
+				echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
+			}
+			if ($new_role==='barangay' && (!$c_brgy || !$c_muni)) {
+				echo json_encode(['status'=>'error','message'=>'Barangay and city/municipality are required for barangay accounts.']); exit;
+			}
+			if ($new_role==='lgu' && !$c_muni) {
+				echo json_encode(['status'=>'error','message'=>'City/municipality is required for LGU accounts.']); exit;
+			}
+			if ($new_role==='first_responder') {
+				$valid_types = ['bfp','pnp','ems','drrmo','mdrrmo','hospital','other'];
+				if (!$c_rtype || !in_array($c_rtype, $valid_types, true)) {
+					echo json_encode(['status'=>'error','message'=>'A valid responder type is required for first responder accounts.']); exit;
+				}
+			}
+		}
 
- if ($c_pw === '') {
- // Auto-generate a strong, readable initial password
- $alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
- $c_pw = substr(str_shuffle($alphabet), 0, 4) . substr(str_shuffle('2345678923456789'), 0, 3) . substr(str_shuffle('!@#$%&*'), 0, 1) . substr(str_shuffle($alphabet), 0, 4);
- }
- $c_hash = password_hash($c_pw, PASSWORD_BCRYPT, ['cost' => 12]);
+		if ($c_pw !== '' && strlen($c_pw) < 8) {
+			echo json_encode(['status'=>'error','message'=>'Initial password must be at least 8 characters.']); exit;
+		}
 
- $ins = $conn->prepare(
- "INSERT INTO users
- (first_name, last_name, email, official_id, password, role, org_name, `position`,
- barangay_name, municipality, responder_type, is_approved, email_verified, force_password_reset)
- VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1)"
- );
- if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
- $ins->bind_param("sssssssssss", $c_first, $c_last, $c_email, $c_official_id, $c_hash, $new_role, $c_org, $c_position, $c_brgy, $c_muni, $c_rtype);
- if (!$ins->execute()) {
- echo json_encode(['status'=>'error','message'=>'Create failed: '.$ins->error]); exit;
- }
- $new_uid = $conn->insert_id;
- $ins->close();
+		if ($new_role !== 'community') {
+			// Official ID: name-derived 5 digits + creation year (e.g. 12345 + 2026 =
+			// 123452026). Officials then sign in with THIS instead of an email. An
+			// admin-provided value may override the generated one; uniqueness enforced.
+			if ($c_official_id !== '') {
+				if (!preg_match('/^\d{9}$/', $c_official_id)) {
+					echo json_encode(['status'=>'error','message'=>'Official ID must be exactly 9 digits.']); exit;
+				}
+				$chk = $conn->prepare("SELECT id FROM users WHERE official_id=? LIMIT 1");
+				$chk->bind_param('s', $c_official_id); $chk->execute(); $chk->store_result();
+				if ($chk->num_rows > 0) { $chk->close(); echo json_encode(['status'=>'error','message'=>'That Official ID is already taken.']); exit; }
+				$chk->close();
+			} else {
+				$c_official_id = sentri_generate_official_id($conn, $c_first, $c_last);
+			}
+			if ($c_email !== '') {
+				$chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+				$chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
+				if ($chk->num_rows > 0) {
+					$chk->close();
+					echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
+				}
+				$chk->close();
+			} else {
+				// No email on file: officials log in with their Official ID. A placeholder
+				// address keeps NOT-NULL constraints and outbox mail satisfied.
+				$c_email = $c_official_id . '@official.sentri';
+			}
+		} else {
+			// Community member email uniqueness check
+			$chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+			$chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
+			if ($chk->num_rows > 0) {
+				$chk->close();
+				echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
+			}
+			$chk->close();
+		}
 
- $email_sent = false;
- if ($c_email_creds) {
- try {
- require_once __DIR__ . '/../core/SenTriMailer.php';
- $portal_name = ['barangay'=>'Barangay Portal','lgu'=>'LGU Portal','first_responder'=>'First Responder Portal','community'=>'Community Portal'][$new_role];
- $login_link = sentri_app_url() . '/gov/login.php';
- $body = 'An account has been created for you on the SenTri <strong>' . htmlspecialchars($portal_name) . '</strong>.'
- . '<br><br><strong>Email:</strong> ' . htmlspecialchars($c_email)
- . '<br><strong>Temporary password:</strong> ' . htmlspecialchars($c_pw)
- . '<br><br>Sign in at the Government Portal. For security, you will be required to set your own password on first sign-in.';
- $html = buildEmailTemplate('Your SenTri Official Account', 'Dear ' . htmlspecialchars($c_first) . ',', $body, $login_link, 'Open Government Portal', 'If you did not expect this account, contact your system administrator.');
- $m = new SenTriMailer();
- $email_sent = $m->send($c_email, $c_first . ' ' . $c_last, 'Your SenTri official account credentials', $html, 'gov');
- } catch (Throwable $e) {
- error_log('SenTri official invite error: ' . $e->getMessage());
- }
- }
+		if ($c_pw === '') {
+			// Auto-generate a strong, readable initial password
+			$alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+			$c_pw = substr(str_shuffle($alphabet), 0, 4) . substr(str_shuffle('2345678923456789'), 0, 3) . substr(str_shuffle('!@#$%&*'), 0, 1) . substr(str_shuffle($alphabet), 0, 4);
+		}
+		$c_hash = password_hash($c_pw, PASSWORD_BCRYPT, ['cost' => 12]);
 
- $portal_labels = ['barangay'=>'Barangay', 'lgu'=>'LGU', 'first_responder'=>'First Responder', 'community'=>'Community'];
- $hasRealEmail = (strpos($c_email, '@official.sentri') === false);
- $msg = $portal_labels[$new_role] . ' account created — Official ID: ' . $c_official_id . ' · password: ' . $c_pw . '.'
- . ($hasRealEmail && $email_sent ? ' Credentials also emailed.' : ' Share these credentials directly — no email on file.');
- echo json_encode(['status'=>'success','message'=>$msg,'official_id'=>$c_official_id,'password'=>$c_pw,'email_sent'=>(bool)$email_sent]);
- break;
+		$ins = $conn->prepare(
+			"INSERT INTO users
+			(first_name, last_name, email, official_id, password, role, org_name, `position`,
+			 barangay_name, municipality, responder_type, is_approved, email_verified, force_password_reset)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1)"
+		);
+		if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
+		$ins->bind_param("sssssssssss", $c_first, $c_last, $c_email, $c_official_id, $c_hash, $new_role, $c_org, $c_position, $c_brgy, $c_muni, $c_rtype);
+		if (!$ins->execute()) {
+			echo json_encode(['status'=>'error','message'=>'Create failed: '.$ins->error]); exit;
+		}
+		$new_uid = $conn->insert_id;
+		$ins->close();
 
- case 'admin_reject_user':
+		$email_sent = false;
+		if ($c_email_creds) {
+			try {
+				require_once __DIR__ . '/../core/SenTriMailer.php';
+				$portal_name = ['barangay'=>'Barangay Portal','lgu'=>'LGU Portal','first_responder'=>'First Responder Portal','community'=>'Community Portal'][$new_role];
+				$login_link = ($new_role === 'community') ? (sentri_app_url() . '/login.php') : (sentri_app_url() . '/gov/login.php');
+				$portal_realm = ($new_role === 'community') ? 'community' : 'gov';
+				$body = 'An account has been created for you on the SenTri <strong>' . htmlspecialchars($portal_name) . '</strong>.'
+					. '<br><br><strong>Email:</strong> ' . htmlspecialchars($c_email)
+					. '<br><strong>Temporary password:</strong> ' . htmlspecialchars($c_pw)
+					. '<br><br>Sign in to get started. For security, you will be required to set your own password on first sign-in.';
+				$html = buildEmailTemplate('Your SenTri Account', 'Dear ' . htmlspecialchars($c_first) . ',', $body, $login_link, 'Open SenTri Portal', 'If you did not expect this account, contact your system administrator.');
+				$m = new SenTriMailer();
+				$email_sent = $m->send($c_email, $c_first . ' ' . $c_last, 'Your SenTri account credentials', $html, $portal_realm);
+			} catch (Throwable $e) {
+				error_log('SenTri invite error: ' . $e->getMessage());
+			}
+		}
+
+		$portal_labels = ['barangay'=>'Barangay', 'lgu'=>'LGU', 'first_responder'=>'First Responder', 'community'=>'Community'];
+		$hasRealEmail = (strpos($c_email, '@official.sentri') === false);
+		if ($new_role === 'community') {
+			$msg = 'Community account created for ' . $c_email . ' · password: ' . $c_pw . '.'
+				. ($email_sent ? ' Credentials also emailed.' : ' Share credentials directly.');
+		} else {
+			$msg = $portal_labels[$new_role] . ' account created — Official ID: ' . $c_official_id . ' · password: ' . $c_pw . '.'
+				. ($hasRealEmail && $email_sent ? ' Credentials also emailed.' : ' Share these credentials directly — no email on file.');
+		}
+		echo json_encode(['status'=>'success','message'=>$msg,'official_id'=>$c_official_id,'email'=>$c_email,'password'=>$c_pw,'email_sent'=>(bool)$email_sent]);
+		break;
+
+	case 'admin_reject_user':
  if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
  $target=(int)($_POST['user_id']??0);
  if(!$target||$target===$user_id){echo json_encode(['status'=>'error','message'=>'Invalid.']);exit;}

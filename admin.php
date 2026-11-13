@@ -922,10 +922,10 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="modal-overlay" id="createOfficialModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
  <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
- <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-user-shield" style="color:#166534;margin-right:8px;"></i>Create Official Account</h3>
+ <h3 id="coModalTitle" style="font-size:1.05rem;font-weight:700;"><i class="fas fa-user-shield" style="color:#166534;margin-right:8px;"></i>Create Official Account</h3>
  <button onclick="closeCreateOfficialModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
  </div>
- <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;line-height:1.5;">Provision a <b>barangay</b>, <b>LGU</b>, <b>first responder</b>, or <b>community</b> account. The account is created pre-approved with an <b>Official ID</b> (email-free, 5 name-derived digits + creation year); credentials are shared directly and a password change is forced on first sign-in.</p>
+ <p id="coModalSubtitle" style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;line-height:1.5;">Provision a <b>barangay</b>, <b>LGU</b>, <b>first responder</b>, or <b>community</b> account. The account is created pre-approved with an <b>Official ID</b> (email-free, 5 name-derived digits + creation year); credentials are shared directly and a password change is forced on first sign-in.</p>
  <div id="createOfficialMsg" class="msg" style="padding:9px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:12px;display:none;text-align:center;"></div>
  <form id="createOfficialForm" onsubmit="submitCreateOfficial(event)" novalidate>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -952,39 +952,44 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">First Name *</label><input id="coFirst" type="text" placeholder="Juan" oninput="coAutoOffId()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
  <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Last Name *</label><input id="coLast" type="text" placeholder="dela Cruz" oninput="coAutoOffId()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
  </div>
- <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Official ID (sign-in ID) *</label>
+ <div id="coOffIdWrap" style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Official ID (sign-in ID) *</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="coOffId" type="text" inputmode="numeric" maxlength="9" oninput="this.dataset.manual='1'" placeholder="auto: 5 digits + year (123452026)" style="flex:1;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;font-family:ui-monospace,Menlo,monospace;letter-spacing:.12em;">
  <button type="button" onclick="coRegenOffId()" title="Regenerate from names" style="padding:9px 12px;border:1.5px solid #e2e8f0;background:#fff;border-radius:8px;font-size:.8rem;cursor:pointer;color:#374151;font-weight:600;">↺</button>
  </div>
  <div style="font-size:.7rem;color:#6b7280;margin-top:4px;line-height:1.5;">Auto-generated from <b>first + last name</b>: 5 digits + the creation year (e.g. <code>12345</code> + <code>2026</code> = <code>123452026</code>). Officials sign in with this ID on their portals instead of an email. Overridable — must stay 9 unique digits.</div>
  </div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label>
+ <div id="coEmailWrap" style="margin-top:12px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Email Address (sign-in email) *</label>
+ <input id="coEmail" type="email" placeholder="resident@example.com" autocomplete="off" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ <div style="font-size:.7rem;color:#6b7280;margin-top:4px;line-height:1.5;">Community members sign in using their <b>email address</b> on the Community Portal and mobile app. No Official ID is generated.</div>
+ </div>
+ <div id="coOrgPosGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+ <div id="coOrgWrap"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label>
  <input id="coOrg" type="text" list="coOrgList" autocomplete="off" placeholder="e.g. Brgy. Bucandala I Hall" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
  <datalist id="coOrgList"></datalist>
  </div>
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Position / Rank *</label>
+ <div id="coPositionWrap"><label id="coPosLabel" style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Position / Rank *</label>
  <select id="coPosition" onchange="coPositionChanged()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></select>
  <input id="coPositionOther" type="text" placeholder="Specify position / rank" style="display:none;width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;margin-top:6px;">
  </div>
  </div>
  <div style="margin-top:12px;">
  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
- <label style="font-size:0.75rem;font-weight:600;color:#374151;">Territory — click a highlighted barangay *</label>
+ <label id="coMapLabel" style="font-size:0.75rem;font-weight:600;color:#374151;">Territory — click a highlighted barangay *</label>
  <a href="javascript:void(0)" onclick="coClearTerritory()" style="font-size:0.72rem;color:#dc2626;font-weight:600;">Clear</a>
  </div>
  <div id="coMap" style="height:230px;border:1.5px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#eef4fb;"></div>
  <div id="coMapHint" style="font-size:0.7rem;color:#6b7280;margin-top:4px;line-height:1.5;">Click the official's <b>barangay</b> polygon to assign it. LGU accounts are citywide — clicking a barangay sets the city only.</div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
- <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Barangay</label><input id="coBarangay" type="text" readonly placeholder="— pick on the map —" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#f3f4f6;outline:none;color:#374151;"></div>
+ <div><label id="coBrgyLabel" style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Barangay</label><input id="coBarangay" type="text" readonly placeholder="— pick on the map —" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#f3f4f6;outline:none;color:#374151;"></div>
  <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">City / Municipality *</label><input id="coMunicipality" type="text" readonly placeholder="— pick on the map —" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#f3f4f6;outline:none;color:#374151;"></div>
  </div>
  <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Initial Password</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="coPassword" type="text" placeholder="Leave blank to auto-generate" style="flex:1;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;font-family:monospace;">
- <span style="font-size:0.76rem;color:#6b7280;white-space:nowrap;">Share credentials directly</span>
+ <span id="coPwHint" style="font-size:0.76rem;color:#6b7280;white-space:nowrap;">Share credentials directly</span>
  </div></div>
  <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
  <button type="button" onclick="closeCreateOfficialModal()" style="padding:10px 20px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.86rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
@@ -1238,8 +1243,13 @@ function coCrc32(s){
  return (crc^-1)>>>0;
 }
 function coAutoOffId(){
+ const role=document.getElementById('coRole').value;
  const el=document.getElementById('coOffId');
- if(el.dataset.manual==='1')return;
+ if(role==='community'){
+  if(el) el.value='';
+  return;
+ }
+ if(!el||el.dataset.manual==='1')return;
  const f=document.getElementById('coFirst').value.trim();
  const l=document.getElementById('coLast').value.trim();
  el.value=(f&&l)?String(coCrc32((f+l).toUpperCase()+'|0')%100000).padStart(5,'0')+String(new Date().getFullYear()):'';
@@ -1455,15 +1465,62 @@ function coRoleChanged(){
  const role=document.getElementById('coRole').value;
  const rt=document.getElementById('coResponderType');
  const rtWrap=document.getElementById('coRtypeWrap');
+ const offIdWrap=document.getElementById('coOffIdWrap');
+ const emailWrap=document.getElementById('coEmailWrap');
+ const orgWrap=document.getElementById('coOrgWrap');
+ const orgPosGrid=document.getElementById('coOrgPosGrid');
+ const posLabel=document.getElementById('coPosLabel');
  const coOrg=document.getElementById('coOrg');
  const coMuni=document.getElementById('coMunicipality');
  const coBrgy=document.getElementById('coBarangay');
+ const modalTitle=document.getElementById('coModalTitle');
+ const modalSubtitle=document.getElementById('coModalSubtitle');
+ const submitBtn=document.getElementById('createOfficialBtn');
+ const mapLabel=document.getElementById('coMapLabel');
+ const brgyLabel=document.getElementById('coBrgyLabel');
+ const hint=document.getElementById('coMapHint');
+ const pwHint=document.getElementById('coPwHint');
+
  if(role==='first_responder'){
   rtWrap.style.display='';
   if(!rt.value)rt.value='bfp';
  }else{
   rtWrap.style.display='none';
  }
+
+ if(role==='community'){
+  if(offIdWrap) offIdWrap.style.display='none';
+  if(emailWrap) emailWrap.style.display='block';
+  if(orgWrap) orgWrap.style.display='none';
+  if(orgPosGrid) orgPosGrid.style.gridTemplateColumns='1fr';
+  if(posLabel) posLabel.textContent='Resident Role / Designation';
+  if(brgyLabel) brgyLabel.textContent='Home Barangay';
+  if(modalTitle) modalTitle.innerHTML='<i class="fas fa-user-plus" style="color:#2563eb;margin-right:8px;"></i>Create Community Account';
+  if(modalSubtitle) modalSubtitle.innerHTML='Provision a <b>community member</b> account. Community members sign in with their <b>email address</b>. The account is created pre-approved with email verified.';
+  if(submitBtn) submitBtn.innerHTML='<i class="fas fa-user-plus"></i> Create Community Account';
+  if(mapLabel) mapLabel.textContent="Territory — resident's home barangay (optional)";
+  if(hint) hint.innerHTML="<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident's home barangay.";
+  if(pwHint) pwHint.textContent='Share credentials or direct login';
+  const elOff=document.getElementById('coOffId');
+  if(elOff) elOff.value='';
+ }else{
+  if(offIdWrap) offIdWrap.style.display='block';
+  if(emailWrap) emailWrap.style.display='none';
+  if(orgWrap) orgWrap.style.display='block';
+  if(orgPosGrid) orgPosGrid.style.gridTemplateColumns='1fr 1fr';
+  if(posLabel) posLabel.textContent='Position / Rank *';
+  if(brgyLabel) brgyLabel.textContent='Barangay';
+  if(modalTitle) modalTitle.innerHTML='<i class="fas fa-user-shield" style="color:#166534;margin-right:8px;"></i>Create Official Account';
+  if(modalSubtitle) modalSubtitle.innerHTML='Provision a <b>barangay</b>, <b>LGU</b>, or <b>first responder</b> account. The account is created pre-approved with an <b>Official ID</b> (email-free, 5 name-derived digits + creation year); credentials are shared directly and a password change is forced on first sign-in.';
+  if(submitBtn) submitBtn.innerHTML='<i class="fas fa-user-shield"></i> Create Official Account';
+  if(mapLabel) mapLabel.textContent=(role==='lgu'?'Territory — citywide jurisdiction':'Territory — click a highlighted barangay *');
+  if(hint) hint.innerHTML=(role==='lgu')
+   ? "<b>LGU = citywide.</b> Automatically locked to Imus City and City Government of Imus."
+   : "<b>Click the official's barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.";
+  if(pwHint) pwHint.textContent='Share credentials directly';
+  coAutoOffId();
+ }
+
  if(role==='lgu'){
   if(coMuni) coMuni.value='Imus';
   if(coBrgy) coBrgy.value='';
@@ -1473,7 +1530,7 @@ function coRoleChanged(){
    coOrg.style.background='#f3f4f6';
    coOrg.style.color='#374151';
   }
- }else{
+ }else if(role!=='community'){
   if(coOrg && coOrg.readOnly){
    coOrg.readOnly=false;
    coOrg.style.background='#fafafa';
@@ -1483,12 +1540,6 @@ function coRoleChanged(){
   }
  }
  coUpdateOrgDatalist();
- const hint=document.getElementById('coMapHint');
- hint.innerHTML=(role==='lgu')
-  ? "<b>LGU = citywide.</b> Automatically locked to Imus City and City Government of Imus."
-  :(role==='community')
-  ? "<b>Community accounts</b> are resident-level: territory (barangay/city) is optional — click a polygon to scope the resident's purok."
-  : "<b>Click the official's barangay polygon</b> (highlighted in Imus) to assign their jurisdiction. Not needed for citywide LGU accounts.";
  coPopulatePositions();
 }
 function coShowMsg(type,text){
@@ -1506,12 +1557,21 @@ async function submitCreateOfficial(e){
  const first=document.getElementById('coFirst').value.trim();
  const last=document.getElementById('coLast').value.trim();
  const offId=document.getElementById('coOffId').value.trim();
+ const email=document.getElementById('coEmail')?.value.trim()||'';
  const municipality=document.getElementById('coMunicipality').value.trim();
  const barangay=document.getElementById('coBarangay').value.trim();
- if(!first||!last||!offId){coShowMsg('error','First name, last name and Official ID are required.');return;}
- if(!/^\d{9}$/.test(offId)){coShowMsg('error','Official ID must be exactly 9 digits (5 digits + year).');return;}
- if(role!=='community'&&!municipality){coShowMsg('error','Territory required — click a barangay on the map (or city polygon for LGU).');return;}
- if(role==='barangay'&&!barangay){coShowMsg('error','Barangay officials need a barangay — click the barangay polygon on the map.');return;}
+
+ if(!first||!last){coShowMsg('error','First name and last name are required.');return;}
+ if(role==='community'){
+  if(!email){coShowMsg('error','Email address is required for community accounts.');return;}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){coShowMsg('error','Please enter a valid email address.');return;}
+ }else{
+  if(!offId){coShowMsg('error','First name, last name and Official ID are required.');return;}
+  if(!/^\d{9}$/.test(offId)){coShowMsg('error','Official ID must be exactly 9 digits (5 digits + year).');return;}
+  if(!municipality){coShowMsg('error','Territory required — click a barangay on the map (or city polygon for LGU).');return;}
+  if(role==='barangay'&&!barangay){coShowMsg('error','Barangay officials need a barangay — click the barangay polygon on the map.');return;}
+ }
+
  let position=document.getElementById('coPosition').value;
  if(position===CO_OTHER){position=document.getElementById('coPositionOther').value.trim()||'Other';}
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Creating...';
@@ -1520,26 +1580,39 @@ async function submitCreateOfficial(e){
  fd.append('role',role);
  fd.append('first_name',first);
  fd.append('last_name',last);
- fd.append('official_id',offId);
- fd.append('org_name',document.getElementById('coOrg').value.trim());
+ if(role==='community'){
+  fd.append('email',email);
+  fd.append('official_id','');
+  fd.append('org_name','');
+ }else{
+  fd.append('official_id',offId);
+  fd.append('email','');
+  fd.append('org_name',document.getElementById('coOrg').value.trim());
+ }
  fd.append('position',position);
  fd.append('barangay_name',barangay);
  fd.append('municipality',municipality);
  fd.append('responder_type',document.getElementById('coResponderType').value);
- fd.append('email_creds','0'); // officials sign in with their Official ID; no credential email
+ fd.append('email_creds','0'); // credentials shared directly
  fd.append('password',document.getElementById('coPassword').value);
  try{
- const res=await fetch('api/reports.php',{method:'POST',body:fd});
- const data=await res.json();
- if(data.status==='success'){
- coShowMsg('success',data.message);
- if(data.password){coShowMsg('success','Account created. Share with the official — Official ID: '+(data.official_id||document.getElementById('coOffId').value)+' · Initial password: '+data.password+' (they must change it at first sign-in).');}
- document.getElementById('createOfficialForm').reset();
- coRoleChanged();
- loadUsers();
- }else{coShowMsg('error',data.message||'Failed to create account.');}
+  const res=await fetch('api/reports.php',{method:'POST',body:fd});
+  const data=await res.json();
+  if(data.status==='success'){
+   coShowMsg('success',data.message);
+   if(data.password){
+    if(role==='community'){
+     coShowMsg('success','Community account created. Share with the member — Email: '+(data.email||email)+' · Initial password: '+data.password);
+    }else{
+     coShowMsg('success','Account created. Share with the official — Official ID: '+(data.official_id||offId)+' · Initial password: '+data.password+' (they must change it at first sign-in).');
+    }
+   }
+   document.getElementById('createOfficialForm').reset();
+   coRoleChanged();
+   loadUsers();
+  }else{coShowMsg('error',data.message||'Failed to create account.');}
  }catch{coShowMsg('error','Connection error. Please try again.');}
- btn.disabled=false;btn.innerHTML='<i class="fas fa-user-plus"></i> Create Account';
+ btn.disabled=false;btn.innerHTML=(role==='community'?'<i class="fas fa-user-plus"></i> Create Community Account':'<i class="fas fa-user-shield"></i> Create Official Account');
 }
 async function deleteUser(uid, name){
  if(!confirm(`Remove user "${name}"?\n\nThis will delete their account and all their reports. This cannot be undone.`)) return;
