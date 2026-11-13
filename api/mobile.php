@@ -490,22 +490,30 @@ switch ($action) {
             $report_id = $conn->insert_id;
             $stmt->close();
 
-            // Handle optional image upload
+            // Handle optional image upload (accepts 'image', 'photo', or 'photos')
             $uploaded_image_url = null;
+            $img_file = null;
             if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                $img_file = $_FILES['image'];
+            } elseif (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
+                $img_file = $_FILES['photo'];
+            } elseif (isset($_FILES['photos']) && !is_array($_FILES['photos']['name']) && $_FILES['photos']['error'] === UPLOAD_ERR_OK) {
+                $img_file = $_FILES['photos'];
+            }
+            if ($img_file) {
                 $upload_dir = __DIR__ . '/../uploads/reports/';
                 if (!is_dir($upload_dir)) {
                     mkdir($upload_dir, 0755, true);
                 }
-                $ext = strtolower(pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION));
+                $ext = strtolower(pathinfo($img_file['name'], PATHINFO_EXTENSION));
                 $safe_exts = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
                 if (in_array($ext, $safe_exts, true)) {
                     $new_name = 'report_' . $report_id . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
                     $dest = $upload_dir . $new_name;
-                    if (move_uploaded_file($_FILES['image']['tmp_name'], $dest)) {
+                    if (move_uploaded_file($img_file['tmp_name'], $dest)) {
                         $fsize = filesize($dest);
                         $mime = mime_content_type($dest);
-                        $orig = $_FILES['image']['name'];
+                        $orig = $img_file['name'];
 
                         $img_stmt = $conn->prepare("INSERT INTO report_images (report_id, file_name, original_name, mime_type, file_size) VALUES (?, ?, ?, ?, ?)");
                         $img_stmt->bind_param('isssi', $report_id, $new_name, $orig, $mime, $fsize);

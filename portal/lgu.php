@@ -71,7 +71,7 @@ if ($view === 'overview' || $view === 'all_reports') {
  $bind_brgy = true;
  }
  }
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
+ $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
  if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
  $s->execute(); $res=$s->get_result();
  while($row=$res->fetch_assoc()) {
@@ -1507,7 +1507,8 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+esc(residence)+'</div></div>':'')+
  '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+esc(date)+'</div></div>'+
  (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+esc(desc)+'</div></div>':'')+
- '<div id="lguModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
+ '<div id="lguModalPhotosWrap" style="margin-top:14px;display:none;"></div>' +
+  '<div id="lguModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
  
  document.getElementById('lguModalBody').innerHTML = baseHtml;
  document.getElementById('lguRptStatusSel').value = status;
@@ -1555,8 +1556,38 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  }
  document.getElementById('lguReportModal').classList.add('show');
 
- try {
- var res = await fetch('../api/reports.php?action=get_lifecycle&report_id=' + id);
+  try {
+    fetch('../api/reports.php?action=get_report_images&report_id=' + id).then(function(r){ return r.json(); }).then(function(data){
+      var pw = document.getElementById('lguModalPhotosWrap');
+      if (!pw) return;
+      if (data && data.status === 'success' && Array.isArray(data.images) && data.images.length > 0) {
+        pw.style.display = 'block';
+        var count = data.images.length;
+        var h = '<div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">' +
+          '<i class="fas fa-camera" style="color:var(--navy,#1e293b);"></i> Attached Photos (' + count + ')' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:10px;">';
+        data.images.forEach(function(img, idx) {
+          var imgUrl = '../' + img.url;
+          h += '<div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);aspect-ratio:4/3;background:#0f172a;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.1);" onclick="openPhotoPreview(\'' + imgUrl.replace(/'/g, "\\'") + '\')">' +
+            '<img src="' + imgUrl + '" alt="Incident Photo ' + (idx + 1) + '" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy" onerror="this.parentElement.style.display=\'none\'">' +
+            '<div style="position:absolute;bottom:5px;right:6px;background:rgba(0,0,0,0.65);color:#fff;font-size:0.65rem;font-weight:600;padding:2px 7px;border-radius:12px;backdrop-filter:blur(2px);display:flex;align-items:center;gap:3px;"><i class="fas fa-magnifying-glass-plus"></i> ' + (idx+1) + '/' + count + '</div>' +
+            '</div>';
+        });
+        h += '</div>';
+        pw.innerHTML = h;
+      } else {
+        pw.style.display = 'none';
+        pw.innerHTML = '';
+      }
+    }).catch(function(){
+      var pw = document.getElementById('lguModalPhotosWrap');
+      if (pw) pw.style.display = 'none';
+    });
+  } catch(e) {}
+
+  try {
+  var res = await fetch('../api/reports.php?action=get_lifecycle&report_id=' + id);
  var data = await res.json();
  if (data.status === 'success' && data.report) {
  var rep = data.report;
@@ -1600,6 +1631,18 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
  }
 }
 function closeLguModal(){ document.getElementById('lguReportModal').classList.remove('show'); }
+
+function openPhotoPreview(url) {
+  var lb = document.getElementById('lightbox');
+  var img = document.getElementById('lightboxImg');
+  if (!lb || !img) return;
+  img.src = url;
+  lb.classList.add('open');
+}
+function closePhotoPreview() {
+  var lb = document.getElementById('lightbox');
+  if (lb) lb.classList.remove('open');
+}
 document.addEventListener('DOMContentLoaded',function(){
  document.getElementById('lguReportModal').addEventListener('click',function(e){if(e.target===this)closeLguModal();});
  document.getElementById('lguContactModal').addEventListener('click',function(e){if(e.target===this)closeLguContactModal();});
@@ -1775,7 +1818,19 @@ function searchTableReports(query){
 .lgu-cn-label{font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.8px;display:block;margin-bottom:4px;}
 .lgu-cn-input{width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:0.88rem;font-family:'Inter',sans-serif;outline:none;background:#fafafa;}
 .lgu-cn-input:focus{border-color:#93c5fd;background:#fff;}
+/* LIGHTBOX PREVIEW */
+.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:2000;justify-content:center;align-items:center;cursor:zoom-out;padding:20px;}
+.lightbox.open{display:flex;}
+.lightbox img{max-width:90vw;max-height:90vh;border-radius:12px;object-fit:contain;box-shadow:0 10px 40px rgba(0,0,0,0.6);}
+.lightbox-close{position:absolute;top:20px;right:24px;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:1.3rem;cursor:pointer;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;transition:background 0.2s;}
+.lightbox-close:hover{background:rgba(255,255,255,0.3);}
 </style>
+
+<!-- ═══ LIGHTBOX PREVIEW ═══ -->
+<div class="lightbox" id="lightbox" onclick="closePhotoPreview()">
+  <button class="lightbox-close" onclick="closePhotoPreview()"><i class="fas fa-xmark"></i></button>
+  <img id="lightboxImg" src="" alt="Photo Preview">
+</div>
 
 <div class="lgu-modal-bg" id="lguReportModal">
  <div class="lgu-modal">
