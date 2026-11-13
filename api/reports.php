@@ -562,6 +562,19 @@ switch ($action) {
  $rate->bind_param("i",$user_id); $rate->execute(); $rate->bind_result($cnt); $rate->fetch(); $rate->close();
  if ($cnt >= 10) { echo json_encode(['status'=>'error','message'=>'Posting limit reached (10/hr).']); exit; }
 
+ // Enforce 1-minute rate limit cooldown per account
+ $cd = $conn->prepare("SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS elapsed FROM reports WHERE user_id=? ORDER BY created_at DESC LIMIT 1");
+ $cd->bind_param("i", $user_id);
+ $cd->execute();
+ $cd_res = $cd->get_result()->fetch_assoc();
+ $cd->close();
+ if ($cd_res && $cd_res['elapsed'] !== null && (int)$cd_res['elapsed'] < 60) {
+     $wait_secs = max(1, 60 - (int)$cd_res['elapsed']);
+     http_response_code(429);
+     echo json_encode(['status'=>'error', 'message'=>"Rate limit: please wait {$wait_secs}s before submitting another report."]);
+     exit;
+ }
+
  ensureGeoColumns($conn);
 
  // Type string: i=user_id, s×7=text fields, s=lat, s=lng, i=radius, s=status, s=category

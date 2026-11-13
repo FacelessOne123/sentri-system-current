@@ -468,6 +468,20 @@ switch ($action) {
             mobile_respond(401, ['status' => 'error', 'message' => 'Unauthorized']);
         }
 
+        // Enforce 1-minute rate limit cooldown per account
+        $cd_stmt = $conn->prepare("SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS elapsed FROM reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
+        $cd_stmt->bind_param('i', $user['id']);
+        $cd_stmt->execute();
+        $cd_res = $cd_stmt->get_result()->fetch_assoc();
+        $cd_stmt->close();
+        if ($cd_res && $cd_res['elapsed'] !== null && (int)$cd_res['elapsed'] < 60) {
+            $wait_secs = max(1, 60 - (int)$cd_res['elapsed']);
+            mobile_respond(429, [
+                'status' => 'error',
+                'message' => "Please wait {$wait_secs}s before submitting another report."
+            ]);
+        }
+
         $title = trim($input['title'] ?? '');
         $description = trim($input['description'] ?? '');
         $category = trim($input['category'] ?? 'other');
