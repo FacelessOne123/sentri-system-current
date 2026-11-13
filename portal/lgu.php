@@ -639,7 +639,6 @@ tr:hover td{background:#fafafa;}
  <?php endif; ?>
  </div>
  </div>
- </div>
  <div style="background:linear-gradient(135deg,#064e3b 0%,#059669 100%);color:#fff;border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 4px 16px rgba(5,150,105,0.18);">
  <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;color:#a7f3d0;flex-shrink:0;">
  <i class="fas fa-shield-halved"></i>
@@ -752,8 +751,6 @@ tr:hover td{background:#fafafa;}
  </a>
  <?php endforeach; endif; ?>
  </div>
- </div>
-
  </div>
 
   <div class="tab-panel <?= $view==='all_reports'?'active':'' ?>" id="tab-all_reports">
@@ -1373,6 +1370,8 @@ tr:hover td{background:#fafafa;}
  } catch(e) { btn.disabled=false; }
  }
  </script>
+
+ </div><!-- /tab-responders -->
 
  </div><!-- /content -->
 </div><!-- /main -->
