@@ -14,7 +14,7 @@
  $responder_pending = $r['status'] === 'dangerous' && !empty($r['assigned_to']) && empty($r['resolved_at']);
  $img_cnt = (int)($r['image_count'] ?? 0);
  ?>
- <tr data-status="<?= htmlspecialchars($r['status']) ?>"<?= $responder_pending ? ' data-responder-pending="1"' : '' ?>>
+ <tr data-status="<?= htmlspecialchars($r['status']) ?>" data-archived="<?= (int)($r['is_archived'] ?? 0) ?>"<?= $responder_pending ? ' data-responder-pending="1"' : '' ?>>
  <td style="color:var(--muted);font-size:0.74rem;">#<?= $r['id'] ?></td>
  <td style="font-weight:600;max-width:200px;">
  <?= htmlspecialchars(mb_strimwidth($r['title'],0,55,'…')) ?>

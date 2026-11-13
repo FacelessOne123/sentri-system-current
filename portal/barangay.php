@@ -55,10 +55,10 @@ $BRGY_COND = brgy_sql('r.barangay') . " = ?";
 // Stats - strictly scoped to this barangay official's assigned territory.
 // If no barangay is assigned, stats remain 0 to prevent unauthorized citywide data leak.
 if ($brgy) {
- $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key]);
  $danger = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
  $caution = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
- $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key]);
 } else {
  $total = 0; $danger = 0; $caution = 0; $safe = 0;
 }
@@ -79,7 +79,7 @@ if (in_array($view, ['overview','reports'])) {
  $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
  if ($brgy) {
   $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1){$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
   $s->bind_param("s", $brgy_key);
   $s->execute(); $res=$s->get_result();
   while($row=$res->fetch_assoc()) $reports[]=$row;
@@ -137,7 +137,7 @@ $map_reports = [];
 if ($view === 'map') {
  if ($brgy) {
   $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
   $s->bind_param("s", $brgy_key);
   $s->execute(); $res=$s->get_result();
   while($row=$res->fetch_assoc()) $map_reports[]=$row;
@@ -145,7 +145,7 @@ if ($view === 'map') {
  }
 }
 $map_total_all = $brgy
- ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key])
+ ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key])
  : 0;
 
 $nav_items = [
@@ -500,10 +500,10 @@ tr:hover td{background:#fafafa;}
  <span class="card-meta" id="rptCount"><?= count($reports) ?> records</span>
  </div>
  <div class="reports-filter-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
- <button class="rf-btn rf-active" onclick="filterReports('all',this)">All</button>
+ <button class="rf-btn rf-active" onclick="filterReports('all',this)">All Active</button>
  <button class="rf-btn" onclick="filterReports('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="rf-btn" onclick="filterReports('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
- <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+ <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
  <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
  </div>
@@ -578,10 +578,10 @@ tr:hover td{background:#fafafa;}
  <div class="map-wrap">
  <div class="map-controls">
  <h3><i class="fas fa-map-location-dot" style="color:var(--green);margin-right:6px;"></i>Incident Map<?= $brgy ? ' - '.htmlspecialchars($brgy) : '' ?></h3>
- <button class="filter-btn active-all" onclick="filterMap('all',this)">All</button>
+ <button class="filter-btn active-all" onclick="filterMap('all',this)">All Active</button>
  <button class="filter-btn" onclick="filterMap('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="filter-btn" onclick="filterMap('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
- <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+ <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <button class="filter-btn" id="toggleHazardRings" onclick="toggleHazardBuffer(this)" title="Toggle 250m/150m safety hazard buffer rings"><i class="fas fa-bullseye" style="color:#ef4444;font-size:0.7rem;"></i> Hazard Buffers</button>
  <button class="filter-btn" id="toggleHeatmap" onclick="toggleHeatmapDensity(this)" title="Toggle incident intensity cluster overlay"><i class="fas fa-fire-flame-curved" style="color:#f59e0b;font-size:0.7rem;"></i> Density Heatmap</button>
  <div style="position:relative;margin-left:auto;">
@@ -606,6 +606,7 @@ tr:hover td{background:#fafafa;}
  return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],
  'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),
  'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
+ 'is_archived'=>(int)($r['is_archived']??0),
  'reporter'=>htmlspecialchars(trim($r['first_name'].' '.$r['last_name']),ENT_QUOTES),
  'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),
  'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),
@@ -813,7 +814,15 @@ tr:hover td{background:#fafafa;}
  function updateMapFilter(){
  allMapMarkers.forEach(function(m){
  var r = m.reportData;
- var matchStatus = (currentMapStatus === 'all' || r.status === currentMapStatus);
+ var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
+ var matchStatus = false;
+ if(currentMapStatus === 'all'){
+  matchStatus = !isArchivedOrSafe;
+ } else if(currentMapStatus === 'safe' || currentMapStatus === 'archived'){
+  matchStatus = isArchivedOrSafe;
+ } else {
+  matchStatus = (r.status === currentMapStatus && !r.is_archived);
+ }
  var matchQuery = true;
  if(currentMapQuery){
  var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'') + ' ' + (r.reporter||'')).toLowerCase();
@@ -1303,8 +1312,17 @@ function applyRptFilters() {
  rows.forEach(function(row) {
  var statusEl = row.querySelector('.pill');
  var status = statusEl ? statusEl.className.replace(/pill\s*/g,'').replace('pill-','').trim() : '';
+ var isArchivedOrSafe = (status === 'safe' || row.getAttribute('data-archived') === '1');
+ var matchStatus = false;
+ if(activeRptStatus === 'all'){
+  matchStatus = !isArchivedOrSafe;
+ } else if(activeRptStatus === 'safe' || activeRptStatus === 'archived'){
+  matchStatus = isArchivedOrSafe;
+ } else {
+  matchStatus = (status === activeRptStatus && row.getAttribute('data-archived') !== '1');
+ }
  var text = row.textContent.toLowerCase();
- var show = (activeRptStatus === 'all' || status === activeRptStatus) && (!q || text.includes(q));
+ var show = matchStatus && (!q || text.includes(q));
  row.style.display = show ? '' : 'none';
  if (show) visible++;
  });

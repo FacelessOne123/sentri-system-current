@@ -261,6 +261,9 @@ switch ($action) {
         $search = trim($_GET['q'] ?? '');
         $limit = min(max((int)($_GET['limit'] ?? 100), 1), 200);
 
+        $is_mine = (!empty($_GET['mine']) || !empty($_GET['mine_only']));
+        $allow_archived = !empty($_GET['include_archived']) || ($status === 'safe') || ($status === 'archived');
+
         $query = "SELECT r.*, u.first_name, u.last_name, u.avatar_color, 
                          resp.first_name AS responder_first, resp.last_name AS responder_last, resp.responder_type AS responder_agency,
                          v.vote AS user_vote
@@ -268,9 +271,21 @@ switch ($action) {
                   LEFT JOIN users u ON r.user_id = u.id 
                   LEFT JOIN users resp ON r.assigned_to = resp.id
                   LEFT JOIN report_votes v ON v.report_id = r.id AND v.user_id = ?
-                  WHERE r.is_archived = 0";
+                  WHERE ";
         $params = [$auth_uid];
         $types = "i";
+
+        if ($is_mine) {
+            $query .= "r.user_id = ?";
+            $params[] = $auth_uid;
+            $types .= "i";
+        } else {
+            if ($allow_archived) {
+                $query .= "1=1";
+            } else {
+                $query .= "r.is_archived = 0 AND r.status != 'safe'";
+            }
+        }
 
         if ($category && $category !== 'all') {
             $query .= " AND r.category = ?";
@@ -303,11 +318,6 @@ switch ($action) {
             $query .= " AND r.created_at >= NOW() - INTERVAL 30 DAY";
         }
 
-        if (!empty($_GET['mine']) || !empty($_GET['mine_only'])) {
-            $query .= " AND r.user_id = ?";
-            $params[] = $auth_uid;
-            $types .= "i";
-        }
 
         $query .= " ORDER BY r.created_at DESC LIMIT ?";
         $params[] = $limit;
@@ -483,8 +493,9 @@ switch ($action) {
             $status = 'caution';
         }
 
-        $stmt = $conn->prepare("INSERT INTO reports (user_id, title, description, location_name, barangay, city, province, latitude, longitude, radius_m, category, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param('issssssddiss', $user['id'], $title, $description, $location_name, $barangay, $city, $province, $latitude, $longitude, $radius_m, $category, $status);
+        $is_archived = ($status === 'safe') ? 1 : 0;
+        $stmt = $conn->prepare("INSERT INTO reports (user_id, title, description, location_name, barangay, city, province, latitude, longitude, radius_m, category, status, is_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param('issssssddissi', $user['id'], $title, $description, $location_name, $barangay, $city, $province, $latitude, $longitude, $radius_m, $category, $status, $is_archived);
 
         if ($stmt->execute()) {
             $report_id = $conn->insert_id;
@@ -566,17 +577,22 @@ switch ($action) {
             $stmt->close();
             mobile_respond(200, ['status' => 'success', 'message' => 'Response timestamp recorded']);
         } elseif ($action_type === 'resolve') {
-            $stmt = $conn->prepare("UPDATE reports SET status = 'safe', resolved_at = NOW() WHERE id = ?");
+            $stmt = $conn->prepare("UPDATE reports SET status = 'safe', resolved_at = NOW(), is_archived = 1 WHERE id = ?");
             $stmt->bind_param('i', $report_id);
             $stmt->execute();
             $stmt->close();
-            mobile_respond(200, ['status' => 'success', 'message' => 'Incident resolved and verified safe']);
+            mobile_respond(200, ['status' => 'success', 'message' => 'Incident resolved and verified safe (archived)']);
         } else {
             if (!in_array($new_status, ['dangerous', 'caution', 'safe'], true)) {
                 mobile_respond(400, ['status' => 'error', 'message' => 'Invalid status']);
             }
-            $stmt = $conn->prepare("UPDATE reports SET status = ? WHERE id = ?");
-            $stmt->bind_param('si', $new_status, $report_id);
+            if ($new_status === 'safe') {
+                $stmt = $conn->prepare("UPDATE reports SET status = 'safe', resolved_at = NOW(), is_archived = 1 WHERE id = ?");
+                $stmt->bind_param('i', $report_id);
+            } else {
+                $stmt = $conn->prepare("UPDATE reports SET status = ?, is_archived = 0 WHERE id = ?");
+                $stmt->bind_param('si', $new_status, $report_id);
+            }
             $stmt->execute();
             $stmt->close();
             mobile_respond(200, ['status' => 'success', 'message' => 'Status updated']);

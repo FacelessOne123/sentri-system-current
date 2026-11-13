@@ -1190,7 +1190,7 @@ switch ($action) {
   }
  }
  if ($role === 'first_responder') {
- $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW(), is_archived=1 WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous' AND resolved_at IS NULL");
  $stmt->bind_param("ii", $report_id, $user_id);
  } else {
  // Admin overrides are unconditional. Barangay can only resolve a caution
@@ -1203,7 +1203,7 @@ switch ($action) {
  } else {
   $extra = ' AND assigned_to IS NULL AND resolved_at IS NULL';
  }
- $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0$extra");
+ $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW(), is_archived=1 WHERE id=? AND is_archived=0$extra");
  $stmt->bind_param("i", $report_id);
  }
  $stmt->execute();
@@ -1336,7 +1336,7 @@ switch ($action) {
    }
   }
  }
- $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL';
+ $res_at = ($new_status === 'safe') ? ', resolved_at=NOW(), is_archived=1' : ', accepted_at=NULL, responded_at=NULL, resolved_at=NULL, is_archived=0';
  // Race-safe version of the guard above: barangay may only resolve caution
  // reports; LGU cannot win against a responder dispatch or concurrent resolve.
  $extra = '';
