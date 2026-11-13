@@ -1277,35 +1277,25 @@ const CO_POSITIONS={
  ],
  first_responder:{
  bfp:[
- {g:'Command',items:['Fire Marshal (Station Head)']},
- {g:'Senior Fire Officer',items:['Senior Fire Officer I (SFO1)','Senior Fire Officer II (SFO2)','Senior Fire Officer III (SFO3)','Senior Fire Officer IV (SFO4)']},
- {g:'Fire Officer',items:['Fire Officer I (FO1)','Fire Officer II (FO2)','Fire Officer III (FO3)']},
- {g:'Specialty',items:['Arson Investigator']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['Fire Marshal (Station Head)']}
+ ],
  pnp:[
- {g:'Command / Station Leadership',items:['Station Commander','Police Major','Police Captain','Police Lieutenant']},
- {g:'Senior Non-Commissioned',items:['Police Executive Master Sergeant','Police Chief Master Sergeant','Police Master Sergeant']},
- {g:'Operational / Patrol',items:['Patrol Corporal','Patrolman / Patrolwoman']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['Station Commander']}
+ ],
  ems:[
- {g:'Command',items:['EMS Chief']},
- {g:'Operations',items:['Team Leader','Paramedic','EMT-Basic','EMS Dispatcher','EMS Driver']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['EMS Chief']}
+ ],
  drrmo:[
- {g:'Command',items:['DRRMO Head']},
- {g:'Operations',items:['Operations & Warning Officer','Search & Rescue Officer','Rescue Team Leader']},
- {g:'Support',items:['Administrative Officer']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['DRRMO Head']}
+ ],
  mdrrmo:[
- {g:'Command',items:['MDRRMO Head']},
- {g:'Operations',items:['Operations Officer','Rescue Team Leader','Rescue Technician','Communications Officer']},
- {g:'Other',items:['__other__']}],
+ {g:'Command',items:['MDRRMO Head']}
+ ],
  hospital:[
- {g:'Medical Leadership',items:['Emergency Department Head','Facility Administrator']},
- {g:'Clinical Staff',items:['ER Physician on Duty','ER Head Nurse','Duty Nurse','Medical Technologist']},
- {g:'Other',items:['__other__']}],
+ {g:'Medical Leadership',items:['Emergency Department Head']}
+ ],
  other:[
- {g:'Other',items:['Other (volunteer / other agency)']}
+ {g:'Command',items:['Lead Responder']}
  ]
  },
  community:[
