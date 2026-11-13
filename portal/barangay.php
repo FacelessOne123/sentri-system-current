@@ -1480,7 +1480,7 @@ function renderBrgyAlert(report, label, reason) {
     (meta ? '<span>' + esc(meta) + '</span>' : '') +
     (description ? '<span class="alert-toast-desc">' + esc(description) + '</span>' : '') +
    '</div>' +
-   '<a class="alert-toast-link" href="javascript:void(0)" onclick="showTab('reports')">View in reports <i class="fas fa-arrow-right"></i></a>' +
+   '<a class="alert-toast-link" href="javascript:void(0)" onclick="showTab(\'reports\')">View in reports <i class="fas fa-arrow-right"></i></a>' +
   '</div>' +
   '<button type="button" class="alert-toast-close" aria-label="Dismiss alert"><i class="fas fa-xmark"></i></button>' +
   '<div class="alert-toast-progress" style="animation-duration:7s;"></div>';
