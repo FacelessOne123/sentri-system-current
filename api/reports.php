@@ -366,7 +366,7 @@ switch ($action) {
  while ($img_row = $img_res->fetch_assoc()) {
  $rid = (int)$img_row['report_id'];
  if (!isset($images_map[$rid])) $images_map[$rid] = [];
- $images_map[$rid][] = 'uploads/reports/' . rawurlencode($img_row['file_name']);
+ $images_map[$rid][] = '/uploads/reports/' . rawurlencode($img_row['file_name']);
  }
  }
  }
@@ -1255,7 +1255,7 @@ switch ($action) {
  while ($row = $res->fetch_assoc()) {
  $row['id'] = (int)$row['id'];
  $row['file_size'] = (int)$row['file_size'];
- $row['url'] = 'uploads/reports/' . rawurlencode($row['file_name']);
+ $row['url'] = '/uploads/reports/' . rawurlencode($row['file_name']);
  $images[] = $row;
  }
  $_img_stmt->close();

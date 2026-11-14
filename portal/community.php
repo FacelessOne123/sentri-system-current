@@ -1219,6 +1219,13 @@ const CI = {crime:'fa-user-shield',accident:'fa-car-burst',flooding:'fa-water',f
 const CL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
 const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#ea580c','#d97706','#16a34a','#0891b2','#374151','#be185d','#0f766e','#7c2d12','#1d4ed8'];
 
+function normImgUrl(u){
+ if(!u) return '';
+ if(u.startsWith('http://') || u.startsWith('https://')) return u;
+ if(u.startsWith('/')) return u;
+ return '/' + u.replace(/^\.\//, '').replace(/^\.\.\//, '');
+}
+
 let allReports=[], curView='feed';
 let userLat=null, userLng=null, hasGPS=false, liveGPS=false;
 // Last known position from the server (a previous browser fix).
@@ -1500,7 +1507,7 @@ function watchMapResize(getMap,el){
 
 function buildCommunitySinglePopup(r){
  const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
- const fp=r.images&&r.images.length>0?r.images[0]:null;
+ const fp=r.images&&r.images.length>0?normImgUrl(r.images[0]):null;
  const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';
  return `<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]||'#888'};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;
 }
@@ -2459,7 +2466,22 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function renderCommunityPhotos(images){
+ const phEl=document.getElementById('d_photos');
+ if(!phEl) return;
+ if(images&&images.length>0){
+  phEl.style.display='flex';
+  phEl.innerHTML=images.map((u,i)=>{
+   const src=normImgUrl(typeof u==='string'?u:(u.url||u.file_name));
+   return `<div class="detail-photo" onclick="openLightbox('${src.replace(/'/g,'%27')}')"><img src="${esc(src)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${images.length}</div>`:''}</div>`;
+  }).join('');
+ }else{
+  phEl.style.display='none';
+  phEl.innerHTML='';
+ }
+}
+
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;renderCommunityPhotos(r.images);if(!r.images||r.images.length===0){fetch('../api/reports.php?action=get_report_images&report_id='+r.id).then(res=>res.json()).then(data=>{if(data&&data.status==='success'&&Array.isArray(data.images)&&data.images.length>0){r.images=data.images.map(img=>normImgUrl(img.url||img.file_name));renderCommunityPhotos(r.images);}}).catch(()=>{});}const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -2555,7 +2577,7 @@ function closeMiniMap(e){if(e.target===document.getElementById('miniMapModal'))c
 function closeMiniMapDirect(){document.getElementById('miniMapModal').classList.remove('open');}
 
 /* Lightbox */
-function openLightbox(url){document.getElementById('lightboxImg').src=url;document.getElementById('lightbox').classList.add('open');}
+function openLightbox(url){document.getElementById('lightboxImg').src=normImgUrl(url);document.getElementById('lightbox').classList.add('open');}
 function closeLightbox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightboxImg').src='';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLightbox();closeDetail();}});
 
