@@ -1,6 +1,7 @@
 <?php
 // Bootstrap security headers before any output or redirect.
 require_once __DIR__ . '/headers.php';
+require_once __DIR__ . '/contacts.php';
 
 // Enforce Philippine Standard Time (UTC+8) across all date/time functions
 date_default_timezone_set('Asia/Manila');

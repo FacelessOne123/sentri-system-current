@@ -399,9 +399,16 @@ body.dark .contacts-hdr{background:linear-gradient(135deg,#3d1f1f,#2e2010);borde
 .contact-row{display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--muted);}
 .contact-row a{color:var(--blue);text-decoration:none;font-weight:600;}
 .contact-row a:hover{text-decoration:underline;}
+.phone-type-tag{display:inline-flex;align-items:center;gap:4px;font-size:0.66rem;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:0.3px;text-transform:uppercase;flex-shrink:0;}
+.phone-type-telephone{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;}
+.phone-type-mobile{background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;}
+.phone-type-hotline{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;}
 body.dark .contact-card{background:var(--card);}
 body.dark .contact-name{color:var(--text);}
 body.dark .contact-row{color:#8b949e;}
+body.dark .phone-type-telephone{background:rgba(14,165,233,0.18);color:#7dd3fc;border-color:rgba(56,189,248,0.35);}
+body.dark .phone-type-mobile{background:rgba(34,197,94,0.18);color:#86efac;border-color:rgba(74,222,128,0.35);}
+body.dark .phone-type-hotline{background:rgba(239,68,68,0.18);color:#fca5a5;border-color:rgba(248,113,113,0.35);}
 
 /* ── Profile Page ── */
 .profile-grid{display:grid;grid-template-columns:300px 1fr;gap:22px;align-items:start;}
@@ -917,7 +924,7 @@ function actionToast(message,type){
       </div>
       <div class="contact-details">
        <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
-       <?php if(!empty($c['contact_number'])): ?><div class="contact-row"><i class="fas fa-phone"></i><a href="tel:<?= htmlspecialchars($c['contact_number']) ?>"><?= htmlspecialchars($c['contact_number']) ?></a></div><?php endif; ?>
+       <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '') ?>
        <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
       </div>
      </div>
@@ -941,7 +948,7 @@ function actionToast(message,type){
     </div>
     <div class="contact-details">
      <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
-     <?php if(!empty($c['contact_number'])): ?><div class="contact-row"><i class="fas fa-phone"></i><a href="tel:<?= htmlspecialchars($c['contact_number']) ?>"><?= htmlspecialchars($c['contact_number']) ?></a></div><?php endif; ?>
+     <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '') ?>
      <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
     </div>
    </div>
@@ -1269,7 +1276,7 @@ function lookupOtherBrgyContact(bname) {
   if (resetBtn) resetBtn.style.display = isMy ? 'none' : 'inline-flex';
 
   var badgeHtml = isMy ? ' <span style="background:#dcfce7;color:#166534;font-size:0.68rem;padding:2px 6px;border-radius:4px;font-weight:700;">YOUR BARANGAY</span>' : '';
-  var phoneHtml = c.contact_number ? '<div class="contact-row"><i class="fas fa-phone"></i><a href="tel:' + encodeURIComponent(c.contact_number) + '">' + escContactHtml(c.contact_number) + '</a></div>' : '';
+  var phoneHtml = formatContactNumbersJs(c.contact_number);
   var emailHtml = c.contact_email ? '<div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:' + encodeURIComponent(c.contact_email) + '">' + escContactHtml(c.contact_email) + '</a></div>' : '';
 
   container.innerHTML = `
@@ -1305,6 +1312,43 @@ function resetToMyBrgyContact() {
 function escContactHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatContactNumbersJs(raw) {
+  if (!raw) return '';
+  var parts = String(raw).split(/[\/\n]/);
+  var html = '';
+  parts.forEach(function(p) {
+    p = p.trim();
+    if (!p) return;
+    var digitsOnly = p.replace(/[^0-9]/g, '');
+    var norm = p.replace(/[\s-]/g, '');
+    var type = 'telephone';
+    var label = 'Telephone';
+    var icon = 'fa-phone';
+
+    if (/^(09|\+?639)\d{9}$/.test(norm) || (digitsOnly.length === 11 && digitsOnly.indexOf('09') === 0) || (digitsOnly.length === 12 && digitsOnly.indexOf('639') === 0)) {
+      type = 'mobile';
+      label = 'Mobile';
+      icon = 'fa-mobile-screen-button';
+    } else if (['911', '117', '16211', '1626'].indexOf(digitsOnly) !== -1 || (digitsOnly.length >= 3 && digitsOnly.length <= 4 && digitsOnly.indexOf('0') !== 0)) {
+      type = 'hotline';
+      label = 'Hotline';
+      icon = 'fa-tower-broadcast';
+    }
+
+    var dial = p.replace(/[^0-9+]/g, '');
+    var locMatch = p.match(/loc\.\s*(\d+)/i);
+    if (locMatch) {
+      dial = p.replace(/loc\..*$/i, '').replace(/[^0-9+]/g, '') + ',' + locMatch[1];
+    }
+
+    html += '<div class="contact-row contact-phone-row" style="display:flex;align-items:center;gap:7px;margin-top:3px;flex-wrap:wrap;">' +
+      '<span class="phone-type-tag phone-type-' + type + '"><i class="fas ' + icon + '" style="font-size:0.62rem;"></i>' + escContactHtml(label) + '</span>' +
+      '<a href="tel:' + encodeURIComponent(dial) + '">' + escContactHtml(p) + '</a>' +
+      '</div>';
+  });
+  return html;
 }
 
 // ── Client-side Tab Routing ──────────────────────────────────────────────

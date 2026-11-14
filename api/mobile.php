@@ -984,6 +984,10 @@ switch ($action) {
         $res = $stmt->get_result();
         $contacts = [];
         while ($row = $res->fetch_assoc()) {
+            $parsed = function_exists('sentri_parse_contact_numbers') ? sentri_parse_contact_numbers($row['contact_number'] ?? '') : [];
+            $row['phone_type'] = !empty($parsed) ? $parsed[0]['type'] : 'unknown';
+            $row['phone_label'] = !empty($parsed) ? $parsed[0]['label'] : '';
+            $row['parsed_numbers'] = $parsed;
             $contacts[] = $row;
         }
         $stmt->close();

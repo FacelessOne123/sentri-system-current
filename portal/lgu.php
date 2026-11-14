@@ -427,6 +427,10 @@ tr:hover td{background:#fafafa;}
 }
 .contact-name{font-size:0.88rem;font-weight:700;margin-bottom:2px;}
 .contact-meta{font-size:0.76rem;color:var(--muted);}
+.phone-type-tag{display:inline-flex;align-items:center;gap:4px;font-size:0.64rem;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:0.3px;text-transform:uppercase;flex-shrink:0;}
+.phone-type-telephone{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;}
+.phone-type-mobile{background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;}
+.phone-type-hotline{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;}
 .contact-type{
  display:inline-block;font-size:0.65rem;font-weight:700;
  text-transform:uppercase;letter-spacing:0.8px;
@@ -865,7 +869,7 @@ tr:hover td{background:#fafafa;}
  <div style="flex:1;min-width:0;">
  <div class="contact-name"><?= htmlspecialchars($c['name']) ?></div>
  <div class="contact-meta">
- <?php if($c['contact_number']): ?><span><i class="fas fa-phone" style="margin-right:4px;"></i><?= htmlspecialchars($c['contact_number']) ?></span>&nbsp;&nbsp;<?php endif; ?>
+ <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '', 'inline') ?>
  <?php if($c['contact_email']): ?><span><i class="fas fa-envelope" style="margin-right:4px;"></i><?= htmlspecialchars($c['contact_email']) ?></span>&nbsp;&nbsp;<?php endif; ?>
  <?php if($c['city']): ?><span><i class="fas fa-location-dot" style="margin-right:4px;"></i><?= htmlspecialchars($c['barangay'] ? $c['barangay'].', '.$c['city'] : $c['city']) ?></span><?php endif; ?>
  </div>
