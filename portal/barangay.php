@@ -478,6 +478,7 @@ tr:hover td{background:#fafafa;}
  </div>
 
  </div>
+ </div>
 
   <div class="tab-panel <?= $view==='reports'?'active':'' ?>" id="tab-reports">
  <div class="rpt-stats">
@@ -504,6 +505,7 @@ tr:hover td{background:#fafafa;}
  <?php else: ?><?php include __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
+ </div>
  </div>
 
   <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
