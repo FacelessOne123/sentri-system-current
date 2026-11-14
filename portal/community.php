@@ -112,17 +112,19 @@ if($cs) while($r=$cs->fetch_assoc()) $all_contacts[]=$r;
 // and strictly ONLY the resident's registered barangay office hotline.
 $contacts = [];
 $all_brgy_contacts = [];
-$user_brgy_canon = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($user_barangay) : $user_barangay;
+$user_brgy_canon = ($user_barangay !== '' && function_exists('sentri_barangay_canonical')) ? (sentri_barangay_canonical($user_barangay) ?? $user_barangay) : $user_barangay;
 
 foreach ($all_contacts as $c) {
-    if ($c['type'] === 'barangay' && !empty($c['barangay'])) {
-        $all_brgy_contacts[$c['barangay']] = $c;
+    $c_brgy = trim((string)($c['barangay'] ?? ''));
+    if ($c['type'] === 'barangay' && $c_brgy !== '') {
+        $all_brgy_contacts[$c_brgy] = $c;
     }
     if ($c['type'] !== 'barangay') {
         $contacts[] = $c;
     } else {
-        $c_canon = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($c['barangay']) : $c['barangay'];
-        if ($user_barangay !== '' && (strcasecmp($c_canon, $user_brgy_canon) === 0 || strcasecmp(trim($c['barangay']), trim($user_barangay)) === 0)) {
+        if ($c_brgy === '') continue; // Skip orphan or null barangay contacts safely
+        $c_canon = function_exists('sentri_barangay_canonical') ? (sentri_barangay_canonical($c_brgy) ?? $c_brgy) : $c_brgy;
+        if ($user_barangay !== '' && (strcasecmp($c_canon, $user_brgy_canon) === 0 || strcasecmp($c_brgy, $user_barangay) === 0)) {
             $contacts[] = $c;
         }
     }
