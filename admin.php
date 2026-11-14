@@ -1110,10 +1110,11 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  </div>
 
- <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+ <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap;">
  <button type="button" onclick="closeAdminExportModal()" style="padding:9px 18px;border:1.5px solid var(--border);background:var(--card);border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
- <button type="button" onclick="triggerAdminDownload('json')" style="padding:9px 18px;background:#0284c7;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
- <button type="button" onclick="triggerAdminDownload('csv')" style="padding:9px 18px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ <button type="button" onclick="triggerAdminDownload('json')" style="padding:9px 14px;background:#0284c7;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerAdminDownload('csv')" style="padding:9px 16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ <button type="button" onclick="triggerAdminDownload('xlsx')" style="padding:9px 18px;background:#0f766e;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-excel"></i> SenTri Excel (.xlsx)</button>
  </div>
  </div>
 </div>

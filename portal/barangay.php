@@ -2302,10 +2302,11 @@ function triggerDownload(format) {
  </select>
  </div>
  </div>
- <div class="modal-actions" style="justify-content:flex-end;">
+ <div class="modal-actions" style="justify-content:flex-end;gap:8px;flex-wrap:wrap;">
  <button type="button" onclick="closeExportModal()" style="padding:8px 16px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:0.84rem;font-weight:600;cursor:pointer;">Cancel</button>
- <button type="button" onclick="triggerDownload('json')" style="padding:8px 16px;border:none;background:#0284c7;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
- <button type="button" onclick="triggerDownload('csv')" style="padding:8px 18px;border:none;background:#16a34a;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ <button type="button" onclick="triggerDownload('json')" style="padding:8px 14px;border:none;background:#0284c7;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerDownload('csv')" style="padding:8px 16px;border:none;background:#16a34a;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ <button type="button" onclick="triggerDownload('xlsx')" style="padding:8px 18px;border:none;background:#0f766e;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-excel"></i> SenTri Excel (.xlsx)</button>
  </div>
  </div>
 </div>
