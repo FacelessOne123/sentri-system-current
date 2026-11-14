@@ -5,6 +5,7 @@ require_once __DIR__ . '/../config/auth.php';
 require_role(['lgu']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/geo.php';
 
 $ident = sentri_identity() ?? [];
 $uid = (int)($ident['user_id'] ?? 0);
@@ -781,7 +782,7 @@ tr:hover td{background:#fafafa;}
  <i class="fas fa-magnifying-glass" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:0.8rem;"></i>
  <input type="text" id="lguReportSearch" placeholder="Search reports or barangay..." oninput="searchTableReports(this.value)" style="padding:6px 12px 6px 28px;border:1.5px solid var(--border);border-radius:8px;font-size:0.8rem;outline:none;font-family:'Inter',sans-serif;background:#fff;width:200px;">
  </div>
- <a href="../api/reports.php?action=export&type=reports&format=csv" class="filter-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
+ <button type="button" onclick="openLguExportModal()" class="filter-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;cursor:pointer;"><i class="fas fa-file-csv"></i> Export CSV</button>
  </div>
  </div>
  <div class="table-wrap">
@@ -2062,6 +2063,99 @@ document.addEventListener('DOMContentLoaded', function(){
  </div>
 </div>
 
+<!-- ── LGU EXPORT MODAL ── -->
+<div class="lgu-modal-bg" id="lguExportModal" onclick="if(event.target===this)closeLguExportModal()">
+ <div class="lgu-modal" style="max-width:480px;">
+ <div class="lgu-modal-header">
+ <h3 style="display:flex;align-items:center;gap:8px;"><i class="fas fa-file-csv" style="color:#16a34a;"></i> Export City Incident Reports</h3>
+ <button class="lgu-modal-close" onclick="closeLguExportModal()"><i class="fas fa-xmark"></i></button>
+ </div>
+ <div class="lgu-modal-body">
+ <p style="font-size:0.83rem;color:var(--muted);margin-bottom:14px;">Select the time and date range to export comprehensive telemetry for Imus City.</p>
+ 
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Timeframe</label>
+ <select id="lguExportRange" onchange="onLguExportRangeChange(this.value)" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="annual" selected>Annual (Full Year)</option>
+ <option value="month">Specific Month & Year</option>
+ <option value="last_month">Last Month</option>
+ <option value="custom">Custom Date Range (From - To)</option>
+ <option value="all">Full Archive (All Time)</option>
+ </select>
+ </div>
+
+ <div id="lguExportYearGroup" style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Select Year</label>
+ <select id="lguExportYear" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php $curY = (int)date('Y'); for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?> Annual City Report</option>
+ <?php endfor; ?>
+ </select>
+ </div>
+
+ <div id="lguExportMonthGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Month & Year</label>
+ <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:10px;">
+ <select id="lguExportMonth" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php
+ $months = [1=>'January',2=>'February',3=>'March',4=>'April',5=>'May',6=>'June',7=>'July',8=>'August',9=>'September',10=>'October',11=>'November',12=>'December'];
+ $curM = (int)date('n');
+ foreach($months as $num => $mName): ?>
+ <option value="<?= $num ?>" <?= $num === $curM ? 'selected' : '' ?>><?= $mName ?></option>
+ <?php endforeach; ?>
+ </select>
+ <select id="lguExportMonthYear" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?></option>
+ <?php endfor; ?>
+ </select>
+ </div>
+ </div>
+
+ <div id="lguExportCustomGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Date Range</label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">Start Date</span>
+ <input type="date" id="lguExportStartDate" value="<?= date('Y-m-01') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">End Date</span>
+ <input type="date" id="lguExportEndDate" value="<?= date('Y-m-d') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ </div>
+ </div>
+
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Barangay Scope</label>
+ <select id="lguExportBarangay" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="">All 95 Imus Barangays (City-Wide)</option>
+ <?php 
+ $all_b = function_exists('sentri_barangay_names') ? sentri_barangay_names() : [];
+ foreach($all_b as $bname): ?>
+ <option value="<?= htmlspecialchars($bname) ?>" <?= ($brgy_filter === $bname) ? 'selected' : '' ?>><?= htmlspecialchars($bname) ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+
+ <div style="margin-bottom:6px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Status Filter</label>
+ <select id="lguExportStatus" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="">All Incident Statuses</option>
+ <option value="dangerous">Dangerous Only</option>
+ <option value="caution">Caution Only</option>
+ <option value="safe">Safe / Resolved Only</option>
+ </select>
+ </div>
+ </div>
+ <div class="lgu-modal-actions" style="justify-content:flex-end;">
+ <button type="button" onclick="closeLguExportModal()" style="padding:8px 16px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:0.84rem;font-weight:600;cursor:pointer;">Cancel</button>
+ <button type="button" onclick="triggerLguDownload('json')" style="padding:8px 16px;border:none;background:#0284c7;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerLguDownload('csv')" style="padding:8px 18px;border:none;background:#16a34a;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ </div>
+ </div>
+</div>
+
 <!-- ── LGU DISPATCH MODAL ── -->
 <div class="lgu-modal-bg" id="lguDispatchModal">
  <div class="lgu-modal" style="max-width:420px;">
@@ -2321,6 +2415,47 @@ function setOperationalAlert(level, btn){
 function broadcastAlertDirective(){
  closeAlertLevelModal();
  showToast('DRRM Alert Directive broadcasted to all 5 Barangay Operations Centers and community feeds.', 'success');
+}
+
+function openLguExportModal() {
+ const m = document.getElementById('lguExportModal');
+ if (m) m.classList.add('show');
+}
+function closeLguExportModal() {
+ const m = document.getElementById('lguExportModal');
+ if (m) m.classList.remove('show');
+}
+function onLguExportRangeChange(val) {
+ const yg = document.getElementById('lguExportYearGroup');
+ const mg = document.getElementById('lguExportMonthGroup');
+ const cg = document.getElementById('lguExportCustomGroup');
+ if (yg) yg.style.display = (val === 'annual') ? 'block' : 'none';
+ if (mg) mg.style.display = (val === 'month') ? 'block' : 'none';
+ if (cg) cg.style.display = (val === 'custom') ? 'block' : 'none';
+}
+function triggerLguDownload(format) {
+ const range = document.getElementById('lguExportRange')?.value || 'annual';
+ const status = document.getElementById('lguExportStatus')?.value || '';
+ const brgy = document.getElementById('lguExportBarangay')?.value || '';
+ let url = `../api/reports.php?action=export&type=reports&format=${format}&range=${encodeURIComponent(range)}`;
+ if (brgy) url += `&barangay=${encodeURIComponent(brgy)}`;
+ if (status) url += `&status=${encodeURIComponent(status)}`;
+ if (range === 'annual') {
+  const y = document.getElementById('lguExportYear')?.value;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'month') {
+  const m = document.getElementById('lguExportMonth')?.value;
+  const y = document.getElementById('lguExportMonthYear')?.value;
+  if (m) url += `&month=${encodeURIComponent(m)}`;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'custom') {
+  const s = document.getElementById('lguExportStartDate')?.value;
+  const e = document.getElementById('lguExportEndDate')?.value;
+  if (s) url += `&start_date=${encodeURIComponent(s)}`;
+  if (e) url += `&end_date=${encodeURIComponent(e)}`;
+ }
+ closeLguExportModal();
+ window.location.href = url;
 }
 
 // ── New-report popup alerts ─────────────────────────────────────────────────

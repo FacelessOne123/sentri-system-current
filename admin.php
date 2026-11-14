@@ -10,6 +10,7 @@ sentri_boot_realm('admin');
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
 require_once __DIR__ . '/config/csrf.php';
+require_once __DIR__ . '/config/geo.php';
 
 // Admin sign-in is handled on this page directly. There are deliberately NO
 // links to admin.php from any community or government page - the panel is
@@ -629,8 +630,8 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <option value="1">Archived Only</option>
  <option value="">All</option>
  </select>
- <a href="api/reports.php?action=export&type=reports&format=csv" class="act-btn restore" style="padding:9px 15px;text-decoration:none;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
- <a href="api/reports.php?action=export&type=reports&format=json" class="act-btn user" style="padding:9px 15px;text-decoration:none;font-weight:700;"><i class="fas fa-file-code"></i> Export JSON</a>
+ <button type="button" onclick="openAdminExportModal('reports')" class="act-btn restore" style="padding:9px 15px;border:none;cursor:pointer;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</button>
+ <button type="button" onclick="openAdminExportModal('reports')" class="act-btn user" style="padding:9px 15px;border:none;cursor:pointer;font-weight:700;"><i class="fas fa-file-code"></i> Export JSON</button>
  </div>
  <div class="table-wrap">
  <div class="loading" id="postsLoading"><i class="fas fa-spinner"></i> Loading posts...</div>
@@ -814,8 +815,8 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <option value="archived">Archived</option>
  <option value="restored">Restored</option>
  </select>
- <a href="api/reports.php?action=export&type=audit_logs&format=csv" class="act-btn restore" style="padding:9px 15px;text-decoration:none;font-weight:700;"><i class="fas fa-file-csv"></i> Export Audit (CSV)</a>
- <a href="api/reports.php?action=export&type=audit_logs&format=json" class="act-btn user" style="padding:9px 15px;text-decoration:none;font-weight:700;"><i class="fas fa-file-code"></i> Export JSON</a>
+ <button type="button" onclick="openAdminExportModal('audit_logs')" class="act-btn restore" style="padding:9px 15px;border:none;cursor:pointer;font-weight:700;"><i class="fas fa-file-csv"></i> Export Audit (CSV)</button>
+ <button type="button" onclick="openAdminExportModal('audit_logs')" class="act-btn user" style="padding:9px 15px;border:none;cursor:pointer;font-weight:700;"><i class="fas fa-file-code"></i> Export JSON</button>
  </div>
  <div class="table-wrap">
  <div class="loading" id="auditLoading"><i class="fas fa-spinner"></i> Loading audit log...</div>
@@ -1020,6 +1021,102 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </form>
  </div>
  </div>
+
+<!-- ADMIN EXPORT MODAL -->
+<div class="modal-overlay" id="adminExportModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closeAdminExportModal()">
+ <div style="background:var(--card);border-radius:16px;padding:26px 28px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+ <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+ <h3 id="adminExportTitle" style="font-size:1.05rem;font-weight:700;"><i class="fas fa-file-csv" style="color:#16a34a;margin-right:8px;"></i>Export Incident Reports</h3>
+ <button type="button" onclick="closeAdminExportModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
+ </div>
+ <p id="adminExportSubtitle" style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;line-height:1.5;">Select time and date parameters for annual, monthly, or custom reporting.</p>
+ 
+ <input type="hidden" id="adminExportType" value="reports">
+
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Timeframe</label>
+ <select id="adminExportRange" onchange="onAdminExportRangeChange(this.value)" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:var(--bg);color:var(--text);outline:none;">
+ <option value="annual" selected>Annual (Full Year)</option>
+ <option value="month">Specific Month & Year</option>
+ <option value="last_month">Last Month</option>
+ <option value="custom">Custom Date Range (From - To)</option>
+ <option value="all">Full Archive (All Time)</option>
+ </select>
+ </div>
+
+ <div id="adminExportYearGroup" style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Select Year</label>
+ <select id="adminExportYear" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:var(--bg);color:var(--text);outline:none;">
+ <?php $curY = (int)date('Y'); for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?> Annual Export</option>
+ <?php endfor; ?>
+ </select>
+ </div>
+
+ <div id="adminExportMonthGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Month & Year</label>
+ <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:10px;">
+ <select id="adminExportMonth" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:var(--bg);color:var(--text);outline:none;">
+ <?php
+ $months = [1=>'January',2=>'February',3=>'March',4=>'April',5=>'May',6=>'June',7=>'July',8=>'August',9=>'September',10=>'October',11=>'November',12=>'December'];
+ $curM = (int)date('n');
+ foreach($months as $num => $mName): ?>
+ <option value="<?= $num ?>" <?= $num === $curM ? 'selected' : '' ?>><?= $mName ?></option>
+ <?php endforeach; ?>
+ </select>
+ <select id="adminExportMonthYear" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:var(--bg);color:var(--text);outline:none;">
+ <?php for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?></option>
+ <?php endfor; ?>
+ </select>
+ </div>
+ </div>
+
+ <div id="adminExportCustomGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Date Range</label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">Start Date</span>
+ <input type="date" id="adminExportStartDate" value="<?= date('Y-m-01') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:var(--bg);color:var(--text);outline:none;box-sizing:border-box;">
+ </div>
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">End Date</span>
+ <input type="date" id="adminExportEndDate" value="<?= date('Y-m-d') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:var(--bg);color:var(--text);outline:none;box-sizing:border-box;">
+ </div>
+ </div>
+ </div>
+
+ <div id="adminExportReportFilterGroup">
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Barangay Filter</label>
+ <select id="adminExportBarangay" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:var(--bg);color:var(--text);outline:none;">
+ <option value="">All 95 Imus Barangays (City-Wide)</option>
+ <?php 
+ $all_b = function_exists('sentri_barangay_names') ? sentri_barangay_names() : [];
+ foreach($all_b as $bname): ?>
+ <option value="<?= htmlspecialchars($bname) ?>"><?= htmlspecialchars($bname) ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+
+ <div style="margin-bottom:6px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Status Filter</label>
+ <select id="adminExportStatus" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:var(--bg);color:var(--text);outline:none;">
+ <option value="">All Incident Statuses</option>
+ <option value="dangerous">Dangerous Only</option>
+ <option value="caution">Caution Only</option>
+ <option value="safe">Safe / Resolved Only</option>
+ </select>
+ </div>
+ </div>
+
+ <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+ <button type="button" onclick="closeAdminExportModal()" style="padding:9px 18px;border:1.5px solid var(--border);background:var(--card);border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
+ <button type="button" onclick="triggerAdminDownload('json')" style="padding:9px 18px;background:#0284c7;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerAdminDownload('csv')" style="padding:9px 18px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ </div>
+ </div>
+</div>
 
 <!-- CREATE OFFICIAL ACCOUNT MODAL -->
  <div class="modal-overlay" id="createOfficialModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
@@ -3001,6 +3098,62 @@ function unbanIP(ip, btn){
  btn.style.color = '#94a3b8';
  btn.innerHTML = '<i class="fas fa-check"></i> Whitelisted';
  showToast(`Security Policy Updated: IP ${ip} removed from blacklist and added to trusted monitoring list.`,'success');
+}
+
+function openAdminExportModal(type) {
+ const m = document.getElementById('adminExportModalOverlay');
+ const typeInput = document.getElementById('adminExportType');
+ const titleEl = document.getElementById('adminExportTitle');
+ const rptFilterGroup = document.getElementById('adminExportReportFilterGroup');
+ if (typeInput) typeInput.value = type || 'reports';
+ if (titleEl) {
+  titleEl.innerHTML = (type === 'audit_logs') 
+    ? '<i class="fas fa-file-csv" style="color:#16a34a;margin-right:8px;"></i>Export Audit Trail'
+    : '<i class="fas fa-file-csv" style="color:#16a34a;margin-right:8px;"></i>Export Incident Reports';
+ }
+ if (rptFilterGroup) {
+  rptFilterGroup.style.display = (type === 'audit_logs') ? 'none' : 'block';
+ }
+ if (m) m.style.display = 'flex';
+}
+function closeAdminExportModal() {
+ const m = document.getElementById('adminExportModalOverlay');
+ if (m) m.style.display = 'none';
+}
+function onAdminExportRangeChange(val) {
+ const yg = document.getElementById('adminExportYearGroup');
+ const mg = document.getElementById('adminExportMonthGroup');
+ const cg = document.getElementById('adminExportCustomGroup');
+ if (yg) yg.style.display = (val === 'annual') ? 'block' : 'none';
+ if (mg) mg.style.display = (val === 'month') ? 'block' : 'none';
+ if (cg) cg.style.display = (val === 'custom') ? 'block' : 'none';
+}
+function triggerAdminDownload(format) {
+ const type = document.getElementById('adminExportType')?.value || 'reports';
+ const range = document.getElementById('adminExportRange')?.value || 'annual';
+ const status = document.getElementById('adminExportStatus')?.value || '';
+ const brgy = document.getElementById('adminExportBarangay')?.value || '';
+ let url = `api/reports.php?action=export&type=${encodeURIComponent(type)}&format=${format}&range=${encodeURIComponent(range)}`;
+ if (type === 'reports') {
+  if (brgy) url += `&barangay=${encodeURIComponent(brgy)}`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
+ }
+ if (range === 'annual') {
+  const y = document.getElementById('adminExportYear')?.value;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'month') {
+  const m = document.getElementById('adminExportMonth')?.value;
+  const y = document.getElementById('adminExportMonthYear')?.value;
+  if (m) url += `&month=${encodeURIComponent(m)}`;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'custom') {
+  const s = document.getElementById('adminExportStartDate')?.value;
+  const e = document.getElementById('adminExportEndDate')?.value;
+  if (s) url += `&start_date=${encodeURIComponent(s)}`;
+  if (e) url += `&end_date=${encodeURIComponent(e)}`;
+ }
+ closeAdminExportModal();
+ window.location.href = url;
 }
 </script>
 

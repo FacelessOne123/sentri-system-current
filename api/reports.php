@@ -1602,112 +1602,176 @@ switch ($action) {
  break;
 
  case 'export':
- if (!in_array($role, ['admin', 'lgu', 'barangay'])) {
- echo json_encode(['status'=>'error','message'=>'Unauthorized for export.']); exit;
- }
- $export_type = $_GET['type'] ?? 'reports';
- $format = strtolower($_GET['format'] ?? 'csv');
+    if (!in_array($role, ['admin', 'lgu', 'barangay'])) {
+        echo json_encode(['status'=>'error','message'=>'Unauthorized for export.']); exit;
+    }
+    $export_type = $_GET['type'] ?? 'reports';
+    $format = strtolower($_GET['format'] ?? 'csv');
 
- if ($export_type === 'audit_logs') {
- if ($role !== 'admin') {
- echo json_encode(['status'=>'error','message'=>'Admin role required to export audit trail.']); exit;
- }
- $log_res = $conn->query("SELECT id, report_id, report_title, action, performed_by, performed_by_name, performed_at FROM report_audit_logs ORDER BY performed_at DESC");
- $logs = [];
- while ($row = $log_res->fetch_assoc()) {
- $logs[] = $row;
- }
+    // Parse date/time filters
+    $filter_range = strtolower(trim($_GET['range'] ?? ''));
+    $raw_year = $_GET['year'] ?? '';
+    $raw_month = $_GET['month'] ?? '';
+    $filter_year = (is_numeric($raw_year) && (int)$raw_year >= 2000) ? (int)$raw_year : 0;
+    $filter_month = 0;
+    if (is_numeric($raw_month) && (int)$raw_month >= 1 && (int)$raw_month <= 12) {
+        $filter_month = (int)$raw_month;
+    } elseif (is_string($raw_month) && preg_match('/^(\d{4})-(\d{1,2})$/', trim($raw_month), $m_match)) {
+        $filter_year = (int)$m_match[1];
+        $filter_month = (int)$m_match[2];
+        $filter_range = 'month';
+    }
+    $filter_start_date = trim($_GET['start_date'] ?? '');
+    $filter_end_date = trim($_GET['end_date'] ?? '');
 
- if ($format === 'json') {
- header('Content-Type: application/json');
- header('Content-Disposition: attachment; filename="sentri_audit_trail_'.date('Ymd_His').'.json"');
- echo json_encode(['status'=>'success','count'=>count($logs),'generated_at'=>date('c'),'audit_logs'=>$logs], JSON_PRETTY_PRINT);
- exit;
- } else {
- header('Content-Type: text/csv; charset=utf-8');
- header('Content-Disposition: attachment; filename="sentri_audit_trail_'.date('Ymd_His').'.csv"');
- $out = fopen('php://output', 'w');
- fputcsv($out, ['Audit ID', 'Report ID', 'Report Title', 'Action Performed', 'User ID', 'Performed By', 'Timestamp']);
- foreach ($logs as $l) {
- fputcsv($out, [$l['id'], $l['report_id'], $l['report_title'], $l['action'], $l['performed_by'], $l['performed_by_name'], $l['performed_at']]);
- }
- fclose($out);
- exit;
- }
- }
+    // Determine date suffix for filenames and SQL clauses
+    $date_suffix = 'all_time';
+    $date_clauses_rpt = [];
+    $date_clauses_audit = [];
 
- // Reports export with full telemetry
- $filter_status = $_GET['status'] ?? '';
- $filter_cat = $_GET['category'] ?? '';
- $filter_brgy = $_GET['barangay'] ?? '';
- $filter_city = $_GET['city'] ?? '';
+    if ($filter_range === 'annual' || $filter_range === 'year' || ($filter_year > 0 && $filter_month === 0 && empty($filter_start_date) && empty($filter_end_date))) {
+        $y = $filter_year > 0 ? $filter_year : (int)date('Y');
+        $date_clauses_rpt[] = "YEAR(r.created_at) = $y";
+        $date_clauses_audit[] = "YEAR(performed_at) = $y";
+        $date_suffix = "annual_{$y}";
+    } elseif ($filter_range === 'month' || ($filter_month > 0 && empty($filter_start_date) && empty($filter_end_date))) {
+        $y = $filter_year > 0 ? $filter_year : (int)date('Y');
+        $m = $filter_month > 0 ? $filter_month : (int)date('n');
+        $date_clauses_rpt[] = "YEAR(r.created_at) = $y AND MONTH(r.created_at) = $m";
+        $date_clauses_audit[] = "YEAR(performed_at) = $y AND MONTH(performed_at) = $m";
+        $date_suffix = sprintf("month_%04d_%02d", $y, $m);
+    } elseif ($filter_range === 'last_month') {
+        $start_lm = date('Y-m-01 00:00:00', strtotime('first day of last month'));
+        $end_lm = date('Y-m-t 23:59:59', strtotime('last day of last month'));
+        $date_clauses_rpt[] = "r.created_at >= '$start_lm' AND r.created_at <= '$end_lm'";
+        $date_clauses_audit[] = "performed_at >= '$start_lm' AND performed_at <= '$end_lm'";
+        $date_suffix = 'last_month_' . date('Y_m', strtotime('last month'));
+    } elseif (!empty($filter_start_date) || !empty($filter_end_date)) {
+        $s_clean = '';
+        $e_clean = '';
+        if (!empty($filter_start_date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $filter_start_date)) {
+            $date_clauses_rpt[] = "r.created_at >= '" . $conn->real_escape_string($filter_start_date) . " 00:00:00'";
+            $date_clauses_audit[] = "performed_at >= '" . $conn->real_escape_string($filter_start_date) . " 00:00:00'";
+            $s_clean = $filter_start_date;
+        }
+        if (!empty($filter_end_date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $filter_end_date)) {
+            $date_clauses_rpt[] = "r.created_at <= '" . $conn->real_escape_string($filter_end_date) . " 23:59:59'";
+            $date_clauses_audit[] = "performed_at <= '" . $conn->real_escape_string($filter_end_date) . " 23:59:59'";
+            $e_clean = $filter_end_date;
+        }
+        $date_suffix = ($s_clean ?: 'from') . '_to_' . ($e_clean ?: 'present');
+    }
 
- if ($role === 'barangay') {
-  $off_brgy = trim((string)($ident['barangay_name'] ?? ''));
-  if ($off_brgy === '') {
-   $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
-   $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
-  }
-  $filter_brgy = trim((string)$off_brgy); // Strictly enforce assigned barangay export
- }
+    if ($export_type === 'audit_logs') {
+        if ($role !== 'admin') {
+            echo json_encode(['status'=>'error','message'=>'Admin role required to export audit trail.']); exit;
+        }
+        $audit_where_sql = !empty($date_clauses_audit) ? "WHERE " . implode(' AND ', $date_clauses_audit) : "";
+        $log_res = $conn->query("SELECT id, report_id, report_title, action, performed_by, performed_by_name, performed_at FROM report_audit_logs $audit_where_sql ORDER BY performed_at DESC");
+        $logs = [];
+        while ($row = $log_res->fetch_assoc()) {
+            $logs[] = $row;
+        }
 
- $where_clauses = ["(r.is_archived = 0 OR r.status = 'safe' OR r.is_archived = 1)"];
- if ($filter_status && in_array($filter_status, ['dangerous','caution','safe'])) {
- $where_clauses[] = "r.status = '".$conn->real_escape_string($filter_status)."'";
- }
- if ($filter_cat) {
- $where_clauses[] = "r.category = '".$conn->real_escape_string($filter_cat)."'";
- }
- if ($filter_brgy) {
- $bk = strtr(mb_strtolower(trim($filter_brgy),'UTF-8'), ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
-$bk = preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',$bk));
-$bexpr = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(%s,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
- $where_clauses[] = sprintf($bexpr,'r.barangay')." = '".$conn->real_escape_string($bk)."'";
- }
- if ($filter_city) {
- $where_clauses[] = "r.city = '".$conn->real_escape_string($filter_city)."'";
- }
+        if ($format === 'json') {
+            header('Content-Type: application/json');
+            header('Content-Disposition: attachment; filename="sentri_audit_trail_'.$date_suffix.'_'.date('Ymd_His').'.json"');
+            echo json_encode(['status'=>'success','count'=>count($logs),'generated_at'=>date('c'),'audit_logs'=>$logs], JSON_PRETTY_PRINT);
+            exit;
+        } else {
+            header('Content-Type: text/csv; charset=utf-8');
+            header('Content-Disposition: attachment; filename="sentri_audit_trail_'.$date_suffix.'_'.date('Ymd_His').'.csv"');
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['Audit ID', 'Report ID', 'Report Title', 'Action Performed', 'User ID', 'Performed By', 'Timestamp']);
+            foreach ($logs as $l) {
+                fputcsv($out, [$l['id'], $l['report_id'], $l['report_title'], $l['action'], $l['performed_by'], $l['performed_by_name'], $l['performed_at']]);
+            }
+            fclose($out);
+            exit;
+        }
+    }
 
- $where_sql = implode(' AND ', $where_clauses);
- $rpt_sql = "
- SELECT r.id, r.title, r.description, r.category, r.status, r.location_name,
- r.barangay, r.city, r.province, r.latitude, r.longitude, r.radius_m,
- r.upvotes, r.downvotes, r.escalated_to_lgu,
- CONCAT(u.first_name, ' ', u.last_name) AS reporter_name,
- u.email AS reporter_email,
- r.assigned_to,
- CONCAT(resp.first_name, ' ', resp.last_name) AS responder_name,
- resp.email AS responder_email,
- resp.responder_type AS responder_agency,
- r.accepted_at, r.responded_at, r.resolved_at,
- TIMESTAMPDIFF(MINUTE, r.created_at, r.resolved_at) AS resolution_minutes,
- r.created_at, r.updated_at
- FROM reports r
- JOIN users u ON u.id = r.user_id
- LEFT JOIN users resp ON resp.id = r.assigned_to
- WHERE $where_sql
- ORDER BY r.created_at DESC";
+    // Reports export with full telemetry
+    $filter_status = $_GET['status'] ?? '';
+    $filter_cat = $_GET['category'] ?? '';
+    $filter_brgy = $_GET['barangay'] ?? '';
+    $filter_city = $_GET['city'] ?? '';
 
- $rpt_res = $conn->query($rpt_sql);
- $export_data = [];
- while ($row = $rpt_res->fetch_assoc()) {
- $export_data[] = $row;
- }
+    if ($role === 'barangay') {
+        $off_brgy = trim((string)($ident['barangay_name'] ?? ''));
+        if ($off_brgy === '') {
+            $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+            $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
+        }
+        $filter_brgy = trim((string)$off_brgy); // Strictly enforce assigned barangay export
+    }
 
- if ($format === 'json') {
- header('Content-Type: application/json');
- header('Content-Disposition: attachment; filename="sentri_reports_export_'.date('Ymd_His').'.json"');
- echo json_encode([
- 'status' => 'success',
- 'count' => count($export_data),
- 'generated_at' => date('c'),
- 'reports' => $export_data
- ], JSON_PRETTY_PRINT);
- exit;
- } else {
- header('Content-Type: text/csv; charset=utf-8');
- header('Content-Disposition: attachment; filename="sentri_reports_export_'.date('Ymd_His').'.csv"');
- $out = fopen('php://output', 'w');
+    $where_clauses = ["(r.is_archived = 0 OR r.status = 'safe' OR r.is_archived = 1)"];
+    foreach ($date_clauses_rpt as $dc) {
+        $where_clauses[] = $dc;
+    }
+    if ($filter_status && in_array($filter_status, ['dangerous','caution','safe'])) {
+        $where_clauses[] = "r.status = '".$conn->real_escape_string($filter_status)."'";
+    }
+    if ($filter_cat) {
+        $where_clauses[] = "r.category = '".$conn->real_escape_string($filter_cat)."'";
+    }
+    if ($filter_brgy) {
+        $bk = strtr(mb_strtolower(trim($filter_brgy),'UTF-8'), ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
+        $bk = preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',$bk));
+        $bexpr = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(%s,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
+        $where_clauses[] = sprintf($bexpr,'r.barangay')." = '".$conn->real_escape_string($bk)."'";
+    }
+    if ($filter_city) {
+        $where_clauses[] = "r.city = '".$conn->real_escape_string($filter_city)."'";
+    }
+
+    $where_sql = implode(' AND ', $where_clauses);
+    $rpt_sql = "
+        SELECT r.id, r.title, r.description, r.category, r.status, r.location_name,
+               r.barangay, r.city, r.province, r.latitude, r.longitude, r.radius_m,
+               r.upvotes, r.downvotes, r.escalated_to_lgu,
+               CONCAT(u.first_name, ' ', u.last_name) AS reporter_name,
+               u.email AS reporter_email,
+               r.assigned_to,
+               CONCAT(resp.first_name, ' ', resp.last_name) AS responder_name,
+               resp.email AS responder_email,
+               resp.responder_type AS responder_agency,
+               r.accepted_at, r.responded_at, r.resolved_at,
+               TIMESTAMPDIFF(MINUTE, r.created_at, r.resolved_at) AS resolution_minutes,
+               r.created_at, r.updated_at
+        FROM reports r
+        JOIN users u ON u.id = r.user_id
+        LEFT JOIN users resp ON resp.id = r.assigned_to
+        WHERE $where_sql
+        ORDER BY r.created_at DESC";
+
+    $rpt_res = $conn->query($rpt_sql);
+    $export_data = [];
+    while ($row = $rpt_res->fetch_assoc()) {
+        $export_data[] = $row;
+    }
+
+    $brgy_slug = '';
+    if (!empty($filter_brgy)) {
+        $brgy_clean = preg_replace('/[^a-zA-Z0-9_-]/', '_', trim($filter_brgy));
+        $brgy_slug = $brgy_clean . '_';
+    }
+
+    if ($format === 'json') {
+        header('Content-Type: application/json');
+        header('Content-Disposition: attachment; filename="sentri_reports_export_'.$brgy_slug.$date_suffix.'_'.date('Ymd_His').'.json"');
+        echo json_encode([
+            'status' => 'success',
+            'count' => count($export_data),
+            'generated_at' => date('c'),
+            'reports' => $export_data
+        ], JSON_PRETTY_PRINT);
+        exit;
+    } else {
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="sentri_reports_export_'.$brgy_slug.$date_suffix.'_'.date('Ymd_His').'.csv"');
+        $out = fopen('php://output', 'w');
  fputcsv($out, [
  'ID', 'Title', 'Category', 'Status', 'Location Details', 'Barangay', 'City', 'Province',
  'Latitude', 'Longitude', 'Radius (m)', 'Community Upvotes', 'Downvotes', 'Escalated to LGU',

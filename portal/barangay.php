@@ -494,7 +494,7 @@ tr:hover td{background:#fafafa;}
  <button class="rf-btn" onclick="filterReports('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
  <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
- <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
+ <button type="button" onclick="openExportModal()" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;cursor:pointer;"><i class="fas fa-file-csv"></i> Export CSV</button>
  </div>
  <div id="brgyTableWrap" class="brgy-table-wrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
@@ -2185,6 +2185,130 @@ function toggleVulnStatus(id, btn){
  showToast('Resident status updated to Needs Assistance.', 'info');
  }
 }
+
+function openExportModal() {
+ const m = document.getElementById('exportModal');
+ if (m) m.classList.add('show');
+}
+function closeExportModal() {
+ const m = document.getElementById('exportModal');
+ if (m) m.classList.remove('show');
+}
+function onExportRangeChange(val) {
+ const yg = document.getElementById('exportYearGroup');
+ const mg = document.getElementById('exportMonthGroup');
+ const cg = document.getElementById('exportCustomGroup');
+ if (yg) yg.style.display = (val === 'annual') ? 'block' : 'none';
+ if (mg) mg.style.display = (val === 'month') ? 'block' : 'none';
+ if (cg) cg.style.display = (val === 'custom') ? 'block' : 'none';
+}
+function triggerDownload(format) {
+ const range = document.getElementById('exportRange')?.value || 'annual';
+ const status = document.getElementById('exportStatus')?.value || '';
+ let url = `../api/reports.php?action=export&type=reports&format=${format}&range=${encodeURIComponent(range)}`;
+ <?php if (!empty($brgy)): ?>
+ url += `&barangay=<?= rawurlencode($brgy) ?>`;
+ <?php endif; ?>
+ if (status) url += `&status=${encodeURIComponent(status)}`;
+ if (range === 'annual') {
+  const y = document.getElementById('exportYear')?.value;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'month') {
+  const m = document.getElementById('exportMonth')?.value;
+  const y = document.getElementById('exportMonthYear')?.value;
+  if (m) url += `&month=${encodeURIComponent(m)}`;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'custom') {
+  const s = document.getElementById('exportStartDate')?.value;
+  const e = document.getElementById('exportEndDate')?.value;
+  if (s) url += `&start_date=${encodeURIComponent(s)}`;
+  if (e) url += `&end_date=${encodeURIComponent(e)}`;
+ }
+ closeExportModal();
+ window.location.href = url;
+}
+</script>
+
+<!-- ── Export to CSV / JSON Modal ── -->
+<div class="modal-bg" id="exportModal" onclick="if(event.target===this)closeExportModal()">
+ <div class="modal" style="max-width:480px;">
+ <div class="modal-header">
+ <h3 style="display:flex;align-items:center;gap:8px;"><i class="fas fa-file-csv" style="color:#16a34a;"></i> Export Incident Reports</h3>
+ <button class="modal-close" onclick="closeExportModal()"><i class="fas fa-xmark"></i></button>
+ </div>
+ <div class="modal-body">
+ <p style="font-size:0.83rem;color:var(--muted);margin-bottom:14px;">Select the time and date range to export incident telemetry for your barangay.</p>
+ 
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Timeframe</label>
+ <select id="exportRange" onchange="onExportRangeChange(this.value)" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="annual" selected>Annual (Full Year)</option>
+ <option value="month">Specific Month & Year</option>
+ <option value="last_month">Last Month</option>
+ <option value="custom">Custom Date Range (From - To)</option>
+ <option value="all">Full Archive (All Time)</option>
+ </select>
+ </div>
+
+ <div id="exportYearGroup" style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Select Year</label>
+ <select id="exportYear" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php $curY = (int)date('Y'); for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?> Annual Report</option>
+ <?php endfor; ?>
+ </select>
+ </div>
+
+ <div id="exportMonthGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Month & Year</label>
+ <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:10px;">
+ <select id="exportMonth" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php
+ $months = [1=>'January',2=>'February',3=>'March',4=>'April',5=>'May',6=>'June',7=>'July',8=>'August',9=>'September',10=>'October',11=>'November',12=>'December'];
+ $curM = (int)date('n');
+ foreach($months as $num => $mName): ?>
+ <option value="<?= $num ?>" <?= $num === $curM ? 'selected' : '' ?>><?= $mName ?></option>
+ <?php endforeach; ?>
+ </select>
+ <select id="exportMonthYear" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?></option>
+ <?php endfor; ?>
+ </select>
+ </div>
+ </div>
+
+ <div id="exportCustomGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Date Range</label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">Start Date</span>
+ <input type="date" id="exportStartDate" value="<?= date('Y-m-01') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">End Date</span>
+ <input type="date" id="exportEndDate" value="<?= date('Y-m-d') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ </div>
+ </div>
+
+ <div style="margin-bottom:6px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Status Filter</label>
+ <select id="exportStatus" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="">All Incident Statuses</option>
+ <option value="dangerous">Dangerous Only</option>
+ <option value="caution">Caution Only</option>
+ <option value="safe">Safe / Resolved Only</option>
+ </select>
+ </div>
+ </div>
+ <div class="modal-actions" style="justify-content:flex-end;">
+ <button type="button" onclick="closeExportModal()" style="padding:8px 16px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:0.84rem;font-weight:600;cursor:pointer;">Cancel</button>
+ <button type="button" onclick="triggerDownload('json')" style="padding:8px 16px;border:none;background:#0284c7;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerDownload('csv')" style="padding:8px 18px;border:none;background:#16a34a;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ </div>
+ </div>
+</div>
 </script>
 <?= csrf_script() ?>
 </body>
