@@ -1360,17 +1360,24 @@ function renderTrendChart(){
 
 // ── USERS ─────────────────────────────────────────────────────
 async function loadUsers(){
- const res=await fetch('api/reports.php?action=admin_get_users');
- const data=await res.json();
- if(data.status==='success'){
- allUsers=data.users;
- document.getElementById('userCount').textContent=allUsers.length+' accounts';
- document.getElementById('userTotal').textContent=allUsers.length+' total accounts';
- document.getElementById('userCount').textContent=allUsers.length;
- renderUsers();
- document.getElementById('usersLoading').style.display='none';
- document.getElementById('usersTable').style.display='table';
+ const loading=document.getElementById('usersLoading');
+ const table=document.getElementById('usersTable');
+ try{
+  const res=await fetch('api/reports.php?action=admin_get_users');
+  const data=await res.json();
+  if(data.status!=='success') throw new Error(data.message||'Unable to load users.');
+  allUsers=data.users;
+  document.getElementById('userCount').textContent=allUsers.length+' accounts';
+  document.getElementById('userTotal').textContent=allUsers.length+' total accounts';
+  renderUsers();
+ }catch(e){
+  loading.innerHTML='<i class="fas fa-triangle-exclamation"></i> '+(e&&e.message?e.message:'Unable to load users.');
+  loading.style.display='block';
+  table.style.display='none';
+  return;
  }
+ loading.style.display='none';
+ table.style.display='table';
 }
 function renderUsers(){
  const search=document.getElementById('userSearch').value.toLowerCase();
@@ -2359,6 +2366,14 @@ function goToLogsPage(page){
 }
 
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+// Shared date formatter for admin tables (MySQL DATETIME → "Aug 25, 2026").
+function formatAdminTimestamp(v){
+ if(!v) return '—';
+ var d=new Date(String(v).replace(' ','T'));
+ if(isNaN(d.getTime())) return String(v);
+ return d.toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+}
 
 // ══════════════════════════════════════════════════════════════
 // EMERGENCY CONTACTS
