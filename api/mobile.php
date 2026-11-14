@@ -262,6 +262,8 @@ switch ($action) {
         $limit = min(max((int)($_GET['limit'] ?? 100), 1), 200);
 
         $is_mine = (!empty($_GET['mine']) || !empty($_GET['mine_only']));
+        $req_uid = !empty($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
+        $target_uid = $auth_uid > 0 ? $auth_uid : $req_uid;
         $allow_archived = !empty($_GET['include_archived']) || ($status === 'safe') || ($status === 'archived');
 
         $query = "SELECT r.*, u.first_name, u.last_name, u.avatar_color, 
@@ -277,7 +279,7 @@ switch ($action) {
 
         if ($is_mine) {
             $query .= "r.user_id = ?";
-            $params[] = $auth_uid;
+            $params[] = $target_uid;
             $types .= "i";
         } else {
             if ($allow_archived) {
@@ -690,6 +692,101 @@ switch ($action) {
         break;
     }
 
+    case 'delete_report': {
+        $token = get_bearer_token();
+        $user = verify_token($token, $conn);
+        if (!$user) {
+            mobile_respond(401, ['status' => 'error', 'message' => 'Unauthorized or expired token']);
+        }
+        $report_id = (int)($input['report_id'] ?? $_GET['report_id'] ?? 0);
+        if (!$report_id) {
+            mobile_respond(400, ['status' => 'error', 'message' => 'Report ID required']);
+        }
+
+        // Restriction: only reports marked as safe can be archived
+        $chk_stmt = $conn->prepare("SELECT status FROM reports WHERE id = ? LIMIT 1");
+        $chk_stmt->bind_param('i', $report_id);
+        $chk_stmt->execute();
+        $r_row = $chk_stmt->get_result()->fetch_assoc();
+        $chk_stmt->close();
+
+        if (!$r_row) {
+            mobile_respond(404, ['status' => 'error', 'message' => 'Report not found']);
+        }
+        if ($r_row['status'] !== 'safe') {
+            mobile_respond(400, ['status' => 'error', 'message' => 'Only reports marked as safe can be archived']);
+        }
+
+        $is_admin = in_array($user['role'], ['admin', 'lgu', 'barangay']);
+        if ($is_admin) {
+            $stmt = $conn->prepare("UPDATE reports SET is_archived = 1 WHERE id = ?");
+            $stmt->bind_param('i', $report_id);
+        } else {
+            $stmt = $conn->prepare("UPDATE reports SET is_archived = 1 WHERE id = ? AND user_id = ?");
+            $stmt->bind_param('ii', $report_id, $user['id']);
+        }
+        $stmt->execute();
+        $ok = $stmt->affected_rows > 0;
+        $stmt->close();
+
+        if ($ok) {
+            mobile_respond(200, ['status' => 'success', 'message' => 'Report deleted']);
+        } else {
+            mobile_respond(404, ['status' => 'error', 'message' => 'Report not found or not owned by user']);
+        }
+        break;
+    }
+
+    case 'update_profile': {
+        $token = get_bearer_token();
+        $user = verify_token($token, $conn);
+        if (!$user) {
+            mobile_respond(401, ['status' => 'error', 'message' => 'Unauthorized or expired token']);
+        }
+
+        $first_name = trim($input['first_name'] ?? '');
+        $last_name = trim($input['last_name'] ?? '');
+        $phone_number = trim($input['phone'] ?? $input['phone_number'] ?? '');
+        $resident_address = trim($input['address'] ?? $input['resident_address'] ?? '');
+        $avatar_color = trim($input['avatar_color'] ?? '');
+
+        if (!$first_name || !$last_name) {
+            mobile_respond(400, ['status' => 'error', 'message' => 'First and last name are required']);
+        }
+
+        $stmt = $conn->prepare("UPDATE users SET first_name = ?, last_name = ?, phone_number = ?, resident_address = ?, avatar_color = IF(? != '', ?, avatar_color) WHERE id = ?");
+        $stmt->bind_param('ssssssi', $first_name, $last_name, $phone_number, $resident_address, $avatar_color, $avatar_color, $user['id']);
+        $stmt->execute();
+        $stmt->close();
+
+        $stmt = $conn->prepare("SELECT id, first_name, last_name, email, role, barangay_name, resident_address, phone_number, is_approved, email_verified, avatar_color, responder_type FROM users WHERE id = ? LIMIT 1");
+        $stmt->bind_param('i', $user['id']);
+        $stmt->execute();
+        $updated_user = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        $token = generate_token($updated_user);
+        mobile_respond(200, [
+            'status' => 'success',
+            'token' => $token,
+            'user' => [
+                'id' => (int)$updated_user['id'],
+                'first_name' => $updated_user['first_name'],
+                'last_name' => $updated_user['last_name'],
+                'full_name' => trim($updated_user['first_name'] . ' ' . $updated_user['last_name']),
+                'email' => $updated_user['email'],
+                'role' => $updated_user['role'],
+                'barangay' => $updated_user['barangay_name'],
+                'resident_address' => $updated_user['resident_address'],
+                'phone_number' => $updated_user['phone_number'],
+                'avatar_color' => $updated_user['avatar_color'] ?: '#0A3D62',
+                'is_approved' => (int)$updated_user['is_approved'],
+                'email_verified' => (int)($updated_user['email_verified'] ?? 0)
+            ]
+        ]);
+        break;
+    }
+
     case 'address_terms': {
         $rawBrgy = trim((string)($_GET['barangay'] ?? $input['barangay'] ?? ''));
         $brgy = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($rawBrgy) : null;
@@ -889,11 +986,24 @@ switch ($action) {
     }
 
     case 'contacts': {
-        $stmt = $conn->prepare("SELECT id, name, type, barangay, city, contact_number, contact_email FROM emergency_contacts WHERE is_active = 1 ORDER BY type ASC, name ASC");
+        $token = get_bearer_token();
+        $auth_user = verify_token($token, $conn);
+        $req_brgy = trim($_GET['barangay'] ?? ($auth_user['barangay_name'] ?? ''));
+
+        if ($req_brgy !== '') {
+            $stmt = $conn->prepare("SELECT id, name, type, barangay, city, contact_number, contact_email FROM emergency_contacts WHERE is_active = 1 AND (type != 'barangay' OR barangay = ?) ORDER BY type ASC, name ASC");
+            $stmt->bind_param("s", $req_brgy);
+        } else {
+            $stmt = $conn->prepare("SELECT id, name, type, barangay, city, contact_number, contact_email FROM emergency_contacts WHERE is_active = 1 AND (type != 'barangay' OR barangay IS NULL) ORDER BY type ASC, name ASC");
+        }
         $stmt->execute();
         $res = $stmt->get_result();
         $contacts = [];
         while ($row = $res->fetch_assoc()) {
+            $parsed = function_exists('sentri_parse_contact_numbers') ? sentri_parse_contact_numbers($row['contact_number'] ?? '') : [];
+            $row['phone_type'] = !empty($parsed) ? $parsed[0]['type'] : 'unknown';
+            $row['phone_label'] = !empty($parsed) ? $parsed[0]['label'] : '';
+            $row['parsed_numbers'] = $parsed;
             $contacts[] = $row;
         }
         $stmt->close();

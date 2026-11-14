@@ -5,6 +5,7 @@ require_once __DIR__ . '/../config/auth.php';
 require_role(['lgu']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/geo.php';
 
 $ident = sentri_identity() ?? [];
 $uid = (int)($ident['user_id'] ?? 0);
@@ -54,214 +55,114 @@ $brgy_unspecified = (strcasecmp($brgy_filter, 'Unspecified') === 0);
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
 
-// ── Per-view data ──────────────────────────────────────────────────────────
-$danger_reports = $all_reports = $brgy_stats = $contacts = [];
+// ── Pre-loaded data for seamless client-side tabs ──────────────────────────
+$danger_reports = $all_reports = $brgy_stats = $contacts = $map_reports = $responders = [];
 
-if ($view === 'overview' || $view === 'all_reports') {
- $limit = ($view === 'overview') ? 15 : 100;
- $status_filter = ($view === 'overview') ? "AND r.status='dangerous'" : "";
- $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- $brgy_cond = '';
- $bind_brgy = false;
- if ($view === 'all_reports' && $brgy_filter !== '') {
- if ($brgy_unspecified) {
- $brgy_cond = " AND (r.barangay IS NULL OR TRIM(r.barangay)='')"; // group label fallback
- } else {
- $brgy_cond = " AND r.barangay = ?";
- $bind_brgy = true;
- }
- }
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) $status_filter $brgy_cond ORDER BY r.created_at DESC LIMIT $limit");
- if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) {
- if($view==='overview') $danger_reports[]=$row; else $all_reports[]=$row;
- }
- $s->close();
+$esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
+
+// Load dangerous reports for Overview
+$s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.status='dangerous' ORDER BY r.created_at DESC LIMIT 15");
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()) $danger_reports[]=$row;
+$s->close();
+
+// Load all reports for All Reports tab
+$brgy_cond = '';
+$bind_brgy = false;
+if ($brgy_filter !== '') {
+    if ($brgy_unspecified) {
+        $brgy_cond = " AND (r.barangay IS NULL OR TRIM(r.barangay)='')";
+    } else {
+        $brgy_cond = " AND r.barangay = ?";
+        $bind_brgy = true;
+    }
 }
+$s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) $brgy_cond ORDER BY r.created_at DESC LIMIT 100");
+if ($bind_brgy) { $s->bind_param("s", $brgy_filter); }
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()) $all_reports[]=$row;
+$s->close();
 
-if ($view === 'overview' || $view === 'barangays') {
- $bs = $conn->query("SELECT COALESCE(barangay,'Unspecified') as b, COUNT(*) as c, SUM(status='dangerous') as d FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1) GROUP BY b ORDER BY c DESC LIMIT 15");
- if ($bs) while($r=$bs->fetch_assoc()) $brgy_stats[]=$r;
-}
+// Barangay summaries
+$bs = $conn->query("SELECT COALESCE(barangay,'Unspecified') as b, COUNT(*) as c, SUM(status='dangerous') as d FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1) GROUP BY b ORDER BY c DESC LIMIT 15");
+if ($bs) while($r=$bs->fetch_assoc()) $brgy_stats[]=$r;
 
-if ($view === 'contacts') {
- $cs = $conn->query("SELECT id,name,type,contact_number,contact_email,barangay,city,is_active FROM emergency_contacts ORDER BY type,name");
- if ($cs) while($r=$cs->fetch_assoc()) $contacts[]=$r;
-}
+// Emergency Contacts
+$cs = $conn->query("SELECT id,name,type,contact_number,contact_email,barangay,city,is_active FROM emergency_contacts ORDER BY type,name");
+if ($cs) while($r=$cs->fetch_assoc()) $contacts[]=$r;
 
-// ── SLA & Telemetry KPIs (all DB-derived; no fabricated fallbacks) ──
+// SLA KPIs
 $sla_row = $conn->query("SELECT AVG(TIMESTAMPDIFF(MINUTE, accepted_at, responded_at)) as avg_resp, COUNT(CASE WHEN status='safe' OR is_archived=1 THEN 1 END) as safe_cnt, COUNT(*) as total_cnt FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1)")->fetch_assoc();
-$avg_resp_time = round((float)($sla_row['avg_resp'] ?? 0), 1); // 0.0 = no accepted→responded telemetry yet
+$avg_resp_time = round((float)($sla_row['avg_resp'] ?? 0), 1);
 $resolution_rate = !empty($sla_row['total_cnt']) ? round(($sla_row['safe_cnt'] / $sla_row['total_cnt']) * 100, 1) : null;
 $active_deployed_units = (int)cq($conn, "SELECT COUNT(DISTINCT assigned_to) FROM reports WHERE is_archived=0 AND status='dangerous' AND assigned_to IS NOT NULL");
 
-
-// ── MAP ──────────────────────────────────────────────────────────────────
-$map_reports = [];
-if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
- // fallback: all reports including no-coords for the sidebar count
-}
+// Map reports
+$s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()) $map_reports[]=$row;
+$s->close();
 $map_total = cq($conn,"SELECT COUNT(*) FROM reports WHERE (is_archived=0 OR status='safe' OR is_archived=1)");
 
-// ── PROFILE ───────────────────────────────────────────────────────────────
+// Responders
+if ($has_assigned_to) {
+    $s=$conn->prepare("SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,u.org_name,u.`position`,u.responder_type,u.municipality,u.barangay_name,u.is_approved,COUNT(r.id) as active_count FROM users u LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous' WHERE u.role='first_responder' GROUP BY u.id ORDER BY u.is_approved ASC, u.responder_type, u.org_name");
+} else {
+    $s=$conn->prepare("SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,u.org_name,u.`position`,u.responder_type,u.municipality,u.barangay_name,u.is_approved,0 as active_count FROM users u WHERE u.role='first_responder' ORDER BY u.is_approved ASC, u.responder_type, u.org_name");
+}
+$s->execute(); $res=$s->get_result();
+while($row=$res->fetch_assoc()){ $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
+$s->close();
+
+// Profile save POST
 $profile_msg = '';
-if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_profile'])) {
- $p_fname = trim($_POST['first_name'] ?? '');
- $p_lname = trim($_POST['last_name'] ?? '');
- $p_phone = trim($_POST['phone'] ?? '');
- $p_org = trim($_POST['org_name'] ?? '');
- $p_pos = trim($_POST['position'] ?? '');
- $p_muni = trim($_POST['municipality'] ?? '');
- $p_pw = $_POST['new_password'] ?? '';
- $p_pw2 = $_POST['confirm_password'] ?? '';
- if ($p_pw && $p_pw !== $p_pw2) {
- $profile_msg = 'error:Passwords do not match.';
- } elseif (!$p_fname || !$p_lname) {
- $profile_msg = 'error:Name fields are required.';
- } else {
- if ($p_pw) {
- $h = password_hash($p_pw, PASSWORD_BCRYPT, ['cost'=>10]);
- $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=?,password=? WHERE id=?");
- $su->bind_param("sssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$h,$uid);
- } else {
- $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=? WHERE id=?");
- $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
- }
- $su->execute(); $su->close();
- $fname = htmlspecialchars($p_fname,ENT_QUOTES,'UTF-8'); $org=$p_org?:$org; $city=$p_muni?:$city; $pos=$p_pos?:$pos;
- $stmt2=$conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
- $stmt2->bind_param("i",$uid); $stmt2->execute();
- $prof=$stmt2->get_result()->fetch_assoc(); $stmt2->close();
- $profile_msg = 'success:Profile updated successfully.';
- }
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_profile'])) {
+    $p_fname = trim($_POST['first_name'] ?? '');
+    $p_lname = trim($_POST['last_name'] ?? '');
+    $p_phone = trim($_POST['phone'] ?? '');
+    $p_org = trim($_POST['org_name'] ?? '');
+    $p_pos = trim($_POST['position'] ?? '');
+    $p_muni = trim($_POST['municipality'] ?? '');
+    $p_pw = $_POST['new_password'] ?? '';
+    $p_pw2 = $_POST['confirm_password'] ?? '';
+    if ($p_pw && $p_pw !== $p_pw2) {
+        $profile_msg = 'error:Passwords do not match.';
+    } elseif (!$p_fname || !$p_lname) {
+        $profile_msg = 'error:Name fields are required.';
+    } else {
+        if ($p_pw) {
+            $h = password_hash($p_pw, PASSWORD_BCRYPT, ['cost'=>10]);
+            $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=?,password=? WHERE id=?");
+            $su->bind_param("sssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$h,$uid);
+        } else {
+            $su=$conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=? WHERE id=?");
+            $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
+        }
+        $su->execute(); $su->close();
+        $fname = htmlspecialchars($p_fname,ENT_QUOTES,'UTF-8'); $org=$p_org?:$org; $city=$p_muni?:$city; $pos=$p_pos?:$pos;
+        $stmt2=$conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
+        $stmt2->bind_param("i",$uid); $stmt2->execute();
+        $prof=$stmt2->get_result()->fetch_assoc(); $stmt2->close();
+        $profile_msg = 'success:Profile updated successfully.';
+    }
 }
 
-// ── RESPONDERS ────────────────────────────────────────────────────────────
-$responders = [];
-if ($view === 'responders') {
- if ($has_assigned_to) {
- $s=$conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- COUNT(r.id) as active_count
- FROM users u
- LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
- WHERE u.role='first_responder'
- GROUP BY u.id
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- } else {
- $s=$conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- 0 as active_count
- FROM users u
- WHERE u.role='first_responder'
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()){ $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
- $s->close();
-}
-
-// ── RESPONDER APPROVE/REJECT (POST) ──────────────────────────────────────
-if ($view === 'responders' && $_SERVER['REQUEST_METHOD']==='POST') {
- header('Content-Type: application/json');
- $act = $_POST['action'] ?? '';
- $tid = (int)($_POST['user_id'] ?? 0);
- if (!$tid) { echo json_encode(['status'=>'error','message'=>'Invalid user.']); exit; }
- if ($act === 'approve_responder') {
- $s=$conn->prepare("UPDATE users SET is_approved=1 WHERE id=? AND role='first_responder'");
- $s->bind_param("i",$tid); $s->execute(); $s->close();
- echo json_encode(['status'=>'success','message'=>'Responder approved.']); exit;
- }
- if ($act === 'reject_responder') {
- $s=$conn->prepare("DELETE FROM users WHERE id=? AND role='first_responder' AND is_approved=0");
- $s->bind_param("i",$tid); $s->execute(); $s->close();
- echo json_encode(['status'=>'success','message'=>'Responder rejected.']); exit;
- }
-}
-
-$map_reports = [];
-if ($view === 'map') {
- $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) $map_reports[]=$row;
- $s->close();
-}
-
-$profile_msg = '';
-if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_profile'])) {
- $p_fname = trim($_POST['first_name'] ?? '');
- $p_lname = trim($_POST['last_name'] ?? '');
- $p_phone = trim($_POST['phone'] ?? '');
- $p_org = trim($_POST['org_name'] ?? '');
- $p_pos = trim($_POST['position'] ?? '');
- $p_muni = trim($_POST['municipality'] ?? '');
- $p_pw = $_POST['new_password'] ?? '';
- $p_pw2 = $_POST['confirm_password'] ?? '';
- if ($p_pw && $p_pw !== $p_pw2) {
- $profile_msg = 'error:Passwords do not match.';
- } elseif (!$p_fname || !$p_lname) {
- $profile_msg = 'error:Name fields are required.';
- } else {
- if ($p_pw) {
- $hash = password_hash($p_pw, PASSWORD_BCRYPT, ['cost'=>10]);
- $su = $conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=?,password=? WHERE id=?");
- $su->bind_param("sssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$hash,$uid);
- } else {
- $su = $conn->prepare("UPDATE users SET first_name=?,last_name=?,phone_number=?,org_name=?,`position`=?,municipality=? WHERE id=?");
- $su->bind_param("ssssssi",$p_fname,$p_lname,$p_phone,$p_org,$p_pos,$p_muni,$uid);
- }
- $su->execute(); $su->close();
- $fname = htmlspecialchars($p_fname, ENT_QUOTES, 'UTF-8');
- $org = $p_org ?: $org;
- $city = $p_muni ?: $city;
- $pos = $p_pos ?: $pos;
- // Refresh prof
- $stmt2 = $conn->prepare("SELECT email,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
- $stmt2->bind_param("i",$uid); $stmt2->execute();
- $prof = $stmt2->get_result()->fetch_assoc(); $stmt2->close();
- $profile_msg = 'success:Profile updated successfully.';
- }
-}
-
-$responders = [];
-if ($view === 'responders') {
- if ($has_assigned_to) {
- $s = $conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- COUNT(r.id) as active_count
- FROM users u
- LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
- WHERE u.role='first_responder'
- GROUP BY u.id
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- } else {
- $s = $conn->prepare("
- SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
- u.org_name,u.`position`,u.responder_type,u.municipality,
- u.barangay_name,u.is_approved,
- 0 as active_count
- FROM users u
- WHERE u.role='first_responder'
- ORDER BY u.is_approved ASC, u.responder_type, u.org_name
- ");
- }
- $s->execute(); $res=$s->get_result();
- while($row=$res->fetch_assoc()) { $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
- $s->close();
+// Responder approve/reject POST
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action']) && in_array($_POST['action'], ['approve_responder', 'reject_responder'])) {
+    header('Content-Type: application/json');
+    $act = $_POST['action'] ?? '';
+    $tid = (int)($_POST['user_id'] ?? 0);
+    if (!$tid) { echo json_encode(['status'=>'error','message'=>'Invalid user.']); exit; }
+    if ($act === 'approve_responder') {
+        $s=$conn->prepare("UPDATE users SET is_approved=1 WHERE id=? AND role='first_responder'");
+        $s->bind_param("i",$tid); $s->execute(); $s->close();
+        echo json_encode(['status'=>'success','message'=>'Responder approved.']); exit;
+    }
+    if ($act === 'reject_responder') {
+        $s=$conn->prepare("DELETE FROM users WHERE id=? AND role='first_responder' AND is_approved=0");
+        $s->bind_param("i",$tid); $s->execute(); $s->close();
+        echo json_encode(['status'=>'success','message'=>'Responder rejected.']); exit;
+    }
 }
 
 $nav_items = [
@@ -292,6 +193,14 @@ $page_titles = [
 <?= csrf_meta_tag() ?>
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
+<script src="../assets/vendor/leaflet/leaflet.js"></script>
+<script src="../assets/js/sentri-geo.js"></script>
+<style>
+.tab-panel { display: none; }
+.tab-panel.active { display: block; animation: fadeInView 0.22s ease both; }
+@keyframes fadeInView { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
 <style>
 :root{
  --navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;
@@ -518,6 +427,10 @@ tr:hover td{background:#fafafa;}
 }
 .contact-name{font-size:0.88rem;font-weight:700;margin-bottom:2px;}
 .contact-meta{font-size:0.76rem;color:var(--muted);}
+.phone-type-tag{display:inline-flex;align-items:center;gap:4px;font-size:0.64rem;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:0.3px;text-transform:uppercase;flex-shrink:0;}
+.phone-type-telephone{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;}
+.phone-type-mobile{background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;}
+.phone-type-hotline{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;}
 .contact-type{
  display:inline-block;font-size:0.65rem;font-weight:700;
  text-transform:uppercase;letter-spacing:0.8px;
@@ -640,8 +553,8 @@ tr:hover td{background:#fafafa;}
  <?php elseif($key === 'profile'): ?>
  <div class="sb-section">Account</div>
  <?php endif; ?>
- <a href="lgu.php?view=<?= $key ?>" class="<?= $view===$key ? 'active' : '' ?>">
- <i class="fas <?= $item['icon'] ?>"></i>
+ <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key ? 'active' : '' ?>">
+ <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i>
  <span><?= $item['label'] ?></span>
  </a>
  <?php endforeach; ?>
@@ -668,9 +581,9 @@ tr:hover td{background:#fafafa;}
    <div class="gov-strip"></div>
    <div class="topbar-header-row">
     <div class="topbar-left">
-     <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
+     <button type="button" class="ham-btn" onclick="openSidebar()" aria-label="Open sidebar menu"><i class="fas fa-bars" style="pointer-events:none;"></i></button>
      <div style="min-width:0;">
-      <div class="page-title"><?= htmlspecialchars($page_titles[$view] ?? 'LGU Portal') ?></div>
+      <div class="page-title" id="lguPageTitle"><?= htmlspecialchars($page_titles[$view] ?? 'LGU Portal') ?></div>
       <div class="page-sub"><?= htmlspecialchars($org) ?><?= $city ? ' - '.htmlspecialchars($city) : '' ?></div>
      </div>
     </div>
@@ -684,7 +597,7 @@ tr:hover td{background:#fafafa;}
 
  <div class="content">
 
- <?php if($view === 'overview'): ?>
+ <div class="tab-panel <?= $view==='overview'?'active':'' ?>" id="tab-overview">
  <!-- ── OVERVIEW ── -->
  <div class="stat-grid">
  <div class="stat-card">
@@ -845,7 +758,7 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
 
- <?php elseif($view === 'all_reports'): ?>
+  <div class="tab-panel <?= $view==='all_reports'?'active':'' ?>" id="tab-all_reports">
  <!-- ── ALL REPORTS ── -->
  <div class="card">
  <div class="card-header">
@@ -873,7 +786,7 @@ tr:hover td{background:#fafafa;}
  <i class="fas fa-magnifying-glass" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:0.8rem;"></i>
  <input type="text" id="lguReportSearch" placeholder="Search reports or barangay..." oninput="searchTableReports(this.value)" style="padding:6px 12px 6px 28px;border:1.5px solid var(--border);border-radius:8px;font-size:0.8rem;outline:none;font-family:'Inter',sans-serif;background:#fff;width:200px;">
  </div>
- <a href="../api/reports.php?action=export&type=reports&format=csv" class="filter-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
+ <button type="button" onclick="openLguExportModal()" class="filter-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;cursor:pointer;"><i class="fas fa-file-csv"></i> Export CSV</button>
  </div>
  </div>
  <div class="table-wrap">
@@ -915,7 +828,9 @@ tr:hover td{background:#fafafa;}
  <?php endif; ?>
  </div>
 
- <?php elseif($view === 'contacts'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
  <!-- ── CONTACTS ── -->
  <?php
  $type_colors = ['hospital'=>['#ecfdf5','#059669'],'fire'=>['#fef2f2','#dc2626'],'police'=>['#eff6ff','#2563eb'],'barangay'=>['#f0fdf4','#166534'],'municipal'=>['#f0f7ff','#0a3d62'],'other'=>['#f5f3ff','#7c3aed']];
@@ -954,7 +869,7 @@ tr:hover td{background:#fafafa;}
  <div style="flex:1;min-width:0;">
  <div class="contact-name"><?= htmlspecialchars($c['name']) ?></div>
  <div class="contact-meta">
- <?php if($c['contact_number']): ?><span><i class="fas fa-phone" style="margin-right:4px;"></i><?= htmlspecialchars($c['contact_number']) ?></span>&nbsp;&nbsp;<?php endif; ?>
+ <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '', 'inline') ?>
  <?php if($c['contact_email']): ?><span><i class="fas fa-envelope" style="margin-right:4px;"></i><?= htmlspecialchars($c['contact_email']) ?></span>&nbsp;&nbsp;<?php endif; ?>
  <?php if($c['city']): ?><span><i class="fas fa-location-dot" style="margin-right:4px;"></i><?= htmlspecialchars($c['barangay'] ? $c['barangay'].', '.$c['city'] : $c['city']) ?></span><?php endif; ?>
  </div>
@@ -966,7 +881,9 @@ tr:hover td{background:#fafafa;}
  <div class="empty" id="contactFilterEmpty" style="display:none;"><i class="fas fa-address-book"></i>No contacts match this filter.</div>
  </div>
 
- <?php elseif($view === 'barangays'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='barangays'?'active':'' ?>" id="tab-barangays">
  <!-- ── BARANGAY SUMMARIES ──
  Normalization cross-check: the official perimeters in assets/geo/imus-barangays.geojson use
  designated names (e.g. "Anabu I-A", "Bayan Luma I", "Mariano Espeleta I"). Community reports
@@ -1000,7 +917,9 @@ tr:hover td{background:#fafafa;}
  <?php endforeach; endif; ?>
  </div>
 
- <?php elseif($view === 'map'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='map'?'active':'' ?>" id="tab-map">
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
@@ -1085,37 +1004,188 @@ tr:hover td{background:#fafafa;}
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
 
  var allMarkers = [];
+ var spiderGuideLines = [];
  var lguHazardCircles = [];
  var showLguHazardRings = false;
  var currentFilter = 'all';
  var currentLguQuery = '';
 
- reports.forEach(function(r){
- var color = markerColors[r.status] || '#888';
- var m = L.marker([r.lat,r.lng],{icon:makeIcon(color)});
- m.reportData = r;
- m.bindPopup(
- '<div style="min-width:200px;font-family:Inter,sans-serif;">' +
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>' +
- '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
- '<span style="background:#eff6ff;color:#1e40af;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>' +
- (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
- (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>':'')+
- (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
- '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
- {maxWidth:260}
- );
- m.addTo(map);
- allMarkers.push(m);
- });
+ window.openLguReportFromMap = function(id){
+  for(var i=0; i<reports.length; i++){
+   var r = reports[i];
+   if(r.id == id){
+    lguViewReport(r.id, r.title, r.category, r.status, r.barangay, r.reporter, r.date, r.desc, r.escalated || 0, r.reporter_brgy, r.responder_pending || 0);
+    return;
+   }
+  }
+ };
 
- if(allMarkers.length > 0){
- var group = L.featureGroup(allMarkers);
- map.fitBounds(group.getBounds().pad(0.15));
+ function buildLguSinglePopup(r){
+  return '<div style="min-width:210px;font-family:Inter,sans-serif;">' +
+  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+esc(r.title)+'</div>' +
+  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
+  '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger,#dc2626)':r.status==='caution'?'var(--sentri-caution,#d97706)':'var(--sentri-safe,#16a34a)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
+  '<span style="background:#eff6ff;color:#1e40af;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+esc(catLabels[r.category]||r.category)+'</span></div>' +
+  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+esc(r.barangay)+'</div>':'')+
+  (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+esc(r.reporter)+'</div>':'')+
+  (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+esc(r.reporter_brgy)+(r.reporter_address?', '+esc(r.reporter_address):'')+'</div>':'')+
+  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+esc(r.desc.substring(0,120))+(r.desc.length>120?'…':'')+'</div>':'')+
+  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;margin-bottom:10px;">'+esc(r.date)+' &middot; Report #'+r.id+'</div>' +
+  '<button onclick="openLguReportFromMap('+r.id+')" style="width:100%;padding:6px 12px;background:#1e40af;color:#fff;border:none;border-radius:8px;font-size:0.78rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;"><i class=\"fas fa-file-lines\"></i> View Incident Details</button>' +
+  '</div>';
+ }
+
+ function buildLguClusterPopup(reps, activeId){
+  var h = '<div style="min-width:240px;max-width:280px;font-family:Inter,sans-serif;">' +
+  '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e5e7eb;padding-bottom:6px;margin-bottom:8px;">' +
+  '<span style="font-weight:800;font-size:0.85rem;color:#1e40af;"><i class="fas fa-layer-group" style="margin-right:5px;color:#f59e0b;"></i>'+reps.length+' Reports at this Location</span>' +
+  '</div>' +
+  '<div style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:2px;">';
+
+  reps.forEach(function(r){
+   var isActive = (activeId && r.id === activeId);
+   var bg = isActive ? '#eff6ff' : '#f9fafb';
+   var border = isActive ? '#93c5fd' : '#e5e7eb';
+   var badgeBg = r.status==='dangerous'?'#fef2f2':(r.status==='caution'?'#fffbeb':'#f0fdf4');
+   var badgeCol = r.status==='dangerous'?'#dc2626':(r.status==='caution'?'#d97706':'#16a34a');
+
+   h += '<div style="background:'+bg+';border:1px solid '+border+';border-radius:8px;padding:8px;cursor:pointer;transition:all 0.15s ease;" onclick="openLguReportFromMap('+r.id+')">' +
+   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">' +
+   '<span style="font-weight:700;font-size:0.8rem;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">'+esc(r.title)+'</span>' +
+   '<span style="background:'+badgeBg+';color:'+badgeCol+';font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:12px;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
+   '</div>' +
+   '<div style="font-size:0.72rem;color:#6b7280;margin-bottom:4px;">'+esc(r.date)+' &middot; '+esc(catLabels[r.category]||r.category)+'</div>' +
+   '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+   '<span style="font-size:0.7rem;color:#9ca3af;">#'+r.id+'</span>' +
+   '<span style="font-size:0.72rem;font-weight:600;color:#1e40af;"><i class="fas fa-arrow-right" style="font-size:0.65rem;"></i> View</span>' +
+   '</div>' +
+   '</div>';
+  });
+
+  h += '</div></div>';
+  return h;
+ }
+
+ function clearLguMarkersAndGuides(){
+  allMarkers.forEach(function(m){ map.removeLayer(m); });
+  allMarkers = [];
+  spiderGuideLines.forEach(function(l){ map.removeLayer(l); });
+  spiderGuideLines = [];
+ }
+
+ function renderLguReportMarkers(){
+  clearLguMarkersAndGuides();
+  var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
+
+  var validReports = [];
+  reports.forEach(function(r){
+   if(!isFinite(r.lat) || !isFinite(r.lng)) return;
+   if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return;
+
+   var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
+   var matchStatus = false;
+   if(currentFilter === 'all'){
+    matchStatus = !isArchivedOrSafe;
+   } else if(currentFilter === 'safe' || currentFilter === 'archived'){
+    matchStatus = isArchivedOrSafe;
+   } else {
+    matchStatus = (r.status === currentFilter && !r.is_archived);
+   }
+
+   var matchQuery = true;
+   if(currentLguQuery){
+    var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'') + ' ' + (r.reporter||'')).toLowerCase();
+    matchQuery = text.indexOf(currentLguQuery) !== -1;
+   }
+
+   if(matchStatus && matchQuery){
+    validReports.push(r);
+   }
+  });
+
+  var clusters = [];
+  validReports.forEach(function(r){
+   var matched = false;
+   for(var i=0; i<clusters.length; i++){
+    var c = clusters[i];
+    if(Math.abs(c.lat - r.lat) < 0.00018 && Math.abs(c.lng - r.lng) < 0.00018){
+     c.reports.push(r);
+     matched = true;
+     break;
+    }
+   }
+   if(!matched){
+    clusters.push({ lat: r.lat, lng: r.lng, reports: [r] });
+   }
+  });
+
+  clusters.forEach(function(cluster){
+   var cLat = cluster.lat;
+   var cLng = cluster.lng;
+   var reps = cluster.reports;
+   var count = reps.length;
+
+   if(count === 1){
+    var r = reps[0];
+    var color = markerColors[r.status] || '#888';
+    var m = L.marker([cLat, cLng], { icon: makeIcon(color) });
+    m.reportData = r;
+    m.bindPopup(buildLguSinglePopup(r), { maxWidth: 260 });
+    m.addTo(map);
+    allMarkers.push(m);
+   } else {
+    var hub = L.circleMarker([cLat, cLng], {
+     radius: 6,
+     color: '#ffffff',
+     weight: 2.5,
+     fillColor: '#1e40af',
+     fillOpacity: 1,
+     bubblingMouseEvents: false
+    }).addTo(map);
+    hub.bindTooltip('<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>' + count + ' Overlapping Reports (Click to view)</div>', { direction: 'top', offset: [0, -8] });
+    hub.bindPopup(buildLguClusterPopup(reps, null), { maxWidth: 280 });
+    allMarkers.push(hub);
+
+    var offsetRadius = 0.00022; // ~24 meters
+    reps.forEach(function(r, idx){
+     var angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+     var oLat = cLat + (offsetRadius * Math.cos(angle));
+     var oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+     var line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+      color: '#1e40af',
+      weight: 1.5,
+      dashArray: '3, 4',
+      opacity: 0.65,
+      interactive: false
+     }).addTo(map);
+     spiderGuideLines.push(line);
+
+     var color = markerColors[r.status] || '#888';
+     var m = L.marker([oLat, oLng], { icon: makeIcon(color) });
+     m.reportData = r;
+     m.bindTooltip('<div style="font-weight:700;font-size:0.75rem;">' + esc(r.title) + ' (' + (r.status.charAt(0).toUpperCase() + r.status.slice(1)) + ')</div>', { direction: 'top', offset: [0, -14] });
+     m.bindPopup(buildLguClusterPopup(reps, r.id), { maxWidth: 280 });
+     m.addTo(map);
+     allMarkers.push(m);
+    });
+   }
+  });
+
+  if(showLguHazardRings) drawLguHazardCircles();
+  if(showLguHeatmap) drawLguHeatmap();
+
+  if(allMarkers.length > 0 && !window.__lguMapBoundsSet){
+   var group = L.featureGroup(allMarkers);
+   map.fitBounds(group.getBounds().pad(0.15));
+   window.__lguMapBoundsSet = true;
+  }
+ }
+
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.loadBarangays){
+  SentriGeo.loadBarangays().then(renderLguReportMarkers, renderLguReportMarkers);
  } else {
- map.setView([14.4240,120.9215],12);
+  renderLguReportMarkers();
  }
 
  // ── Official barangay perimeters (Imus City GeoJSON, 95 villages) ──
@@ -1151,9 +1221,13 @@ tr:hover td{background:#fafafa;}
 
  function drawLguHazardCircles() {
  clearLguHazardCircles();
+ var drawnPos = {};
  allMarkers.forEach(function(m){
  if(map.hasLayer(m) && m.reportData){
  var r = m.reportData;
+ var posKey = r.lat.toFixed(5) + ',' + r.lng.toFixed(5);
+ if(drawnPos[posKey]) return;
+ drawnPos[posKey] = true;
  if(r.status === 'dangerous' || r.status === 'caution'){
  var rad = r.status === 'dangerous' ? 250 : 150;
  var col = r.status === 'dangerous' ? '#dc2626' : '#d97706';
@@ -1164,7 +1238,7 @@ tr:hover td{background:#fafafa;}
  dashArray: '5 5',
  fillColor: col,
  fillOpacity: 0.16
- }).bindTooltip('<div style="font-weight:700;font-size:0.74rem;">'+(r.status==='dangerous'?'Hazard Perimeter (250m)':'Caution Zone (150m)')+'<br><span style="font-weight:400;font-size:0.7rem;">'+r.title+'</span></div>');
+ }).bindTooltip('<div style="font-weight:700;font-size:0.74rem;">'+(r.status==='dangerous'?'Hazard Perimeter (250m)':'Caution Zone (150m)')+'<br><span style="font-weight:400;font-size:0.7rem;">'+esc(r.title)+'</span></div>');
  circle.addTo(map);
  lguHazardCircles.push(circle);
  }
@@ -1233,28 +1307,7 @@ tr:hover td{background:#fafafa;}
  }
 
  function updateLguMapFilter(){
- allMarkers.forEach(function(m){
- var r = m.reportData;
- var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
- var matchStatus = false;
- if(currentFilter === 'all'){
-  matchStatus = !isArchivedOrSafe;
- } else if(currentFilter === 'safe' || currentFilter === 'archived'){
-  matchStatus = isArchivedOrSafe;
- } else {
-  matchStatus = (r.status === currentFilter && !r.is_archived);
- }
- var matchQuery = true;
- if(currentLguQuery){
- var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'')).toLowerCase();
- matchQuery = text.indexOf(currentLguQuery) !== -1;
- }
- var show = matchStatus && matchQuery;
- if(show){ if(!map.hasLayer(m)) map.addTo(map); }
- else { if(map.hasLayer(m)) map.removeLayer(m); }
- });
- if(showLguHazardRings) drawLguHazardCircles();
- if(showLguHeatmap) drawLguHeatmap();
+  renderLguReportMarkers();
  }
 
  function filterMap(status, btn){
@@ -1270,7 +1323,9 @@ tr:hover td{background:#fafafa;}
  }
  </script>
 
- <?php elseif($view === 'profile'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
  <!-- ── MY PROFILE ── -->
  <style>
  .profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
@@ -1344,7 +1399,9 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
 
- <?php elseif($view === 'responders'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='responders'?'active':'' ?>" id="tab-responders">
  <!-- ── RESPONDER UNITS ── -->
  <style>
  .rtype-badge{display:inline-block;padding:2px 10px;border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:1px;text-transform:uppercase;}
@@ -1469,21 +1526,52 @@ tr:hover td{background:#fafafa;}
  }
  </script>
 
- <?php else: ?>
- <!-- ── COMING SOON ── -->
- <div class="card">
- <div class="coming-soon">
- <i class="fas <?= $nav_items[$view]['icon'] ?? 'fa-gear' ?>"></i>
- <h3><?= htmlspecialchars($page_titles[$view] ?? ucfirst($view)) ?></h3>
- <p>This section is under development.</p>
- </div>
- </div>
- <?php endif; ?>
+ </div><!-- /tab-responders -->
 
  </div><!-- /content -->
 </div><!-- /main -->
 
 <script>
+
+// ── Client-side Tab Navigation ───────────────────────────────────────────
+const lguTabTitles = {
+  overview: 'LGU Operations Dashboard',
+  all_reports: 'All Incident Reports',
+  map: 'Incident Map',
+  contacts: 'Emergency Contacts',
+  barangays: 'Barangay Summaries',
+  responders: 'Responder Units',
+  profile: 'My Profile'
+};
+
+function showTab(name) {
+  if (!lguTabTitles[name]) return;
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.sb-nav a').forEach(function(a){ a.classList.remove('active'); });
+  var target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+  var titleEl = document.getElementById('lguPageTitle');
+  if (titleEl) titleEl.textContent = lguTabTitles[name];
+  try { history.replaceState(null, '', '#tab=' + name); } catch(e){}
+  if (name === 'map') {
+    setTimeout(function(){
+      if (typeof lmap !== 'undefined' && lmap) {
+        lmap.invalidateSize();
+      }
+    }, 80);
+  }
+  if (typeof closeSidebar === 'function') closeSidebar();
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
+  if (hash && lguTabTitles[hash]) {
+    showTab(hash);
+  }
+});
+
 // Escape user-controlled values before they are concatenated into innerHTML.
 function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function openSidebar(){
@@ -1619,7 +1707,8 @@ async function lguViewReport(id,title,category,status,barangay,reporter,date,des
           '</div>' +
           '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:10px;">';
         data.images.forEach(function(img, idx) {
-          var imgUrl = '../' + img.url;
+          var raw = img.url || ('uploads/reports/' + img.file_name);
+          var imgUrl = raw.startsWith('/') ? raw : ('../' + raw.replace(/^\.\//, ''));
           h += '<div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);aspect-ratio:4/3;background:#0f172a;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.1);" onclick="openPhotoPreview(\'' + imgUrl.replace(/'/g, "\\'") + '\')">' +
             '<img src="' + imgUrl + '" alt="Incident Photo ' + (idx + 1) + '" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy" onerror="this.parentElement.style.display=\'none\'">' +
             '<div style="position:absolute;bottom:5px;right:6px;background:rgba(0,0,0,0.65);color:#fff;font-size:0.65rem;font-weight:600;padding:2px 7px;border-radius:12px;backdrop-filter:blur(2px);display:flex;align-items:center;gap:3px;"><i class="fas fa-magnifying-glass-plus"></i> ' + (idx+1) + '/' + count + '</div>' +
@@ -2005,6 +2094,100 @@ document.addEventListener('DOMContentLoaded', function(){
  </div>
 </div>
 
+<!-- ── LGU EXPORT MODAL ── -->
+<div class="lgu-modal-bg" id="lguExportModal" onclick="if(event.target===this)closeLguExportModal()">
+ <div class="lgu-modal" style="max-width:480px;">
+ <div class="lgu-modal-header">
+ <h3 style="display:flex;align-items:center;gap:8px;"><i class="fas fa-file-csv" style="color:#16a34a;"></i> Export City Incident Reports</h3>
+ <button class="lgu-modal-close" onclick="closeLguExportModal()"><i class="fas fa-xmark"></i></button>
+ </div>
+ <div class="lgu-modal-body">
+ <p style="font-size:0.83rem;color:var(--muted);margin-bottom:14px;">Select the time and date range to export comprehensive telemetry for Imus City.</p>
+ 
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Timeframe</label>
+ <select id="lguExportRange" onchange="onLguExportRangeChange(this.value)" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="annual" selected>Annual (Full Year)</option>
+ <option value="month">Specific Month & Year</option>
+ <option value="last_month">Last Month</option>
+ <option value="custom">Custom Date Range (From - To)</option>
+ <option value="all">Full Archive (All Time)</option>
+ </select>
+ </div>
+
+ <div id="lguExportYearGroup" style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Select Year</label>
+ <select id="lguExportYear" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php $curY = (int)date('Y'); for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?> Annual City Report</option>
+ <?php endfor; ?>
+ </select>
+ </div>
+
+ <div id="lguExportMonthGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Month & Year</label>
+ <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:10px;">
+ <select id="lguExportMonth" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php
+ $months = [1=>'January',2=>'February',3=>'March',4=>'April',5=>'May',6=>'June',7=>'July',8=>'August',9=>'September',10=>'October',11=>'November',12=>'December'];
+ $curM = (int)date('n');
+ foreach($months as $num => $mName): ?>
+ <option value="<?= $num ?>" <?= $num === $curM ? 'selected' : '' ?>><?= $mName ?></option>
+ <?php endforeach; ?>
+ </select>
+ <select id="lguExportMonthYear" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?></option>
+ <?php endfor; ?>
+ </select>
+ </div>
+ </div>
+
+ <div id="lguExportCustomGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Date Range</label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">Start Date</span>
+ <input type="date" id="lguExportStartDate" value="<?= date('Y-m-01') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">End Date</span>
+ <input type="date" id="lguExportEndDate" value="<?= date('Y-m-d') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ </div>
+ </div>
+
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Barangay Scope</label>
+ <select id="lguExportBarangay" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="">All 95 Imus Barangays (City-Wide)</option>
+ <?php 
+ $all_b = function_exists('sentri_barangay_names') ? sentri_barangay_names() : [];
+ foreach($all_b as $bname): ?>
+ <option value="<?= htmlspecialchars($bname) ?>" <?= ($brgy_filter === $bname) ? 'selected' : '' ?>><?= htmlspecialchars($bname) ?></option>
+ <?php endforeach; ?>
+ </select>
+ </div>
+
+ <div style="margin-bottom:6px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Status Filter</label>
+ <select id="lguExportStatus" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="">All Incident Statuses</option>
+ <option value="dangerous">Dangerous Only</option>
+ <option value="caution">Caution Only</option>
+ <option value="safe">Safe / Resolved Only</option>
+ </select>
+ </div>
+ </div>
+ <div class="lgu-modal-actions" style="justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+ <button type="button" onclick="closeLguExportModal()" style="padding:8px 16px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:0.84rem;font-weight:600;cursor:pointer;">Cancel</button>
+ <button type="button" onclick="triggerLguDownload('json')" style="padding:8px 14px;border:none;background:#0284c7;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerLguDownload('csv')" style="padding:8px 16px;border:none;background:#16a34a;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ <button type="button" onclick="triggerLguDownload('xlsx')" style="padding:8px 18px;border:none;background:#0f766e;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-excel"></i> SenTri Excel (.xlsx)</button>
+ </div>
+ </div>
+</div>
+
 <!-- ── LGU DISPATCH MODAL ── -->
 <div class="lgu-modal-bg" id="lguDispatchModal">
  <div class="lgu-modal" style="max-width:420px;">
@@ -2264,6 +2447,47 @@ function setOperationalAlert(level, btn){
 function broadcastAlertDirective(){
  closeAlertLevelModal();
  showToast('DRRM Alert Directive broadcasted to all 5 Barangay Operations Centers and community feeds.', 'success');
+}
+
+function openLguExportModal() {
+ const m = document.getElementById('lguExportModal');
+ if (m) m.classList.add('show');
+}
+function closeLguExportModal() {
+ const m = document.getElementById('lguExportModal');
+ if (m) m.classList.remove('show');
+}
+function onLguExportRangeChange(val) {
+ const yg = document.getElementById('lguExportYearGroup');
+ const mg = document.getElementById('lguExportMonthGroup');
+ const cg = document.getElementById('lguExportCustomGroup');
+ if (yg) yg.style.display = (val === 'annual') ? 'block' : 'none';
+ if (mg) mg.style.display = (val === 'month') ? 'block' : 'none';
+ if (cg) cg.style.display = (val === 'custom') ? 'block' : 'none';
+}
+function triggerLguDownload(format) {
+ const range = document.getElementById('lguExportRange')?.value || 'annual';
+ const status = document.getElementById('lguExportStatus')?.value || '';
+ const brgy = document.getElementById('lguExportBarangay')?.value || '';
+ let url = `../api/reports.php?action=export&type=reports&format=${format}&range=${encodeURIComponent(range)}`;
+ if (brgy) url += `&barangay=${encodeURIComponent(brgy)}`;
+ if (status) url += `&status=${encodeURIComponent(status)}`;
+ if (range === 'annual') {
+  const y = document.getElementById('lguExportYear')?.value;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'month') {
+  const m = document.getElementById('lguExportMonth')?.value;
+  const y = document.getElementById('lguExportMonthYear')?.value;
+  if (m) url += `&month=${encodeURIComponent(m)}`;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'custom') {
+  const s = document.getElementById('lguExportStartDate')?.value;
+  const e = document.getElementById('lguExportEndDate')?.value;
+  if (s) url += `&start_date=${encodeURIComponent(s)}`;
+  if (e) url += `&end_date=${encodeURIComponent(e)}`;
+ }
+ closeLguExportModal();
+ window.location.href = url;
 }
 
 // ── New-report popup alerts ─────────────────────────────────────────────────

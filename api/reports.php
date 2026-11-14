@@ -14,6 +14,13 @@ $PREFERRED_ACTION_ROLES = [
  'admin_create_official'=> ['admin'],
  'admin_reject_user'    => ['admin'],
  'admin_delete_user'    => ['admin'],
+ 'admin_change_password'=> ['admin'],
+ 'admin_verify_user'    => ['admin'],
+ 'admin_ban_user'       => ['admin'],
+ 'admin_unban_user'     => ['admin'],
+ 'admin_suspend_user'   => ['admin'],
+ 'admin_unsuspend_user' => ['admin'],
+ 'admin_toggle_force_reset' => ['admin'],
  'admin_get_logs'       => ['admin'],
  'admin_get_audit_logs' => ['admin'],
  'restore_report'       => ['admin'],
@@ -363,7 +370,7 @@ switch ($action) {
  while ($img_row = $img_res->fetch_assoc()) {
  $rid = (int)$img_row['report_id'];
  if (!isset($images_map[$rid])) $images_map[$rid] = [];
- $images_map[$rid][] = 'uploads/reports/' . rawurlencode($img_row['file_name']);
+ $images_map[$rid][] = '/uploads/reports/' . rawurlencode($img_row['file_name']);
  }
  }
  }
@@ -718,6 +725,24 @@ switch ($action) {
  if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
  $report_id=(int)($_POST['report_id']??0);
  if(!$report_id){echo json_encode(['status'=>'error','message'=>'Invalid ID.']);exit;}
+
+ // Restriction: only reports marked as safe can be archived
+ $st = $conn->prepare("SELECT status FROM reports WHERE id=? LIMIT 1");
+ $st->bind_param("i", $report_id);
+ $st->execute();
+ $s_res = $st->get_result();
+ if ($s_res->num_rows === 0) {
+  echo json_encode(['status'=>'error','message'=>'Report not found.']);
+  exit;
+ }
+ $r_curr = $s_res->fetch_assoc();
+ $st->close();
+
+ if ($r_curr['status'] !== 'safe') {
+  echo json_encode(['status'=>'error','message'=>'Only reports marked as safe can be archived.']);
+  exit;
+ }
+
  if($role==='admin'){$d=$conn->prepare("UPDATE reports SET is_archived=1 WHERE id=?");$d->bind_param("i",$report_id);}
  else{$d=$conn->prepare("UPDATE reports SET is_archived=1 WHERE id=? AND user_id=?");$d->bind_param("ii",$report_id,$user_id);}
  $d->execute();
@@ -784,9 +809,19 @@ switch ($action) {
 
  case 'admin_get_users':
  if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
- $sql="SELECT u.id,u.first_name,u.last_name,u.email,u.official_id,u.role,u.org_name,u.position,u.barangay_name,u.municipality,u.is_approved,u.created_at,COUNT(r.id) AS report_count FROM users u LEFT JOIN reports r ON r.user_id=u.id GROUP BY u.id ORDER BY u.is_approved ASC, u.created_at DESC";
+ $sql="SELECT u.id,u.first_name,u.last_name,u.email,u.official_id,u.phone_number,u.role,u.org_name,u.position,u.barangay_name,u.municipality,u.is_approved,u.email_verified,u.force_password_reset,u.is_banned,u.ban_reason,u.banned_at,u.suspended_until,u.suspension_reason,u.created_at,COUNT(r.id) AS report_count FROM users u LEFT JOIN reports r ON r.user_id=u.id GROUP BY u.id ORDER BY u.is_banned DESC, (u.suspended_until IS NOT NULL AND u.suspended_until > NOW()) DESC, u.is_approved ASC, u.created_at DESC";
  $res=$conn->query($sql); $users=[];
- while($row=$res->fetch_assoc()){$row['id']=(int)$row['id'];$row['report_count']=(int)$row['report_count'];$row['is_approved']=(int)$row['is_approved'];$users[]=$row;}
+ $now_time = time();
+ while($row=$res->fetch_assoc()){
+  $row['id']=(int)$row['id'];
+  $row['report_count']=(int)$row['report_count'];
+  $row['is_approved']=(int)$row['is_approved'];
+  $row['email_verified']=(int)($row['email_verified'] ?? 0);
+  $row['force_password_reset']=(int)($row['force_password_reset'] ?? 0);
+  $row['is_banned']=(int)($row['is_banned'] ?? 0);
+  $row['is_suspended']=(!empty($row['suspended_until']) && strtotime($row['suspended_until']) > $now_time) ? 1 : 0;
+  $users[]=$row;
+ }
  echo json_encode(['status'=>'success','users'=>$users]);
  break;
 
@@ -800,125 +835,155 @@ switch ($action) {
  break;
 
  case 'admin_create_official':
- // Provision an official government account (barangay / LGU / first responder).
- // Created pre-approved with email_verified=1 and force_password_reset=1 so
- // the official must set their own password at first sign-in.
- if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+		// Provision an official government account (barangay / LGU / first responder)
+		// or a community member account.
+		if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
 
- $new_role = trim($_POST['role'] ?? '');
- if (!in_array($new_role, ['barangay','lgu','first_responder','community'], true)) {
- echo json_encode(['status'=>'error','message'=>'Invalid portal role.']); exit;
- }
+		$new_role = trim($_POST['role'] ?? '');
+		if (!in_array($new_role, ['barangay','lgu','first_responder','community'], true)) {
+			echo json_encode(['status'=>'error','message'=>'Invalid portal role.']); exit;
+		}
 
- $c_first = trim($_POST['first_name'] ?? '');
- $c_last = trim($_POST['last_name'] ?? '');
- $c_email = trim($_POST['email'] ?? '');
- $c_official_id = trim($_POST['official_id'] ?? '');
- $c_org = trim($_POST['org_name'] ?? '') ?: null;
- $c_position = trim($_POST['position'] ?? '') ?: null;
- $c_brgy = trim($_POST['barangay_name'] ?? '') ?: null;
- $c_muni = trim($_POST['municipality'] ?? '') ?: null;
- $c_rtype = trim($_POST['responder_type'] ?? '') ?: null;
- $c_pw = trim($_POST['password'] ?? '');
- $c_email_creds = (($_POST['email_creds'] ?? '1') === '1');
+		$c_first = trim($_POST['first_name'] ?? '');
+		$c_last = trim($_POST['last_name'] ?? '');
+		$c_email = trim($_POST['email'] ?? '');
+		$c_official_id = trim($_POST['official_id'] ?? '');
+		$c_org = trim($_POST['org_name'] ?? '') ?: null;
+		$c_position = trim($_POST['position'] ?? '') ?: null;
+		$c_brgy = trim($_POST['barangay_name'] ?? '') ?: null;
+		$c_muni = trim($_POST['municipality'] ?? '') ?: null;
+		$c_rtype = trim($_POST['responder_type'] ?? '') ?: null;
+		$c_pw = trim($_POST['password'] ?? '');
+		$c_email_creds = (($_POST['email_creds'] ?? '1') === '1');
 
- if ($c_first==='' || $c_last==='') {
- echo json_encode(['status'=>'error','message'=>'First name and last name are required.']); exit;
- }
- if ($c_email !== '' && !filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
- echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
- }
- if ($new_role==='barangay' && (!$c_brgy || !$c_muni)) {
- echo json_encode(['status'=>'error','message'=>'Barangay and city/municipality are required for barangay accounts.']); exit;
- }
- if ($new_role==='lgu' && !$c_muni) {
- echo json_encode(['status'=>'error','message'=>'City/municipality is required for LGU accounts.']); exit;
- }
- if ($new_role==='first_responder') {
- $valid_types = ['bfp','pnp','ems','drrmo','mdrrmo','hospital','other'];
- if (!$c_rtype || !in_array($c_rtype, $valid_types, true)) {
- echo json_encode(['status'=>'error','message'=>'A valid responder type is required for first responder accounts.']); exit;
- }
- }
- if ($c_pw !== '' && strlen($c_pw) < 8) {
- echo json_encode(['status'=>'error','message'=>'Initial password must be at least 8 characters.']); exit;
- }
+		if ($c_first==='' || $c_last==='') {
+			echo json_encode(['status'=>'error','message'=>'First name and last name are required.']); exit;
+		}
 
- // Official ID: name-derived 5 digits + creation year (e.g. 12345 + 2026 =
- // 123452026). Officials then sign in with THIS instead of an email. An
- // admin-provided value may override the generated one; uniqueness enforced.
- if ($c_official_id !== '') {
- if (!preg_match('/^\d{9}$/', $c_official_id)) {
- echo json_encode(['status'=>'error','message'=>'Official ID must be exactly 9 digits.']); exit;
- }
- $chk = $conn->prepare("SELECT id FROM users WHERE official_id=? LIMIT 1");
- $chk->bind_param('s', $c_official_id); $chk->execute(); $chk->store_result();
- if ($chk->num_rows > 0) { $chk->close(); echo json_encode(['status'=>'error','message'=>'That Official ID is already taken.']); exit; }
- $chk->close();
- } else {
- $c_official_id = sentri_generate_official_id($conn, $c_first, $c_last);
- }
- if ($c_email !== '') {
- $chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
- $chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
- if ($chk->num_rows > 0) {
- $chk->close();
- echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
- }
- $chk->close();
- } else {
- // No email on file: officials log in with their Official ID. A placeholder
- // address keeps NOT-NULL constraints and outbox mail satisfied.
- $c_email = $c_official_id . '@official.sentri';
- }
+		if ($new_role === 'community') {
+			if ($c_email === '') {
+				echo json_encode(['status'=>'error','message'=>'Email address is required for community accounts.']); exit;
+			}
+			if (!filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
+				echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
+			}
+			$c_official_id = null;
+			$c_org = null;
+			$c_rtype = null;
+		} else {
+			if ($c_email !== '' && !filter_var($c_email, FILTER_VALIDATE_EMAIL)) {
+				echo json_encode(['status'=>'error','message'=>'Invalid email address.']); exit;
+			}
+			if ($new_role==='barangay' && (!$c_brgy || !$c_muni)) {
+				echo json_encode(['status'=>'error','message'=>'Barangay and city/municipality are required for barangay accounts.']); exit;
+			}
+			if ($new_role==='lgu' && !$c_muni) {
+				echo json_encode(['status'=>'error','message'=>'City/municipality is required for LGU accounts.']); exit;
+			}
+			if ($new_role==='first_responder') {
+				$valid_types = ['bfp','pnp','ems','drrmo','mdrrmo','hospital','other'];
+				if (!$c_rtype || !in_array($c_rtype, $valid_types, true)) {
+					echo json_encode(['status'=>'error','message'=>'A valid responder type is required for first responder accounts.']); exit;
+				}
+			}
+		}
 
- if ($c_pw === '') {
- // Auto-generate a strong, readable initial password
- $alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
- $c_pw = substr(str_shuffle($alphabet), 0, 4) . substr(str_shuffle('2345678923456789'), 0, 3) . substr(str_shuffle('!@#$%&*'), 0, 1) . substr(str_shuffle($alphabet), 0, 4);
- }
- $c_hash = password_hash($c_pw, PASSWORD_BCRYPT, ['cost' => 12]);
+		if ($c_pw !== '' && strlen($c_pw) < 8) {
+			echo json_encode(['status'=>'error','message'=>'Initial password must be at least 8 characters.']); exit;
+		}
 
- $ins = $conn->prepare(
- "INSERT INTO users
- (first_name, last_name, email, official_id, password, role, org_name, `position`,
- barangay_name, municipality, responder_type, is_approved, email_verified, force_password_reset)
- VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1)"
- );
- if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
- $ins->bind_param("sssssssssss", $c_first, $c_last, $c_email, $c_official_id, $c_hash, $new_role, $c_org, $c_position, $c_brgy, $c_muni, $c_rtype);
- if (!$ins->execute()) {
- echo json_encode(['status'=>'error','message'=>'Create failed: '.$ins->error]); exit;
- }
- $new_uid = $conn->insert_id;
- $ins->close();
+		if ($new_role !== 'community') {
+			// Official ID: name-derived 5 digits + creation year (e.g. 12345 + 2026 =
+			// 123452026). Officials then sign in with THIS instead of an email. An
+			// admin-provided value may override the generated one; uniqueness enforced.
+			if ($c_official_id !== '') {
+				if (!preg_match('/^\d{9}$/', $c_official_id)) {
+					echo json_encode(['status'=>'error','message'=>'Official ID must be exactly 9 digits.']); exit;
+				}
+				$chk = $conn->prepare("SELECT id FROM users WHERE official_id=? LIMIT 1");
+				$chk->bind_param('s', $c_official_id); $chk->execute(); $chk->store_result();
+				if ($chk->num_rows > 0) { $chk->close(); echo json_encode(['status'=>'error','message'=>'That Official ID is already taken.']); exit; }
+				$chk->close();
+			} else {
+				$c_official_id = sentri_generate_official_id($conn, $c_first, $c_last);
+			}
+			if ($c_email !== '') {
+				$chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+				$chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
+				if ($chk->num_rows > 0) {
+					$chk->close();
+					echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
+				}
+				$chk->close();
+			} else {
+				// No email on file: officials log in with their Official ID. A placeholder
+				// address keeps NOT-NULL constraints and outbox mail satisfied.
+				$c_email = $c_official_id . '@official.sentri';
+			}
+		} else {
+			// Community member email uniqueness check
+			$chk = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+			$chk->bind_param("s", $c_email); $chk->execute(); $chk->store_result();
+			if ($chk->num_rows > 0) {
+				$chk->close();
+				echo json_encode(['status'=>'error','message'=>'That email is already registered.']); exit;
+			}
+			$chk->close();
+		}
 
- $email_sent = false;
- if ($c_email_creds) {
- try {
- require_once __DIR__ . '/../core/SenTriMailer.php';
- $portal_name = ['barangay'=>'Barangay Portal','lgu'=>'LGU Portal','first_responder'=>'First Responder Portal','community'=>'Community Portal'][$new_role];
- $login_link = sentri_app_url() . '/gov/login.php';
- $body = 'An account has been created for you on the SenTri <strong>' . htmlspecialchars($portal_name) . '</strong>.'
- . '<br><br><strong>Email:</strong> ' . htmlspecialchars($c_email)
- . '<br><strong>Temporary password:</strong> ' . htmlspecialchars($c_pw)
- . '<br><br>Sign in at the Government Portal. For security, you will be required to set your own password on first sign-in.';
- $html = buildEmailTemplate('Your SenTri Official Account', 'Dear ' . htmlspecialchars($c_first) . ',', $body, $login_link, 'Open Government Portal', 'If you did not expect this account, contact your system administrator.');
- $m = new SenTriMailer();
- $email_sent = $m->send($c_email, $c_first . ' ' . $c_last, 'Your SenTri official account credentials', $html, 'gov');
- } catch (Throwable $e) {
- error_log('SenTri official invite error: ' . $e->getMessage());
- }
- }
+		if ($c_pw === '') {
+			// Auto-generate a strong, readable initial password
+			$alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+			$c_pw = substr(str_shuffle($alphabet), 0, 4) . substr(str_shuffle('2345678923456789'), 0, 3) . substr(str_shuffle('!@#$%&*'), 0, 1) . substr(str_shuffle($alphabet), 0, 4);
+		}
+		$c_hash = password_hash($c_pw, PASSWORD_BCRYPT, ['cost' => 12]);
 
- $portal_labels = ['barangay'=>'Barangay', 'lgu'=>'LGU', 'first_responder'=>'First Responder', 'community'=>'Community'];
- $hasRealEmail = (strpos($c_email, '@official.sentri') === false);
- $msg = $portal_labels[$new_role] . ' account created — Official ID: ' . $c_official_id . ' · password: ' . $c_pw . '.'
- . ($hasRealEmail && $email_sent ? ' Credentials also emailed.' : ' Share these credentials directly — no email on file.');
- echo json_encode(['status'=>'success','message'=>$msg,'official_id'=>$c_official_id,'password'=>$c_pw,'email_sent'=>(bool)$email_sent]);
- break;
+		$ins = $conn->prepare(
+			"INSERT INTO users
+			(first_name, last_name, email, official_id, password, role, org_name, `position`,
+			 barangay_name, municipality, responder_type, is_approved, email_verified, force_password_reset)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1)"
+		);
+		if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
+		$ins->bind_param("sssssssssss", $c_first, $c_last, $c_email, $c_official_id, $c_hash, $new_role, $c_org, $c_position, $c_brgy, $c_muni, $c_rtype);
+		if (!$ins->execute()) {
+			echo json_encode(['status'=>'error','message'=>'Create failed: '.$ins->error]); exit;
+		}
+		$new_uid = $conn->insert_id;
+		$ins->close();
 
- case 'admin_reject_user':
+		$email_sent = false;
+		if ($c_email_creds) {
+			try {
+				require_once __DIR__ . '/../core/SenTriMailer.php';
+				$portal_name = ['barangay'=>'Barangay Portal','lgu'=>'LGU Portal','first_responder'=>'First Responder Portal','community'=>'Community Portal'][$new_role];
+				$login_link = ($new_role === 'community') ? (sentri_app_url() . '/login.php') : (sentri_app_url() . '/gov/login.php');
+				$portal_realm = ($new_role === 'community') ? 'community' : 'gov';
+				$body = 'An account has been created for you on the SenTri <strong>' . htmlspecialchars($portal_name) . '</strong>.'
+					. '<br><br><strong>Email:</strong> ' . htmlspecialchars($c_email)
+					. '<br><strong>Temporary password:</strong> ' . htmlspecialchars($c_pw)
+					. '<br><br>Sign in to get started. For security, you will be required to set your own password on first sign-in.';
+				$html = buildEmailTemplate('Your SenTri Account', 'Dear ' . htmlspecialchars($c_first) . ',', $body, $login_link, 'Open SenTri Portal', 'If you did not expect this account, contact your system administrator.');
+				$m = new SenTriMailer();
+				$email_sent = $m->send($c_email, $c_first . ' ' . $c_last, 'Your SenTri account credentials', $html, $portal_realm);
+			} catch (Throwable $e) {
+				error_log('SenTri invite error: ' . $e->getMessage());
+			}
+		}
+
+		$portal_labels = ['barangay'=>'Barangay', 'lgu'=>'LGU', 'first_responder'=>'First Responder', 'community'=>'Community'];
+		$hasRealEmail = (strpos($c_email, '@official.sentri') === false);
+		if ($new_role === 'community') {
+			$msg = 'Community account created for ' . $c_email . ' · password: ' . $c_pw . '.'
+				. ($email_sent ? ' Credentials also emailed.' : ' Share credentials directly.');
+		} else {
+			$msg = $portal_labels[$new_role] . ' account created — Official ID: ' . $c_official_id . ' · password: ' . $c_pw . '.'
+				. ($hasRealEmail && $email_sent ? ' Credentials also emailed.' : ' Share these credentials directly — no email on file.');
+		}
+		echo json_encode(['status'=>'success','message'=>$msg,'official_id'=>$c_official_id,'email'=>$c_email,'password'=>$c_pw,'email_sent'=>(bool)$email_sent]);
+		break;
+
+	case 'admin_reject_user':
  if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
  $target=(int)($_POST['user_id']??0);
  if(!$target||$target===$user_id){echo json_encode(['status'=>'error','message'=>'Invalid.']);exit;}
@@ -940,6 +1005,118 @@ switch ($action) {
  if($d->affected_rows>0){echo json_encode(['status'=>'success','message'=>'User removed.']);}
  else{echo json_encode(['status'=>'error','message'=>'Could not delete user (admin accounts are protected).']);}
  $d->close();
+ break;
+
+ case 'admin_change_password':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ $new_pw=trim($_POST['new_password']??'');
+ $require_reset = !empty($_POST['force_reset']) ? 1 : 0;
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ if(strlen($new_pw) < 6){echo json_encode(['status'=>'error','message'=>'Password must be at least 6 characters.']);exit;}
+ $chk=$conn->prepare("SELECT id, role, first_name, last_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ if($tuser['role']==='admin' && $target !== $user_id){
+  echo json_encode(['status'=>'error','message'=>'Cannot change password of another administrator.']);exit;
+ }
+ $hash = password_hash($new_pw, PASSWORD_DEFAULT);
+ $u=$conn->prepare("UPDATE users SET password=?, force_password_reset=?, reset_token=NULL, reset_token_expires=NULL WHERE id=?");
+ $u->bind_param("sii", $hash, $require_reset, $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Password for '.htmlspecialchars($tuser['first_name']).' updated successfully.']);
+ break;
+
+ case 'admin_verify_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ $u=$conn->prepare("UPDATE users SET email_verified=1, is_approved=1, verification_token=NULL, token_expires_at=NULL WHERE id=?");
+ $u->bind_param("i", $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Account for '.htmlspecialchars($tuser['first_name']).' manually verified and activated.']);
+ break;
+
+ case 'admin_ban_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ $reason=trim($_POST['reason']??'');
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ if($target===$user_id){echo json_encode(['status'=>'error','message'=>'Cannot ban yourself.']);exit;}
+ $chk=$conn->prepare("SELECT role, first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ if($tuser['role']==='admin'){echo json_encode(['status'=>'error','message'=>'Admin accounts cannot be banned.']);exit;}
+ $u=$conn->prepare("UPDATE users SET is_banned=1, ban_reason=?, banned_at=NOW() WHERE id=?");
+ $u->bind_param("si", $reason, $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Account for '.htmlspecialchars($tuser['first_name']).' has been permanently banned.']);
+ break;
+
+ case 'admin_unban_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ $u=$conn->prepare("UPDATE users SET is_banned=0, ban_reason=NULL, banned_at=NULL WHERE id=?");
+ $u->bind_param("i", $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Ban lifted for '.htmlspecialchars($tuser['first_name'] ?? 'user').'.']);
+ break;
+
+ case 'admin_suspend_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ $hours=(int)($_POST['duration_hours']??24);
+ $custom_until=trim($_POST['until']??'');
+ $reason=trim($_POST['reason']??'');
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ if($target===$user_id){echo json_encode(['status'=>'error','message'=>'Cannot suspend yourself.']);exit;}
+ $chk=$conn->prepare("SELECT role, first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ if($tuser['role']==='admin'){echo json_encode(['status'=>'error','message'=>'Admin accounts cannot be suspended.']);exit;}
+
+ if(!empty($custom_until) && strtotime($custom_until) > time()){
+  $until = date('Y-m-d H:i:s', strtotime($custom_until));
+ } else {
+  if($hours <= 0) $hours = 24;
+  $until = date('Y-m-d H:i:s', time() + ($hours * 3600));
+ }
+ $u=$conn->prepare("UPDATE users SET suspended_until=?, suspension_reason=? WHERE id=?");
+ $u->bind_param("ssi", $until, $reason, $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Account for '.htmlspecialchars($tuser['first_name']).' suspended until '.date('M j, Y g:i A', strtotime($until)).'.','until'=>$until]);
+ break;
+
+ case 'admin_unsuspend_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ $u=$conn->prepare("UPDATE users SET suspended_until=NULL, suspension_reason=NULL WHERE id=?");
+ $u->bind_param("i", $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Suspension lifted for '.htmlspecialchars($tuser['first_name'] ?? 'user').'.']);
+ break;
+
+ case 'admin_toggle_force_reset':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT force_password_reset FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $row=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$row){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ $new_val = empty($row['force_password_reset']) ? 1 : 0;
+ $u=$conn->prepare("UPDATE users SET force_password_reset=? WHERE id=?");
+ $u->bind_param("ii", $new_val, $target); $u->execute(); $u->close();
+ $msg = $new_val ? 'User will be required to set a new password on their next sign-in.' : 'Password reset requirement removed.';
+ echo json_encode(['status'=>'success','message'=>$msg,'force_password_reset'=>$new_val]);
  break;
 
  case 'admin_get_logs':
@@ -1134,7 +1311,7 @@ switch ($action) {
  while ($row = $res->fetch_assoc()) {
  $row['id'] = (int)$row['id'];
  $row['file_size'] = (int)$row['file_size'];
- $row['url'] = 'uploads/reports/' . rawurlencode($row['file_name']);
+ $row['url'] = '/uploads/reports/' . rawurlencode($row['file_name']);
  $images[] = $row;
  }
  $_img_stmt->close();
@@ -1481,148 +1658,336 @@ switch ($action) {
  break;
 
  case 'export':
- if (!in_array($role, ['admin', 'lgu', 'barangay'])) {
- echo json_encode(['status'=>'error','message'=>'Unauthorized for export.']); exit;
- }
- $export_type = $_GET['type'] ?? 'reports';
- $format = strtolower($_GET['format'] ?? 'csv');
+    if (!in_array($role, ['admin', 'lgu', 'barangay'])) {
+        echo json_encode(['status'=>'error','message'=>'Unauthorized for export.']); exit;
+    }
+    $export_type = $_GET['type'] ?? 'reports';
+    $format = strtolower($_GET['format'] ?? 'csv');
 
- if ($export_type === 'audit_logs') {
- if ($role !== 'admin') {
- echo json_encode(['status'=>'error','message'=>'Admin role required to export audit trail.']); exit;
- }
- $log_res = $conn->query("SELECT id, report_id, report_title, action, performed_by, performed_by_name, performed_at FROM report_audit_logs ORDER BY performed_at DESC");
- $logs = [];
- while ($row = $log_res->fetch_assoc()) {
- $logs[] = $row;
- }
+    // Parse date/time filters
+    $filter_range = strtolower(trim($_GET['range'] ?? ''));
+    $raw_year = $_GET['year'] ?? '';
+    $raw_month = $_GET['month'] ?? '';
+    $filter_year = (is_numeric($raw_year) && (int)$raw_year >= 2000) ? (int)$raw_year : 0;
+    $filter_month = 0;
+    if (is_numeric($raw_month) && (int)$raw_month >= 1 && (int)$raw_month <= 12) {
+        $filter_month = (int)$raw_month;
+    } elseif (is_string($raw_month) && preg_match('/^(\d{4})-(\d{1,2})$/', trim($raw_month), $m_match)) {
+        $filter_year = (int)$m_match[1];
+        $filter_month = (int)$m_match[2];
+        $filter_range = 'month';
+    }
+    $filter_start_date = trim($_GET['start_date'] ?? '');
+    $filter_end_date = trim($_GET['end_date'] ?? '');
 
- if ($format === 'json') {
- header('Content-Type: application/json');
- header('Content-Disposition: attachment; filename="sentri_audit_trail_'.date('Ymd_His').'.json"');
- echo json_encode(['status'=>'success','count'=>count($logs),'generated_at'=>date('c'),'audit_logs'=>$logs], JSON_PRETTY_PRINT);
- exit;
- } else {
- header('Content-Type: text/csv; charset=utf-8');
- header('Content-Disposition: attachment; filename="sentri_audit_trail_'.date('Ymd_His').'.csv"');
- $out = fopen('php://output', 'w');
- fputcsv($out, ['Audit ID', 'Report ID', 'Report Title', 'Action Performed', 'User ID', 'Performed By', 'Timestamp']);
- foreach ($logs as $l) {
- fputcsv($out, [$l['id'], $l['report_id'], $l['report_title'], $l['action'], $l['performed_by'], $l['performed_by_name'], $l['performed_at']]);
- }
- fclose($out);
- exit;
- }
- }
+    // Determine date suffix for filenames and SQL clauses
+    $date_suffix = 'all_time';
+    $date_clauses_rpt = [];
+    $date_clauses_audit = [];
 
- // Reports export with full telemetry
- $filter_status = $_GET['status'] ?? '';
- $filter_cat = $_GET['category'] ?? '';
- $filter_brgy = $_GET['barangay'] ?? '';
- $filter_city = $_GET['city'] ?? '';
+    if ($filter_range === 'annual' || $filter_range === 'year' || ($filter_year > 0 && $filter_month === 0 && empty($filter_start_date) && empty($filter_end_date))) {
+        $y = $filter_year > 0 ? $filter_year : (int)date('Y');
+        $date_clauses_rpt[] = "YEAR(r.created_at) = $y";
+        $date_clauses_audit[] = "YEAR(performed_at) = $y";
+        $date_suffix = "annual_{$y}";
+    } elseif ($filter_range === 'month' || ($filter_month > 0 && empty($filter_start_date) && empty($filter_end_date))) {
+        $y = $filter_year > 0 ? $filter_year : (int)date('Y');
+        $m = $filter_month > 0 ? $filter_month : (int)date('n');
+        $date_clauses_rpt[] = "YEAR(r.created_at) = $y AND MONTH(r.created_at) = $m";
+        $date_clauses_audit[] = "YEAR(performed_at) = $y AND MONTH(performed_at) = $m";
+        $date_suffix = sprintf("month_%04d_%02d", $y, $m);
+    } elseif ($filter_range === 'last_month') {
+        $start_lm = date('Y-m-01 00:00:00', strtotime('first day of last month'));
+        $end_lm = date('Y-m-t 23:59:59', strtotime('last day of last month'));
+        $date_clauses_rpt[] = "r.created_at >= '$start_lm' AND r.created_at <= '$end_lm'";
+        $date_clauses_audit[] = "performed_at >= '$start_lm' AND performed_at <= '$end_lm'";
+        $date_suffix = 'last_month_' . date('Y_m', strtotime('last month'));
+    } elseif (!empty($filter_start_date) || !empty($filter_end_date)) {
+        $s_clean = '';
+        $e_clean = '';
+        if (!empty($filter_start_date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $filter_start_date)) {
+            $date_clauses_rpt[] = "r.created_at >= '" . $conn->real_escape_string($filter_start_date) . " 00:00:00'";
+            $date_clauses_audit[] = "performed_at >= '" . $conn->real_escape_string($filter_start_date) . " 00:00:00'";
+            $s_clean = $filter_start_date;
+        }
+        if (!empty($filter_end_date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $filter_end_date)) {
+            $date_clauses_rpt[] = "r.created_at <= '" . $conn->real_escape_string($filter_end_date) . " 23:59:59'";
+            $date_clauses_audit[] = "performed_at <= '" . $conn->real_escape_string($filter_end_date) . " 23:59:59'";
+            $e_clean = $filter_end_date;
+        }
+        $date_suffix = ($s_clean ?: 'from') . '_to_' . ($e_clean ?: 'present');
+    }
 
- if ($role === 'barangay') {
-  $off_brgy = trim((string)($ident['barangay_name'] ?? ''));
-  if ($off_brgy === '') {
-   $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
-   $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
-  }
-  $filter_brgy = trim((string)$off_brgy); // Strictly enforce assigned barangay export
- }
+    if ($export_type === 'audit_logs') {
+        if ($role !== 'admin') {
+            echo json_encode(['status'=>'error','message'=>'Admin role required to export audit trail.']); exit;
+        }
+        $audit_where_sql = !empty($date_clauses_audit) ? "WHERE " . implode(' AND ', $date_clauses_audit) : "";
+        $log_res = $conn->query("SELECT id, report_id, report_title, action, performed_by, performed_by_name, performed_at FROM report_audit_logs $audit_where_sql ORDER BY performed_at DESC");
+        $logs = [];
+        while ($row = $log_res->fetch_assoc()) {
+            $logs[] = $row;
+        }
 
- $where_clauses = ["(r.is_archived = 0 OR r.status = 'safe' OR r.is_archived = 1)"];
- if ($filter_status && in_array($filter_status, ['dangerous','caution','safe'])) {
- $where_clauses[] = "r.status = '".$conn->real_escape_string($filter_status)."'";
- }
- if ($filter_cat) {
- $where_clauses[] = "r.category = '".$conn->real_escape_string($filter_cat)."'";
- }
- if ($filter_brgy) {
- $bk = strtr(mb_strtolower(trim($filter_brgy),'UTF-8'), ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
-$bk = preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',$bk));
-$bexpr = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(%s,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
- $where_clauses[] = sprintf($bexpr,'r.barangay')." = '".$conn->real_escape_string($bk)."'";
- }
- if ($filter_city) {
- $where_clauses[] = "r.city = '".$conn->real_escape_string($filter_city)."'";
- }
+        $audit_headers = ['Audit Entry ID', 'Incident Code', 'Incident Title', 'Administrative Action', 'Actor User ID', 'Performed By Name', 'Timestamp (PHT)'];
+        $audit_rows = [];
+        foreach ($logs as $l) {
+            $audit_rows[] = [
+                sprintf('AUD-%06d', $l['id']),
+                $l['report_id'] ? sprintf('ST-%04d', $l['report_id']) : 'System General',
+                $l['report_title'] ?: 'N/A',
+                strtoupper($l['action']),
+                $l['performed_by'],
+                $l['performed_by_name'],
+                $l['performed_at'] ? date('M j, Y g:i A', strtotime($l['performed_at'])) : 'N/A'
+            ];
+        }
 
- $where_sql = implode(' AND ', $where_clauses);
- $rpt_sql = "
- SELECT r.id, r.title, r.description, r.category, r.status, r.location_name,
- r.barangay, r.city, r.province, r.latitude, r.longitude, r.radius_m,
- r.upvotes, r.downvotes, r.escalated_to_lgu,
- CONCAT(u.first_name, ' ', u.last_name) AS reporter_name,
- u.email AS reporter_email,
- r.assigned_to,
- CONCAT(resp.first_name, ' ', resp.last_name) AS responder_name,
- resp.email AS responder_email,
- resp.responder_type AS responder_agency,
- r.accepted_at, r.responded_at, r.resolved_at,
- TIMESTAMPDIFF(MINUTE, r.created_at, r.resolved_at) AS resolution_minutes,
- r.created_at, r.updated_at
- FROM reports r
- JOIN users u ON u.id = r.user_id
- LEFT JOIN users resp ON resp.id = r.assigned_to
- WHERE $where_sql
- ORDER BY r.created_at DESC";
+        if ($format === 'json') {
+            header('Content-Type: application/json');
+            header('Content-Disposition: attachment; filename="sentri_audit_trail_'.$date_suffix.'_'.date('Ymd_His').'.json"');
+            echo json_encode(['status'=>'success','count'=>count($logs),'generated_at'=>date('c'),'audit_logs'=>$logs], JSON_PRETTY_PRINT);
+            exit;
+        } elseif ($format === 'xlsx') {
+            $payload = [
+                'export_type' => 'audit_logs',
+                'title' => 'Official System Audit Trail Log',
+                'scope' => 'City of Imus & Participating Barangays',
+                'timeframe' => ucwords(str_replace('_', ' ', $date_suffix)),
+                'generated_by' => trim(($ident['first_name'] ?? 'System') . ' ' . ($ident['last_name'] ?? '')) . ' (' . strtoupper($role) . ')',
+                'generated_at' => date('F j, Y g:i A') . ' (Asia/Manila PHT)',
+                'summary' => ['total' => count($logs)],
+                'headers' => $audit_headers,
+                'rows' => $audit_rows
+            ];
+            $tmp_json = tempnam(sys_get_temp_dir(), 'sentri_aj_');
+            $tmp_xlsx = tempnam(sys_get_temp_dir(), 'sentri_ax_') . '.xlsx';
+            file_put_contents($tmp_json, json_encode($payload));
+            $script = dirname(__DIR__) . '/scripts/generate_export_xlsx.py';
+            exec('python3 ' . escapeshellarg($script) . ' ' . escapeshellarg($tmp_json) . ' ' . escapeshellarg($tmp_xlsx) . ' 2>&1', $x_out, $x_ret);
+            @unlink($tmp_json);
+            if ($x_ret === 0 && file_exists($tmp_xlsx) && filesize($tmp_xlsx) > 0) {
+                header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                header('Content-Disposition: attachment; filename="sentri_audit_trail_'.$date_suffix.'_'.date('Ymd_His').'.xlsx"');
+                header('Content-Length: ' . filesize($tmp_xlsx));
+                readfile($tmp_xlsx);
+                @unlink($tmp_xlsx);
+                exit;
+            }
+            @unlink($tmp_xlsx);
+        }
 
- $rpt_res = $conn->query($rpt_sql);
- $export_data = [];
- while ($row = $rpt_res->fetch_assoc()) {
- $export_data[] = $row;
- }
+        // Clean standard CSV: Row 1 = headers, no BOM mojibake, no broken metadata banner
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="sentri_audit_trail_'.$date_suffix.'_'.date('Ymd_His').'.csv"');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, $audit_headers);
+        foreach ($audit_rows as $arow) {
+            fputcsv($out, $arow);
+        }
+        fclose($out);
+        exit;
+    }
 
- if ($format === 'json') {
- header('Content-Type: application/json');
- header('Content-Disposition: attachment; filename="sentri_reports_export_'.date('Ymd_His').'.json"');
- echo json_encode([
- 'status' => 'success',
- 'count' => count($export_data),
- 'generated_at' => date('c'),
- 'reports' => $export_data
- ], JSON_PRETTY_PRINT);
- exit;
- } else {
- header('Content-Type: text/csv; charset=utf-8');
- header('Content-Disposition: attachment; filename="sentri_reports_export_'.date('Ymd_His').'.csv"');
- $out = fopen('php://output', 'w');
- fputcsv($out, [
- 'ID', 'Title', 'Category', 'Status', 'Location Details', 'Barangay', 'City', 'Province',
- 'Latitude', 'Longitude', 'Radius (m)', 'Community Upvotes', 'Downvotes', 'Escalated to LGU',
- 'Reporter Name', 'Reporter Email', 'Assigned Responder', 'Responder Agency',
- 'Accepted At', 'Responded At', 'Resolved At', 'Resolution Duration (Mins)', 'Created At'
- ]);
- foreach ($export_data as $row) {
- fputcsv($out, [
- $row['id'],
- $row['title'],
- $row['category'],
- $row['status'],
- $row['location_name'],
- $row['barangay'],
- $row['city'],
- $row['province'],
- $row['latitude'],
- $row['longitude'],
- $row['radius_m'],
- $row['upvotes'],
- $row['downvotes'],
- $row['escalated_to_lgu'] ? 'Yes' : 'No',
- $row['reporter_name'],
- $row['reporter_email'],
- $row['responder_name'] ?: 'Unassigned',
- $row['responder_agency'] ? strtoupper($row['responder_agency']) : 'N/A',
- $row['accepted_at'] ?: 'N/A',
- $row['responded_at'] ?: 'N/A',
- $row['resolved_at'] ?: 'N/A',
- $row['resolution_minutes'] !== null ? $row['resolution_minutes'] : 'N/A',
- $row['created_at']
- ]);
- }
- fclose($out);
- exit;
- }
+    // Reports export with full telemetry
+    $filter_status = $_GET['status'] ?? '';
+    $filter_cat = $_GET['category'] ?? '';
+    $filter_brgy = $_GET['barangay'] ?? '';
+    $filter_city = $_GET['city'] ?? '';
+
+    if ($role === 'barangay') {
+        $off_brgy = trim((string)($ident['barangay_name'] ?? ''));
+        if ($off_brgy === '') {
+            $ob = $conn->prepare("SELECT barangay_name FROM users WHERE id=? LIMIT 1");
+            $ob->bind_param("i", $user_id); $ob->execute(); $ob->bind_result($off_brgy); $ob->fetch(); $ob->close();
+        }
+        $filter_brgy = trim((string)$off_brgy); // Strictly enforce assigned barangay export
+    }
+
+    $where_clauses = ["(r.is_archived = 0 OR r.status = 'safe' OR r.is_archived = 1)"];
+    foreach ($date_clauses_rpt as $dc) {
+        $where_clauses[] = $dc;
+    }
+    if ($filter_status && in_array($filter_status, ['dangerous','caution','safe'])) {
+        $where_clauses[] = "r.status = '".$conn->real_escape_string($filter_status)."'";
+    }
+    if ($filter_cat) {
+        $where_clauses[] = "r.category = '".$conn->real_escape_string($filter_cat)."'";
+    }
+    if ($filter_brgy) {
+        $bk = strtr(mb_strtolower(trim($filter_brgy),'UTF-8'), ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
+        $bk = preg_replace('/[^a-z0-9]/','',str_replace(['barangay','brgy'],'',$bk));
+        $bexpr = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(%s,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
+        $where_clauses[] = sprintf($bexpr,'r.barangay')." = '".$conn->real_escape_string($bk)."'";
+    }
+    if ($filter_city) {
+        $where_clauses[] = "r.city = '".$conn->real_escape_string($filter_city)."'";
+    }
+
+    $where_sql = implode(' AND ', $where_clauses);
+    $rpt_sql = "
+        SELECT r.id, r.title, r.description, r.category, r.status, r.location_name,
+               r.barangay, r.city, r.province, r.latitude, r.longitude, r.radius_m,
+               r.upvotes, r.downvotes, r.escalated_to_lgu,
+               CONCAT(u.first_name, ' ', u.last_name) AS reporter_name,
+               u.email AS reporter_email,
+               r.assigned_to,
+               CONCAT(resp.first_name, ' ', resp.last_name) AS responder_name,
+               resp.email AS responder_email,
+               resp.responder_type AS responder_agency,
+               r.accepted_at, r.responded_at, r.resolved_at,
+               TIMESTAMPDIFF(MINUTE, r.created_at, r.resolved_at) AS resolution_minutes,
+               r.created_at, r.updated_at
+        FROM reports r
+        JOIN users u ON u.id = r.user_id
+        LEFT JOIN users resp ON resp.id = r.assigned_to
+        WHERE $where_sql
+        ORDER BY r.created_at DESC";
+
+    $rpt_res = $conn->query($rpt_sql);
+    $export_data = [];
+    while ($row = $rpt_res->fetch_assoc()) {
+        $export_data[] = $row;
+    }
+
+    $brgy_slug = '';
+    if (!empty($filter_brgy)) {
+        $brgy_clean = preg_replace('/[^a-zA-Z0-9_-]/', '_', trim($filter_brgy));
+        $brgy_slug = $brgy_clean . '_';
+    }
+
+    $rpt_headers = [
+        'Incident Code',
+        'Incident Title',
+        'Hazard Category',
+        'Severity Status',
+        'Location / Landmark',
+        'Barangay',
+        'City',
+        'Province',
+        'GPS Latitude',
+        'GPS Longitude',
+        'Hazard Impact Radius',
+        'Community Trust (+)',
+        'Community Doubts (-)',
+        'Escalated to LGU DRRMO',
+        'Reporting Citizen Name',
+        'Citizen Contact Email',
+        'Assigned First Responder',
+        'Responder Agency',
+        'Dispatch Accepted At',
+        'Responder Arrived At',
+        'Incident Resolved At',
+        'Total Resolution Duration (Mins)',
+        'Date Reported (PHT)'
+    ];
+
+    $rpt_rows = [];
+    $danger_cnt = 0;
+    $caution_cnt = 0;
+    $safe_cnt = 0;
+
+    foreach ($export_data as $row) {
+        if ($row['status'] === 'dangerous') $danger_cnt++;
+        elseif ($row['status'] === 'caution') $caution_cnt++;
+        elseif ($row['status'] === 'safe') $safe_cnt++;
+
+        $rep_code = sprintf('ST-%s-%04d', date('Y', strtotime($row['created_at'])), $row['id']);
+        $stat_label = match($row['status']) {
+            'dangerous' => 'CRITICAL / DANGEROUS',
+            'caution' => 'WARNING / CAUTION',
+            'safe' => 'SAFE / RESOLVED',
+            default => strtoupper((string)$row['status'])
+        };
+        $rad_text = $row['radius_m'] ? ($row['radius_m'] . ' meters') : '200 meters';
+        $esc_text = $row['escalated_to_lgu'] ? 'YES' : 'NO';
+        $accepted = $row['accepted_at'] ? date('M j, Y g:i A', strtotime($row['accepted_at'])) : 'Pending';
+        $responded = $row['responded_at'] ? date('M j, Y g:i A', strtotime($row['responded_at'])) : 'Pending';
+        $resolved = $row['resolved_at'] ? date('M j, Y g:i A', strtotime($row['resolved_at'])) : 'Unresolved';
+        $duration = ($row['resolution_minutes'] !== null) ? ($row['resolution_minutes'] . ' mins') : 'N/A';
+        $reported_at = date('M j, Y g:i A', strtotime($row['created_at']));
+
+        $rpt_rows[] = [
+            $rep_code,
+            $row['title'],
+            ucfirst($row['category']),
+            $stat_label,
+            $row['location_name'],
+            $row['barangay'],
+            $row['city'],
+            $row['province'],
+            $row['latitude'],
+            $row['longitude'],
+            $rad_text,
+            $row['upvotes'],
+            $row['downvotes'],
+            $esc_text,
+            $row['reporter_name'],
+            $row['reporter_email'],
+            $row['responder_name'] ?: 'Unassigned',
+            $row['responder_agency'] ? strtoupper($row['responder_agency']) : 'N/A',
+            $accepted,
+            $responded,
+            $resolved,
+            $duration,
+            $reported_at
+        ];
+    }
+
+    if ($format === 'json') {
+        header('Content-Type: application/json');
+        header('Content-Disposition: attachment; filename="sentri_reports_export_'.$brgy_slug.$date_suffix.'_'.date('Ymd_His').'.json"');
+        echo json_encode([
+            'status' => 'success',
+            'count' => count($export_data),
+            'generated_at' => date('c'),
+            'reports' => $export_data
+        ], JSON_PRETTY_PRINT);
+        exit;
+    } elseif ($format === 'xlsx') {
+        $payload = [
+            'export_type' => 'reports',
+            'title' => 'Official Incident Telemetry Report',
+            'scope' => !empty($filter_brgy) ? "Barangay {$filter_brgy}, Imus, Cavite" : 'City of Imus (All 95 Barangays)',
+            'timeframe' => ucwords(str_replace('_', ' ', $date_suffix)),
+            'generated_by' => trim(($ident['first_name'] ?? 'System') . ' ' . ($ident['last_name'] ?? '')) . ' (' . strtoupper($role) . ')',
+            'generated_at' => date('F j, Y g:i A') . ' (Asia/Manila PHT)',
+            'summary' => [
+                'total' => count($export_data),
+                'dangerous' => $danger_cnt,
+                'caution' => $caution_cnt,
+                'safe' => $safe_cnt
+            ],
+            'headers' => $rpt_headers,
+            'rows' => $rpt_rows
+        ];
+        $tmp_json = tempnam(sys_get_temp_dir(), 'sentri_rj_');
+        $tmp_xlsx = tempnam(sys_get_temp_dir(), 'sentri_rx_') . '.xlsx';
+        file_put_contents($tmp_json, json_encode($payload));
+        $script = dirname(__DIR__) . '/scripts/generate_export_xlsx.py';
+        exec('python3 ' . escapeshellarg($script) . ' ' . escapeshellarg($tmp_json) . ' ' . escapeshellarg($tmp_xlsx) . ' 2>&1', $x_out, $x_ret);
+        @unlink($tmp_json);
+        if ($x_ret === 0 && file_exists($tmp_xlsx) && filesize($tmp_xlsx) > 0) {
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="sentri_reports_export_'.$brgy_slug.$date_suffix.'_'.date('Ymd_His').'.xlsx"');
+            header('Content-Length: ' . filesize($tmp_xlsx));
+            readfile($tmp_xlsx);
+            @unlink($tmp_xlsx);
+            exit;
+        }
+        @unlink($tmp_xlsx);
+    }
+
+    // Clean, standard CSV output: Row 1 = Headers, no BOM mojibake, no broken metadata banner
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="sentri_reports_export_'.$brgy_slug.$date_suffix.'_'.date('Ymd_His').'.csv"');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, $rpt_headers);
+    foreach ($rpt_rows as $row) {
+        fputcsv($out, $row);
+    }
+    fclose($out);
+    exit;
 
  default:
  echo json_encode(['status'=>'error','message'=>'Unknown action.']);
