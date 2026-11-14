@@ -32,6 +32,7 @@ $PREFERRED_ACTION_ROLES = [
  'delete_report'        => ['community','user','admin'],
  'save_gps'             => ['community','user'],
  'update_profile'       => ['community','user'],
+ 'my_report_updates'    => ['community','user'],
  // Shared across portals -> any signed-in realm
  'get_reports'          => null,
  'vote'                 => null,
@@ -45,6 +46,7 @@ $PREFERRED_ACTION_ROLES = [
 $ACTION_REALM_ORDER = [
  'vote'                 => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
  'get_reports'          => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
+ 'my_report_updates'    => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
  'get_report_images'    => [SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['admin']],
  'get_timeline'         => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['admin']],
  'get_lifecycle'        => [SENTRI_REALM_COOKIES['gov'], SENTRI_REALM_COOKIES['community'], SENTRI_REALM_COOKIES['admin']],
@@ -372,6 +374,40 @@ switch ($action) {
  }
 
  echo json_encode(['status'=>'success','reports'=>$reports]);
+ break;
+
+ // ── Community notifications: only notifiable reports ──────────────────
+ // A report is notifiable when it is validated by the community (2+ upvotes)
+ // or has been marked safe/resolved. One row per report (never per vote), so
+ // repeated upvotes cannot multiply notifications.
+ case 'my_report_updates':
+ if (!in_array($role, ['community','user'], true)) {
+  echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit;
+ }
+ $nu_stmt = $conn->prepare("
+  SELECT id, title, status, category, location_name, barangay, city,
+  latitude, longitude, upvotes, downvotes, created_at, resolved_at, updated_at
+  FROM reports
+  WHERE user_id = ?
+  AND (status = 'safe' OR resolved_at IS NOT NULL OR (is_archived = 0 AND upvotes >= 2))
+  ORDER BY COALESCE(resolved_at, updated_at) DESC, updated_at DESC
+  LIMIT 30
+ ");
+ if (!$nu_stmt) { echo json_encode(['status'=>'error','message'=>'DB error: '.$conn->error]); exit; }
+ $nu_stmt->bind_param("i", $user_id);
+ $nu_stmt->execute();
+ $nu_res = $nu_stmt->get_result();
+ $nu_rows = [];
+ while ($row = $nu_res->fetch_assoc()) {
+  $row['id'] = (int)$row['id'];
+  $row['upvotes'] = (int)$row['upvotes'];
+  $row['downvotes'] = (int)$row['downvotes'];
+  $row['latitude'] = $row['latitude'] !== null ? (float)$row['latitude'] : null;
+  $row['longitude'] = $row['longitude'] !== null ? (float)$row['longitude'] : null;
+  $nu_rows[] = $row;
+ }
+ $nu_stmt->close();
+ echo json_encode(['status'=>'success','reports'=>$nu_rows]);
  break;
 
  // ── Lightweight alert poll for responder + LGU portals ────────────────

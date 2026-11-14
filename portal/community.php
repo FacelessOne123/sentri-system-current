@@ -158,8 +158,8 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
 $type_icons =['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
 $type_colors=['lgu'=>['#f0f7ff','#0a3d62'],'hospital'=>['#ecfdf5','#059669'],'traffic'=>['#fffbeb','#d97706'],'barangay'=>['#f0fdf4','#166534'],'police'=>['#eff6ff','#2563eb'],'fire'=>['#fef2f2','#dc2626'],'other'=>['#f5f3ff','#7c3aed']];
 $type_labels=['lgu'=>'LGU Offices','hospital'=>'Hospitals','police'=>'Police','fire'=>'Fire Services','traffic'=>'Traffic Management','barangay'=>'Barangay Offices','other'=>'Other Services'];
-$nav=['overview'=>['icon'=>'fa-house','label'=>'Community Feed'],'my_reports'=>['icon'=>'fa-file-lines','label'=>'My Reports'],'map'=>['icon'=>'fa-map-location-dot','label'=>'Incidents Map'],'contacts'=>['icon'=>'fa-address-book','label'=>'Emergency Contacts'],'profile'=>['icon'=>'fa-id-card','label'=>'My Profile']];
-$page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'Incidents Map','contacts'=>'Emergency Contacts','profile'=>'My Profile'];
+$nav=['overview'=>['icon'=>'fa-house','label'=>'Community Feed'],'my_reports'=>['icon'=>'fa-file-lines','label'=>'My Reports'],'map'=>['icon'=>'fa-map-location-dot','label'=>'Incidents Map'],'updates'=>['icon'=>'fa-bell','label'=>'Notifications'],'contacts'=>['icon'=>'fa-address-book','label'=>'Emergency Contacts'],'profile'=>['icon'=>'fa-id-card','label'=>'My Profile']];
+$page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'Incidents Map','updates'=>'Notifications','contacts'=>'Emergency Contacts','profile'=>'My Profile'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -194,6 +194,7 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .menu a.active{background:rgba(255,255,255,.2);color:#fff;font-weight:700;border-left:3px solid rgba(255,255,255,.65);}
 .menu a i{font-size:1rem;width:18px;text-align:center;flex-shrink:0;}
 .menu-badge{margin-left:auto;background:rgba(255,255,255,.2);color:#fff;font-size:.65rem;padding:2px 7px;border-radius:20px;font-weight:700;}
+.menu-badge.alert{background:#e53e3e;}
 .sidebar-stats{padding:8px 14px 4px;}
 .stat-label-s{font-size:.68rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;padding:0 4px;}
 .stat-box{background:rgba(255,255,255,.08);border-radius:10px;padding:10px 14px;margin-bottom:7px;border:1px solid rgba(255,255,255,.05);}
@@ -284,6 +285,8 @@ body.dark .filters button{background:#21262d;color:var(--muted);}
 .report-card.safe{border-left-color:var(--green);}.report-card.safe .card-header{background:linear-gradient(90deg,#f0fff4,transparent);}
 .report-card.dimmed{opacity:.55;filter:grayscale(.35);}
 .report-card.dimmed:hover{opacity:.85;}
+.report-card.just-updated{animation:cardEntrance .45s both,notifFlash 2.4s ease .15s;}
+@keyframes notifFlash{0%,100%{box-shadow:0 2px 10px rgba(0,0,0,.06);}20%,60%{box-shadow:0 0 0 3px rgba(56,161,105,.55),0 8px 24px rgba(56,161,105,.25);}}
 body.dark .report-card{background:var(--card);}
 body.dark .report-card.dangerous .card-header{background:linear-gradient(90deg,rgba(229,62,62,.08),transparent);}
 body.dark .report-card.caution .card-header{background:linear-gradient(90deg,rgba(221,107,32,.08),transparent);}
@@ -666,6 +669,7 @@ function actionToast(message,type){
  <a href="community.php?view=<?= $key ?>" <?= $view===$key?'class="active"':'' ?>>
  <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
  <?php if($key==='my_reports'&&$my_count>0): ?><span class="menu-badge"><?= $my_count ?></span><?php endif; ?>
+ <?php if($key==='updates'): ?><span class="menu-badge alert" id="sbUpdatesBadge" style="display:none;">0</span><?php endif; ?>
  </a>
  <?php endforeach; ?>
  </nav>
@@ -804,6 +808,13 @@ function actionToast(message,type){
  <span class="map-count" id="mapCount"></span>
  </div>
  </div>
+
+ <?php elseif($view==='updates'): ?>
+ <div class="my-reports-hdr">
+ <div class="mh-icon"><i class="fas fa-bell"></i></div>
+ <div><h2>Notifications</h2><p>Updates when your reports are validated or marked safe</p></div>
+ </div>
+ <div id="updatesList"><div class="loading"><i class="fas fa-spinner"></i> Loading your notifications…</div></div>
 
  <?php elseif($view==='contacts'): ?>
  <div class="contacts-hdr">
@@ -1107,6 +1118,19 @@ function actionToast(message,type){
  </div>
 </div>
 
+<!-- ═══ UPDATE DETAIL (resolved / archived reports) ═══ -->
+<div class="detail-overlay" id="updateDetailOverlay" onclick="if(event.target===this)closeUpdateDetail()">
+ <div class="detail-modal" style="max-width:480px;">
+ <button class="detail-close" onclick="closeUpdateDetail()"><i class="fas fa-xmark"></i></button>
+ <div class="detail-header">
+ <div class="detail-status-bar"><span class="detail-badge" id="u_badge"></span></div>
+ <div class="detail-title" id="u_title"></div>
+ <div class="detail-reporter" id="u_reporter"></div>
+ </div>
+ <div class="detail-body"><div class="detail-meta-grid" id="u_meta"></div></div>
+ </div>
+</div>
+
 <!-- ═══ MINI MAP ═══ -->
 <div class="mini-map-modal" id="miniMapModal" onclick="closeMiniMap(event)">
  <div class="mini-map-box">
@@ -1273,13 +1297,218 @@ function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now()
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
 function dismissToast(t){if(!t||!t.parentElement)return;t.classList.add('fade-out');setTimeout(()=>{if(t.parentElement)t.parentElement.removeChild(t);},400);}
 
+/* ── Notifications: only validated / safe reports ── */
+const NOTIF_STATUS_KEY=`sentri_report_status_${MY_USER_ID}`;
+let notifItems=[];
+let _notifBusy=false,_notifTimer=null,_notifDelay=15000;
+let _reportsBusy=false;
+const _flashIds=new Set();
+
+/* Stored state per report: {s: status, v: 1 when validated (2+ upvotes)}.
+   Legacy entries were a bare status string, so normalise them. */
+function readNotifStatusMap(){
+ try{
+  const raw=localStorage.getItem(NOTIF_STATUS_KEY);
+  if(!raw)return null;
+  const m=JSON.parse(raw)||null;
+  if(!m)return null;
+  const out={};
+  Object.keys(m).forEach(k=>{
+   const v=m[k];
+   out[k]=(v&&typeof v==='object')?{s:v.s||'',v:(v.v===1?1:0)}:{s:String(v||''),v:0};
+  });
+  return out;
+ }catch(e){return null;}
+}
+function markNotifsRead(){
+ const b=document.getElementById('sbUpdatesBadge');if(b)b.style.display='none';
+}
+function notifAgo(s){
+ const t=parseTs(s);
+ if(t===null)return '';
+ const sec=Math.max(0,Math.round((Date.now()-t)/1000));
+ if(sec<60)return 'just now';
+ if(sec<3600)return Math.round(sec/60)+'m ago';
+ if(sec<86400)return Math.round(sec/3600)+'h ago';
+ if(sec<604800)return Math.round(sec/86400)+'d ago';
+ return new Date(t).toLocaleDateString('en-PH',{month:'short',day:'numeric'});
+}
+const NOTIF_STATUS_LABEL={dangerous:'Dangerous',caution:'Caution',safe:'Safe'};
+function notifIsResolved(r){return r.status==='safe'||!!r.resolved_at;}
+function notifIsVerified(r){return Number(r.upvotes)>=2;}
+
+function updateCardHtml(r){
+ const isResolved=notifIsResolved(r);
+ const isVerified=notifIsVerified(r);
+ const label=isResolved?'Safe':'Verified';
+ const msg=isResolved
+  ? 'Your report is now marked Safe'
+  : 'Your report was validated by the community';
+ const icon=isResolved?'fa-circle-check':'fa-shield-halved';
+ const color=isResolved?'var(--green)':'#2563eb';
+ const loc=[r.location_name,r.barangay,r.city].filter(Boolean).join(', ');
+ const at=parseTs(isResolved?r.resolved_at:r.updated_at)||parseTs(r.updated_at)||parseTs(r.created_at);
+ return `<div class="report-card safe${isResolved?' dimmed':''}${_flashIds.has(r.id)?' just-updated':''}" style="cursor:pointer;animation-delay:0s;" onclick="openUpdateItem(${r.id})">
+  <div class="card-header">
+   <h3>${esc(r.title)}</h3>
+   <span class="badge safe">${label}</span>
+  </div>
+  <div class="card-body" style="margin-bottom:8px;">
+   <p style="display:flex;align-items:center;gap:7px;font-weight:600;color:${color};">
+    <i class="fas ${icon}"></i> ${msg}
+   </p>
+  </div>
+  <div class="card-meta" style="margin-bottom:0;">
+   ${loc?`<span><i class="fas fa-map-location-dot"></i>${esc(loc)}</span>`:''}
+   <span><i class="fas fa-clock"></i>${notifAgo(at)}</span>
+   <span><i class="fas fa-thumbs-up" style="color:var(--green);"></i>${r.upvotes} upvote${r.upvotes===1?'':'s'}</span>
+  </div>
+ </div>`;
+}
+
+function renderUpdatesList(){
+ const el=document.getElementById('updatesList');if(!el)return;
+ if(!notifItems.length){
+  el.innerHTML='<div class="empty"><i class="fas fa-bell-slash"></i><p>No notifications yet.<br>You will be notified here when a report is validated or marked safe.</p></div>';
+  return;
+ }
+ // Latest activity first
+ const items=notifItems.slice().sort((a,b)=>(parseTs(b.resolved_at)||parseTs(b.updated_at)||0)-(parseTs(a.resolved_at)||parseTs(a.updated_at)||0));
+ el.innerHTML=items.map(updateCardHtml).join('');
+}
+
+function updateUpdatesBadge(unread){
+ const b=document.getElementById('sbUpdatesBadge');
+ if(!b)return;
+ if(unread>0){b.textContent=unread>9?'9+':String(unread);b.style.display='';}
+ else b.style.display='none';
+}
+
+function openUpdateItem(id){
+ const r=notifItems.find(x=>x.id==id);
+ if(!r)return;
+ const live=allReports.find(x=>x.id==id);
+ if(live){openDetail(id);return;}
+ openUpdateDetail(r);
+}
+function openUpdateDetail(r){
+ const isResolved=notifIsResolved(r);
+ const badge=document.getElementById('u_badge');
+ if(badge){badge.textContent=isResolved?'Safe':(NOTIF_STATUS_LABEL[r.status]||ucFirst(r.status));badge.className='detail-badge '+r.status;}
+ document.getElementById('u_title').textContent=r.title;
+ document.getElementById('u_reporter').innerHTML=`Filed ${notifAgo(r.created_at)}${isResolved?' · Resolved '+notifAgo(r.resolved_at):''}`;
+ const loc=[r.location_name,r.barangay,r.city].filter(Boolean).join(', ');
+ document.getElementById('u_meta').innerHTML=[
+  {icon:'fa-circle-dot',color:r.status==='safe'?'var(--green)':r.status==='dangerous'?'var(--red)':'var(--orange)',label:'Status',value:NOTIF_STATUS_LABEL[r.status]||ucFirst(r.status)},
+  {icon:'fa-thumbs-up',color:'var(--green)',label:'Community Upvotes',value:r.upvotes},
+  {icon:'fa-map-location-dot',color:'#888',label:'Location',value:loc||'—'},
+  {icon:'fa-clock',color:'#888',label:'Last Activity',value:notifAgo(r.updated_at)||'—'}
+ ].map(m=>`<div class="detail-meta-item"><div class="detail-meta-label">${m.label}</div><div class="detail-meta-value"><i class="fas ${m.icon}" style="color:${m.color};"></i>${esc(m.value)}</div></div>`).join('');
+ document.getElementById('updateDetailOverlay').classList.add('open');
+ document.body.style.overflow='hidden';
+}
+function closeUpdateDetail(){
+ document.getElementById('updateDetailOverlay').classList.remove('open');
+ document.body.style.overflow='';
+}
+function notifToast(title,body,status){
+ const cls=status==='dangerous'?'dangerous':status==='caution'?'caution':'safe';
+ const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};
+ const box=document.getElementById('toastContainer');if(!box)return;
+ const key=title+'|'+body;
+ box.querySelectorAll('.toast[data-msg]').forEach(t=>{if(t.getAttribute('data-msg')===key){clearTimeout(t._timer);t.remove();}});
+ const t=document.createElement('div');
+ t.className=`toast ${cls}`;
+ t.setAttribute('data-msg',key);
+ t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[cls]}"></i></div><div><div class="toast-title">${esc(title)}</div><div class="toast-body">${esc(body)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;
+ box.appendChild(t);
+ t._timer=setTimeout(()=>dismissToast(t),6000);
+}
+async function loadMyNotifs(){
+ if(_notifBusy)return;
+ _notifBusy=true;
+ let ok=false,changed=false;
+ try{
+  const res=await fetch('../api/reports.php?action=my_report_updates');
+  const data=await res.json();
+  if(data.status==='success'){
+   ok=true;
+   const list=data.reports||[];
+   const prev=readNotifStatusMap();
+   notifItems=list;
+   let unread=0;
+   const changedIds=[];
+   const next={};
+   list.forEach(r=>{
+    const curV=notifIsVerified(r)?1:0;
+    next[r.id]={s:r.status,v:curV};
+    if(!prev)return;                 // first run is a quiet baseline
+    const p=prev[r.id];
+    if(!p){unread++;changed=true;changedIds.push(r.id);return;} // newly notifiable report
+    // Count each report at most once, and only on a real transition. Extra
+    // upvotes past the 2-vote threshold do not re-notify, so repeated voting
+    // cannot multiply notifications.
+    if(notifIsResolved(r)){ if(p.s!=='safe'){unread++;changed=true;changedIds.push(r.id);} return; }
+    if(p.v!==1&&curV===1){unread++;changed=true;changedIds.push(r.id);}
+   });
+   renderUpdatesList();
+   updateUpdatesBadge(unread);
+   if(!prev||CURRENT_VIEW==='updates')markNotifsRead();
+   if(prev){
+    list.forEach(r=>{
+     const p=prev[r.id];
+     if(!p)return;
+     if(notifIsResolved(r)&&p.s!=='safe'&&r.resolved_at){
+      notifToast('Your report is now Safe', r.title, 'safe');
+     }else if(!notifIsResolved(r)&&p.v!==1&&notifIsVerified(r)){
+      notifToast('Your report was validated', r.title, 'safe');
+     }
+    });
+   }
+   try{localStorage.setItem(NOTIF_STATUS_KEY,JSON.stringify(next));}catch(e){}
+   if(changed){
+    // Flash the new rows, then refresh the feed/map so a resolved report
+    // disappears from the live data without a page reload.
+    changedIds.forEach(id=>_flashIds.add(id));
+    renderUpdatesList(); // repaint so the new rows get the highlight
+    setTimeout(()=>_flashIds.clear(),6000);
+    if(['overview','my_reports','map'].includes(CURRENT_VIEW))fetchReports();
+   }
+  }
+ }catch(e){ /* network/API error: back off below */ }
+ finally{
+  _notifBusy=false;
+  _notifDelay=ok?15000:60000;
+  scheduleNotifPoll();
+ }
+}
+
+/* Self-scheduling live poll: 15s while visible, paused when the tab is
+   hidden. Resumes immediately (and refetches) on visibility/focus. */
+function scheduleNotifPoll(){
+ clearTimeout(_notifTimer);
+ _notifTimer=null;
+ if(document.hidden)return;
+ _notifTimer=setTimeout(loadMyNotifs,_notifDelay);
+}
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden){clearTimeout(_notifTimer);_notifTimer=null;return;}
+ loadMyNotifs();
+});
+window.addEventListener('focus',()=>{
+ if(!_notifBusy&&!_notifTimer)loadMyNotifs();
+});
+
 /* Fetch reports */
 async function fetchReports(){
+ if(_reportsBusy)return;
+ _reportsBusy=true;
  const isMine=CURRENT_VIEW==='my_reports';
  try{const res=await fetch('../api/reports.php?action=get_reports&include_safe=1');const data=await res.json();
  if(data.status==='success'){allReports=data.reports;renderFeed(isMine);if(CURRENT_VIEW==='map')renderMainMap();checkProximity();}
  else{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-triangle-exclamation"></i><p>Failed to load reports.</p></div>';}
  }catch{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-wifi"></i><p>Network error.</p></div>';}
+ finally{_reportsBusy=false;}
 }
 
 function getFiltered(mineOnly){
@@ -1374,7 +1603,7 @@ async function crowdVerify(id){
  }catch{actionToast('Network error — could not verify this incident.','error');}
 }
 async function vote(id,vt){const fd=new FormData();fd.append('action','vote');fd.append('report_id',id);fd.append('vote',vt);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){const r=allReports.find(x=>x.id==id);if(r){r.upvotes=d.upvotes;r.downvotes=d.downvotes;r.user_vote=d.user_vote;}renderFeed(CURRENT_VIEW==='my_reports');}}catch{}}
-async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');actionToast('Report deleted.','success');}else actionToast(d.message||'Could not delete this report.','error');}catch{actionToast('Network error — could not delete this report.','error');}}
+async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');loadMyNotifs();actionToast('Report deleted.','success');}else actionToast(d.message||'Could not delete this report.','error');}catch{actionToast('Network error — could not delete this report.','error');}}
 
 /* View toggle (overview only) */
 function switchView(v){curView=v;const feedEl=document.getElementById('feed'),mapEl=document.getElementById('inlineMapWrap');if(!feedEl||!mapEl)return;if(v==='map'){feedEl.style.display='none';mapEl.style.display='block';document.getElementById('btnFeed').classList.remove('active');document.getElementById('btnMap').classList.add('active');setTimeout(()=>{initInlineMap();if(inlineMap)inlineMap.invalidateSize();},200);}else{feedEl.style.display='';mapEl.style.display='none';document.getElementById('btnMap').classList.remove('active');document.getElementById('btnFeed').classList.add('active');}}
@@ -2094,7 +2323,7 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
   if(data.status==='success'){
    showMsg(msgEl,'success','Report posted!');
    if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);const NOTIFY_FAIL='Emergency contacts could not be auto-notified — please call the hotline directly.';fetch('../api/contacts.php',{method:'POST',body:nfd}).then(async rc=>{try{const rd=await rc.json();if(rd.status!=='success')actionToast(NOTIFY_FAIL,'info');}catch{actionToast(NOTIFY_FAIL,'info');}}).catch(()=>actionToast(NOTIFY_FAIL,'info'));}
-   setTimeout(()=>{closeModal();fetchReports();},1000);
+   setTimeout(()=>{closeModal();fetchReports();loadMyNotifs();},1000);
   }else showMsg(msgEl,'error',data.message||'Failed to submit.');
  }catch{showMsg(msgEl,'error','Network error.');}
  btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Submit Report';
@@ -2199,7 +2428,7 @@ function closeMiniMapDirect(){document.getElementById('miniMapModal').classList.
 /* Lightbox */
 function openLightbox(url){document.getElementById('lightboxImg').src=url;document.getElementById('lightbox').classList.add('open');}
 function closeLightbox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightboxImg').src='';}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLightbox();closeDetail();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLightbox();closeDetail();closeUpdateDetail();}});
 
 /* Profile: avatar swatches */
 let selColor=INIT_COLOR;
@@ -2546,7 +2775,8 @@ updateChip();
 startGPS();
 initAddressSuggestions();
 if(document.getElementById('colorPalette'))buildPalette();
-if(['overview','my_reports','map'].includes(CURRENT_VIEW)){fetchReports();setInterval(fetchReports,60000);}
+if(['overview','my_reports','map','updates'].includes(CURRENT_VIEW)){fetchReports();setInterval(fetchReports,60000);}
+loadMyNotifs();
 if(CURRENT_VIEW==='map')setTimeout(()=>renderMainMap(),300);
 if(document.fonts&&document.fonts.ready){document.fonts.ready.then(()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});}
 window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});
