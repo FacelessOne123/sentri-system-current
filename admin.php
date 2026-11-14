@@ -580,7 +580,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  </div>
  <div class="filter-bar">
- <input type="text" id="userSearch" placeholder="Search name or email...">
+ <input type="text" id="userSearch" placeholder="Search name, ID, or email...">
  <select id="userRoleFilter">
  <option value="">All Roles</option>
  <option value="community">Community</option>
@@ -590,11 +590,19 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <option value="first_responder">First Responder</option>
  <option value="admin">Admin</option>
  </select>
+ <select id="userStatusFilter">
+ <option value="">All Statuses</option>
+ <option value="active">Active</option>
+ <option value="pending">Pending Approval</option>
+ <option value="unverified">Unverified Email</option>
+ <option value="suspended">Suspended</option>
+ <option value="banned">Banned</option>
+ </select>
  </div>
  <div class="table-wrap">
  <div class="loading" id="usersLoading"><i class="fas fa-spinner"></i> Loading users...</div>
  <table id="usersTable" style="display:none;">
- <thead><tr><th>#</th><th>User</th><th>Email</th><th>Role</th><th>Joined</th><th>Reports</th><th>Actions</th></tr></thead>
+ <thead><tr><th>#</th><th>User</th><th>Identifier</th><th>Role</th><th>Status</th><th>Joined</th><th>Reports</th><th style="min-width:220px;">Actions</th></tr></thead>
  <tbody id="usersBody"></tbody>
  </table>
  </div>
@@ -918,6 +926,101 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  </div>
 
+<!-- ADMIN CHANGE PASSWORD MODAL -->
+ <div class="modal-overlay" id="adminPasswordModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+ <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+ <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+ <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-key" style="color:#2563eb;margin-right:8px;"></i>Change Password</h3>
+ <button type="button" onclick="closeAdminPasswordModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
+ </div>
+ <p style="font-size:0.78rem;color:var(--muted);margin-bottom:14px;">Updating credentials for <strong id="pwModalUserName" style="color:var(--text);"></strong> (<span id="pwModalUserIdent"></span>).</p>
+ <div id="pwModalMsg" class="msg" style="padding:9px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:12px;display:none;text-align:center;"></div>
+ <form id="adminPasswordForm" onsubmit="submitAdminPassword(event)">
+ <input type="hidden" id="pwModalUserId">
+ <div style="margin-bottom:14px;">
+  <label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">New Password *</label>
+  <div style="position:relative;">
+   <input type="password" id="pwModalNewPass" placeholder="Min 6 characters" required style="width:100%;padding:9px 38px 9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+   <button type="button" onclick="togglePassVisibility('pwModalNewPass', this)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:#9ca3af;cursor:pointer;"><i class="fas fa-eye"></i></button>
+  </div>
+ </div>
+ <div style="margin-bottom:18px;">
+  <label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#374151;cursor:pointer;">
+   <input type="checkbox" id="pwModalForceReset" style="width:16px;height:16px;accent-color:#2563eb;">
+   <span>Force password change on next sign-in</span>
+  </label>
+ </div>
+ <div style="display:flex;gap:10px;justify-content:flex-end;">
+  <button type="button" onclick="closeAdminPasswordModal()" style="padding:9px 18px;border:1.5px solid var(--border);background:var(--card);border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
+  <button type="submit" id="pwModalSubmitBtn" style="padding:9px 18px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;"><i class="fas fa-key"></i> Update Password</button>
+ </div>
+ </form>
+ </div>
+ </div>
+
+<!-- ADMIN TEMPORARY SUSPEND MODAL -->
+ <div class="modal-overlay" id="adminSuspendModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+ <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+ <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+ <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-clock" style="color:#b45309;margin-right:8px;"></i>Suspend User</h3>
+ <button type="button" onclick="closeAdminSuspendModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
+ </div>
+ <p style="font-size:0.78rem;color:var(--muted);margin-bottom:14px;">Temporarily suspend portal access for <strong id="suspendModalUserName" style="color:var(--text);"></strong>.</p>
+ <div id="suspendModalMsg" class="msg" style="padding:9px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:12px;display:none;text-align:center;"></div>
+ <form id="adminSuspendForm" onsubmit="submitAdminSuspend(event)">
+ <input type="hidden" id="suspendModalUserId">
+ <div style="margin-bottom:12px;">
+  <label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Suspension Duration *</label>
+  <select id="suspendDuration" onchange="toggleSuspendCustomTime()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+   <option value="1">1 Hour (Testing)</option>
+   <option value="24" selected>24 Hours (1 Day)</option>
+   <option value="72">3 Days</option>
+   <option value="168">7 Days (1 Week)</option>
+   <option value="720">30 Days (1 Month)</option>
+   <option value="custom">Custom Date & Time</option>
+  </select>
+ </div>
+ <div id="suspendCustomWrap" style="display:none;margin-bottom:12px;">
+  <label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Suspend Until *</label>
+  <input type="datetime-local" id="suspendCustomUntil" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ </div>
+ <div style="margin-bottom:18px;">
+  <label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Reason (optional)</label>
+  <input type="text" id="suspendReason" placeholder="e.g. Inappropriate posts, investigation" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ </div>
+ <div style="display:flex;gap:10px;justify-content:flex-end;">
+  <button type="button" onclick="closeAdminSuspendModal()" style="padding:9px 18px;border:1.5px solid var(--border);background:var(--card);border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
+  <button type="submit" id="suspendModalSubmitBtn" style="padding:9px 18px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;"><i class="fas fa-clock"></i> Apply Suspension</button>
+ </div>
+ </form>
+ </div>
+ </div>
+
+<!-- ADMIN BAN ACCOUNT MODAL -->
+ <div class="modal-overlay" id="adminBanModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+ <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+ <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+ <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-ban" style="color:#dc2626;margin-right:8px;"></i>Ban User Account</h3>
+ <button type="button" onclick="closeAdminBanModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
+ </div>
+ <div style="background:#fef2f2;border:1px solid #fee2e2;border-radius:8px;padding:10px 12px;margin-bottom:14px;color:#991b1b;font-size:0.78rem;line-height:1.5;">
+  <i class="fas fa-triangle-exclamation" style="margin-right:5px;"></i> Banning <strong id="banModalUserName"></strong> will immediately terminate access across all portals. The user will be unable to log in until an administrator lifts the ban.
+ </div>
+ <div id="banModalMsg" class="msg" style="padding:9px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:12px;display:none;text-align:center;"></div>
+ <form id="adminBanForm" onsubmit="submitAdminBan(event)">
+ <input type="hidden" id="banModalUserId">
+ <div style="margin-bottom:18px;">
+  <label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Ban Reason (optional)</label>
+  <input type="text" id="banReason" placeholder="e.g. Terms of service violation, repeated abuse" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ </div>
+ <div style="display:flex;gap:10px;justify-content:flex-end;">
+  <button type="button" onclick="closeAdminBanModal()" style="padding:9px 18px;border:1.5px solid var(--border);background:var(--card);border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
+  <button type="submit" id="banModalSubmitBtn" style="padding:9px 18px;background:#dc2626;color:#fff;border:none;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;"><i class="fas fa-ban"></i> Ban Account</button>
+ </div>
+ </form>
+ </div>
+ </div>
+
 <!-- CREATE OFFICIAL ACCOUNT MODAL -->
  <div class="modal-overlay" id="createOfficialModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
  <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
@@ -1184,33 +1287,93 @@ async function loadUsers(){
 function renderUsers(){
  const search=document.getElementById('userSearch').value.toLowerCase();
  const role=document.getElementById('userRoleFilter').value;
+ const statusFilter=document.getElementById('userStatusFilter')?.value || '';
  let list=allUsers.filter(u=>{
- if(role && u.role!==role) return false;
- if(search){const hay=(u.first_name+' '+u.last_name+' '+(u.official_id||'')+' '+u.email).toLowerCase(); if(!hay.includes(search)) return false;}
- return true;
+  if(role && u.role!==role) return false;
+  if(statusFilter){
+   const isBanned = u.is_banned === 1;
+   const isSuspended = u.is_suspended === 1;
+   const isPending = u.is_approved === 0 && u.role !== 'community' && u.role !== 'admin';
+   const isUnverified = u.email_verified === 0 && (u.role === 'community' || u.role === 'user');
+   if(statusFilter === 'banned' && !isBanned) return false;
+   if(statusFilter === 'suspended' && !isSuspended) return false;
+   if(statusFilter === 'pending' && !isPending) return false;
+   if(statusFilter === 'unverified' && !isUnverified) return false;
+   if(statusFilter === 'active' && (isBanned || isSuspended || isPending || isUnverified)) return false;
+  }
+  if(search){
+   const hay=(u.first_name+' '+u.last_name+' '+(u.official_id||'')+' '+u.email+' '+(u.barangay_name||'')+' '+(u.org_name||'')).toLowerCase();
+   if(!hay.includes(search)) return false;
+  }
+  return true;
  });
  const body=document.getElementById('usersBody');
- if(list.length===0){body.innerHTML='<tr><td colspan="7" class="empty"><i class="fas fa-users-slash"></i><p>No users match your filters.</p></td></tr>';return;}
+ if(list.length===0){body.innerHTML='<tr><td colspan="8" class="empty"><i class="fas fa-users-slash"></i><p>No users match your filters.</p></td></tr>';return;}
  body.innerHTML=list.map(u=>{
- const date=formatAdminTimestamp(u.created_at);
- const initials=(u.first_name[0]||'?').toUpperCase();
- const isPending = u.is_approved===0 && u.role!=='community' && u.role!=='admin';
- const roleLabel = u.role.replace('_',' ');
- const orgInfo = u.org_name ? `<div style="font-size:0.72rem;color:#888;">${esc(u.org_name)}</div>` : '';
- return `<tr id="urow_${u.id}" ${isPending?'style="background:#fffbeb;"':''}>
+  const date=formatAdminTimestamp(u.created_at);
+  const initials=(u.first_name[0]||'?').toUpperCase();
+  const isBanned = u.is_banned === 1;
+  const isSuspended = u.is_suspended === 1;
+  const isPending = u.is_approved===0 && u.role!=='community' && u.role!=='admin';
+  const isUnverified = u.email_verified === 0 && (u.role==='community'||u.role==='user');
+  const roleLabel = u.role.replace('_',' ');
+  const orgInfo = u.org_name ? `<div style="font-size:0.72rem;color:#888;">${esc(u.org_name)}</div>` : '';
+  const brgyInfo = u.barangay_name ? `<div style="font-size:0.7rem;color:#6b7280;"><i class="fas fa-location-dot" style="font-size:0.65rem;"></i> Brgy. ${esc(u.barangay_name)}</div>` : '';
+
+  let statusBadge = '';
+  if (isBanned) {
+    statusBadge = `<span class="badge" style="background:#fee2e2;color:#991b1b;border:1px solid #f87171;" title="${esc(u.ban_reason||'Banned by admin')}"><i class="fas fa-ban"></i> Banned</span>`;
+  } else if (isSuspended) {
+    statusBadge = `<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;" title="Suspended until ${esc(u.suspended_until)}${u.suspension_reason ? ' ('+esc(u.suspension_reason)+')' : ''}"><i class="fas fa-clock"></i> Suspended</span>`;
+  } else if (isPending) {
+    statusBadge = `<span class="badge" style="background:#fffbeb;color:#92400e;border:1px solid #fde68a;"><i class="fas fa-hourglass-half"></i> Pending</span>`;
+  } else if (isUnverified) {
+    statusBadge = `<span class="badge" style="background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db;" title="Email unverified"><i class="fas fa-envelope-open"></i> Unverified</span>`;
+  } else {
+    statusBadge = `<span class="badge" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;"><i class="fas fa-circle-check"></i> Active</span>`;
+  }
+  if (u.force_password_reset === 1) {
+    statusBadge += `<div style="margin-top:3px;"><span class="badge" style="background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;font-size:0.67rem;" title="Password reset required at next login"><i class="fas fa-rotate"></i> Reset Req</span></div>`;
+  }
+
+  let rowBg = '';
+  if (isBanned) rowBg = 'style="background:#fef2f2;"';
+  else if (isSuspended) rowBg = 'style="background:#fffbeb;"';
+  else if (isPending) rowBg = 'style="background:#fffbeb;"';
+
+  return `<tr id="urow_${u.id}" ${rowBg}>
  <td style="color:#aaa;">${u.id}</td>
  <td><div style="display:flex;align-items:center;gap:10px;">
  <div class="user-avatar-sm ${u.role==='admin'?'admin-av':''}">${initials}</div>
- <div><div style="font-weight:600;">${esc(u.first_name)} ${esc(u.last_name)}</div>${orgInfo}${isPending?'<span style="font-size:0.68rem;background:#fef9ec;color:#92400e;border:1px solid #fde68a;padding:1px 7px;border-radius:10px;font-weight:700;margin-top:3px;display:inline-block;">PENDING APPROVAL</span>':''}</div>
+ <div><div style="font-weight:600;">${esc(u.first_name)} ${esc(u.last_name)}</div>${orgInfo}${brgyInfo}</div>
  </div></td>
  <td style="color:var(--muted);"><div style="font-family:ui-monospace,Menlo,monospace;font-weight:600;color:#1a1a2e;letter-spacing:.08em;">${esc(u.official_id||'—')}</div><div style="font-size:0.72rem;color:#aaa;">${(/^official\.sentri$/.test(u.email.split('@').pop())?'ID-based sign-in':esc(u.email))}</div></td>
  <td><span class="badge ${u.role}">${roleLabel}</span></td>
+ <td>${statusBadge}</td>
  <td style="color:#888;font-size:0.78rem;white-space:nowrap;">${date}</td>
  <td style="text-align:center;">${u.report_count}</td>
- <td><div style="display:flex;gap:6px;flex-wrap:wrap;">
- ${isPending ? `<button class="act-btn" style="background:#16a34a;color:#fff;border:none;padding:5px 10px;font-size:0.75rem;" onclick="approveUser(${u.id})"><i class="fas fa-check"></i> Approve</button><button class="act-btn del" style="font-size:0.75rem;" onclick="rejectUser(${u.id},'${esc(u.first_name)}')"><i class="fas fa-xmark"></i> Reject</button>` : ''}
- ${u.role!=='admin'&&!isPending ? `<button class="act-btn del" onclick="deleteUser(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}')"><i class="fas fa-trash-can"></i> Remove</button>` : ''}
- ${u.role==='admin' ? '<span style="color:#aaa;font-size:0.78rem;">Protected</span>' : ''}
+ <td><div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+ ${u.role==='admin' ? '<span style="color:#aaa;font-size:0.78rem;">Protected Admin</span>' : (
+   isPending ? `
+     <button class="act-btn" style="background:#16a34a;color:#fff;border:none;padding:5px 9px;font-size:0.75rem;" onclick="approveUser(${u.id})"><i class="fas fa-check"></i> Approve</button>
+     <button class="act-btn del" style="font-size:0.75rem;padding:5px 9px;" onclick="rejectUser(${u.id},'${esc(u.first_name)}')"><i class="fas fa-xmark"></i> Reject</button>
+   ` : `
+     ${isUnverified ? `<button class="act-btn" style="background:#f0fdf4;color:#16a34a;border:1px solid #86efac;padding:5px 9px;font-size:0.75rem;" onclick="verifyUser(${u.id},'${esc(u.first_name)}')" title="Manually verify email and activate"><i class="fas fa-check-double"></i> Verify</button>` : ''}
+     <button class="act-btn" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:5px 9px;font-size:0.75rem;" onclick="openChangePasswordModal(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}','${esc(u.email||u.official_id)}')" title="Change password"><i class="fas fa-key"></i> Password</button>
+     ${isSuspended ? `
+       <button class="act-btn" style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;padding:5px 9px;font-size:0.75rem;" onclick="unsuspendUser(${u.id},'${esc(u.first_name)}')" title="Lift suspension"><i class="fas fa-play"></i> Unsuspend</button>
+     ` : `
+       <button class="act-btn" style="background:#fffbeb;color:#b45309;border:1px solid #fde68a;padding:5px 9px;font-size:0.75rem;" onclick="openSuspendModal(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}')" title="Temporarily suspend"><i class="fas fa-clock"></i> Suspend</button>
+     `}
+     ${isBanned ? `
+       <button class="act-btn" style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;padding:5px 9px;font-size:0.75rem;" onclick="unbanUser(${u.id},'${esc(u.first_name)}')" title="Lift ban"><i class="fas fa-user-check"></i> Unban</button>
+     ` : `
+       <button class="act-btn del" style="font-size:0.75rem;padding:5px 9px;" onclick="openBanModal(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}')" title="Ban user"><i class="fas fa-ban"></i> Ban</button>
+     `}
+     <button class="act-btn" style="background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;padding:5px 8px;font-size:0.75rem;" onclick="toggleForceReset(${u.id},'${esc(u.first_name)}')" title="${u.force_password_reset ? 'Cancel password reset requirement' : 'Force password reset on next sign-in'}"><i class="fas fa-rotate"></i> ${u.force_password_reset ? 'Unforce' : 'Force Reset'}</button>
+     <button class="act-btn del" style="font-size:0.75rem;padding:5px 8px;" onclick="deleteUser(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}')" title="Permanently delete user"><i class="fas fa-trash-can"></i></button>
+   `
+ )}
  </div></td>
  </tr>`;
  }).join('');
@@ -1627,6 +1790,215 @@ async function deleteUser(uid, name){
 }
 document.getElementById('userSearch').addEventListener('input',renderUsers);
 document.getElementById('userRoleFilter').addEventListener('change',renderUsers);
+document.getElementById('userStatusFilter')?.addEventListener('change',renderUsers);
+
+// ── USER MODERATION CONTROLS ─────────────────────────────────
+function togglePassVisibility(id, btn){
+ const el = document.getElementById(id);
+ if (!el) return;
+ if (el.type === 'password') {
+  el.type = 'text';
+  btn.innerHTML = '<i class="fas fa-eye-slash"></i>';
+ } else {
+  el.type = 'password';
+  btn.innerHTML = '<i class="fas fa-eye"></i>';
+ }
+}
+
+function openChangePasswordModal(uid, name, ident){
+ document.getElementById('pwModalUserId').value = uid;
+ document.getElementById('pwModalUserName').textContent = name;
+ document.getElementById('pwModalUserIdent').textContent = ident;
+ document.getElementById('pwModalNewPass').value = '';
+ document.getElementById('pwModalForceReset').checked = false;
+ document.getElementById('pwModalMsg').style.display = 'none';
+ document.getElementById('adminPasswordModalOverlay').style.display = 'flex';
+}
+function closeAdminPasswordModal(){
+ document.getElementById('adminPasswordModalOverlay').style.display = 'none';
+}
+async function submitAdminPassword(e){
+ e.preventDefault();
+ const uid = document.getElementById('pwModalUserId').value;
+ const newPass = document.getElementById('pwModalNewPass').value.trim();
+ const forceReset = document.getElementById('pwModalForceReset').checked ? 1 : 0;
+ const msg = document.getElementById('pwModalMsg');
+ const btn = document.getElementById('pwModalSubmitBtn');
+ if(newPass.length < 6){
+  msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = 'Password must be at least 6 characters.';
+  return;
+ }
+ btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+ try {
+  const fd = new FormData();
+  fd.append('action', 'admin_change_password');
+  fd.append('user_id', uid);
+  fd.append('new_password', newPass);
+  fd.append('force_reset', forceReset);
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   closeAdminPasswordModal();
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.force_password_reset = forceReset; renderUsers(); }
+  } else {
+   msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = data.message || 'Failed to update password.';
+  }
+ } catch {
+  msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = 'Network error.';
+ }
+ btn.disabled = false; btn.innerHTML = '<i class="fas fa-key"></i> Update Password';
+}
+
+async function verifyUser(uid, name){
+ if(!confirm(`Manually verify email and activate account for "${name}"?\n\nThis will allow them to sign in immediately without needing the debug menu.`)) return;
+ const fd = new FormData(); fd.append('action', 'admin_verify_user'); fd.append('user_id', uid);
+ try {
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.email_verified = 1; u.is_approved = 1; renderUsers(); }
+  } else showToast(data.message || 'Failed to verify.', 'error');
+ } catch { showToast('Connection error.', 'error'); }
+}
+
+function toggleSuspendCustomTime(){
+ const val = document.getElementById('suspendDuration').value;
+ document.getElementById('suspendCustomWrap').style.display = (val === 'custom') ? 'block' : 'none';
+}
+function openSuspendModal(uid, name){
+ document.getElementById('suspendModalUserId').value = uid;
+ document.getElementById('suspendModalUserName').textContent = name;
+ document.getElementById('suspendDuration').value = '24';
+ document.getElementById('suspendCustomUntil').value = '';
+ document.getElementById('suspendReason').value = '';
+ toggleSuspendCustomTime();
+ document.getElementById('suspendModalMsg').style.display = 'none';
+ document.getElementById('adminSuspendModalOverlay').style.display = 'flex';
+}
+function closeAdminSuspendModal(){
+ document.getElementById('adminSuspendModalOverlay').style.display = 'none';
+}
+async function submitAdminSuspend(e){
+ e.preventDefault();
+ const uid = document.getElementById('suspendModalUserId').value;
+ const dur = document.getElementById('suspendDuration').value;
+ const customUntil = document.getElementById('suspendCustomUntil').value;
+ const reason = document.getElementById('suspendReason').value.trim();
+ const msg = document.getElementById('suspendModalMsg');
+ const btn = document.getElementById('suspendModalSubmitBtn');
+
+ if(dur === 'custom' && !customUntil){
+  msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = 'Please choose a date and time.';
+  return;
+ }
+
+ btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Suspending...';
+ try {
+  const fd = new FormData();
+  fd.append('action', 'admin_suspend_user');
+  fd.append('user_id', uid);
+  fd.append('duration_hours', dur !== 'custom' ? dur : '');
+  fd.append('until', dur === 'custom' ? customUntil : '');
+  fd.append('reason', reason);
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   closeAdminSuspendModal();
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.is_suspended = 1; u.suspended_until = data.until; u.suspension_reason = reason; renderUsers(); }
+  } else {
+   msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = data.message || 'Failed to suspend.';
+  }
+ } catch {
+  msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = 'Network error.';
+ }
+ btn.disabled = false; btn.innerHTML = '<i class="fas fa-clock"></i> Apply Suspension';
+}
+
+async function unsuspendUser(uid, name){
+ if(!confirm(`Lift temporary suspension for "${name}"?\n\nThey will regain normal portal access immediately.`)) return;
+ const fd = new FormData(); fd.append('action', 'admin_unsuspend_user'); fd.append('user_id', uid);
+ try {
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.is_suspended = 0; u.suspended_until = null; u.suspension_reason = null; renderUsers(); }
+  } else showToast(data.message || 'Failed to lift suspension.', 'error');
+ } catch { showToast('Connection error.', 'error'); }
+}
+
+function openBanModal(uid, name){
+ document.getElementById('banModalUserId').value = uid;
+ document.getElementById('banModalUserName').textContent = name;
+ document.getElementById('banReason').value = '';
+ document.getElementById('banModalMsg').style.display = 'none';
+ document.getElementById('adminBanModalOverlay').style.display = 'flex';
+}
+function closeAdminBanModal(){
+ document.getElementById('adminBanModalOverlay').style.display = 'none';
+}
+async function submitAdminBan(e){
+ e.preventDefault();
+ const uid = document.getElementById('banModalUserId').value;
+ const reason = document.getElementById('banReason').value.trim();
+ const msg = document.getElementById('banModalMsg');
+ const btn = document.getElementById('banModalSubmitBtn');
+
+ btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Banning...';
+ try {
+  const fd = new FormData();
+  fd.append('action', 'admin_ban_user');
+  fd.append('user_id', uid);
+  fd.append('reason', reason);
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   closeAdminBanModal();
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.is_banned = 1; u.ban_reason = reason; renderUsers(); }
+  } else {
+   msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = data.message || 'Failed to ban user.';
+  }
+ } catch {
+  msg.style.display = 'block'; msg.className = 'msg error'; msg.style.background = '#fef2f2'; msg.style.color = '#dc2626'; msg.textContent = 'Network error.';
+ }
+ btn.disabled = false; btn.innerHTML = '<i class="fas fa-ban"></i> Ban Account';
+}
+
+async function unbanUser(uid, name){
+ if(!confirm(`Lift ban for "${name}"?\n\nThey will be able to sign into their account again.`)) return;
+ const fd = new FormData(); fd.append('action', 'admin_unban_user'); fd.append('user_id', uid);
+ try {
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.is_banned = 0; u.ban_reason = null; renderUsers(); }
+  } else showToast(data.message || 'Failed to lift ban.', 'error');
+ } catch { showToast('Connection error.', 'error'); }
+}
+
+async function toggleForceReset(uid, name){
+ const fd = new FormData(); fd.append('action', 'admin_toggle_force_reset'); fd.append('user_id', uid);
+ try {
+  const res = await fetch('api/reports.php', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.status === 'success'){
+   showToast(data.message, 'success');
+   const u = allUsers.find(x => x.id == uid);
+   if(u){ u.force_password_reset = data.force_password_reset; renderUsers(); }
+  } else showToast(data.message || 'Failed.', 'error');
+ } catch { showToast('Connection error.', 'error'); }
+}
 
 // ── PENDING APPROVALS ─────────────────────────────────────────
 async function loadPending(){

@@ -14,6 +14,13 @@ $PREFERRED_ACTION_ROLES = [
  'admin_create_official'=> ['admin'],
  'admin_reject_user'    => ['admin'],
  'admin_delete_user'    => ['admin'],
+ 'admin_change_password'=> ['admin'],
+ 'admin_verify_user'    => ['admin'],
+ 'admin_ban_user'       => ['admin'],
+ 'admin_unban_user'     => ['admin'],
+ 'admin_suspend_user'   => ['admin'],
+ 'admin_unsuspend_user' => ['admin'],
+ 'admin_toggle_force_reset' => ['admin'],
  'admin_get_logs'       => ['admin'],
  'admin_get_audit_logs' => ['admin'],
  'restore_report'       => ['admin'],
@@ -746,9 +753,19 @@ switch ($action) {
 
  case 'admin_get_users':
  if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
- $sql="SELECT u.id,u.first_name,u.last_name,u.email,u.official_id,u.role,u.org_name,u.position,u.barangay_name,u.municipality,u.is_approved,u.created_at,COUNT(r.id) AS report_count FROM users u LEFT JOIN reports r ON r.user_id=u.id GROUP BY u.id ORDER BY u.is_approved ASC, u.created_at DESC";
+ $sql="SELECT u.id,u.first_name,u.last_name,u.email,u.official_id,u.phone_number,u.role,u.org_name,u.position,u.barangay_name,u.municipality,u.is_approved,u.email_verified,u.force_password_reset,u.is_banned,u.ban_reason,u.banned_at,u.suspended_until,u.suspension_reason,u.created_at,COUNT(r.id) AS report_count FROM users u LEFT JOIN reports r ON r.user_id=u.id GROUP BY u.id ORDER BY u.is_banned DESC, (u.suspended_until IS NOT NULL AND u.suspended_until > NOW()) DESC, u.is_approved ASC, u.created_at DESC";
  $res=$conn->query($sql); $users=[];
- while($row=$res->fetch_assoc()){$row['id']=(int)$row['id'];$row['report_count']=(int)$row['report_count'];$row['is_approved']=(int)$row['is_approved'];$users[]=$row;}
+ $now_time = time();
+ while($row=$res->fetch_assoc()){
+  $row['id']=(int)$row['id'];
+  $row['report_count']=(int)$row['report_count'];
+  $row['is_approved']=(int)$row['is_approved'];
+  $row['email_verified']=(int)($row['email_verified'] ?? 0);
+  $row['force_password_reset']=(int)($row['force_password_reset'] ?? 0);
+  $row['is_banned']=(int)($row['is_banned'] ?? 0);
+  $row['is_suspended']=(!empty($row['suspended_until']) && strtotime($row['suspended_until']) > $now_time) ? 1 : 0;
+  $users[]=$row;
+ }
  echo json_encode(['status'=>'success','users'=>$users]);
  break;
 
@@ -932,6 +949,118 @@ switch ($action) {
  if($d->affected_rows>0){echo json_encode(['status'=>'success','message'=>'User removed.']);}
  else{echo json_encode(['status'=>'error','message'=>'Could not delete user (admin accounts are protected).']);}
  $d->close();
+ break;
+
+ case 'admin_change_password':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ $new_pw=trim($_POST['new_password']??'');
+ $require_reset = !empty($_POST['force_reset']) ? 1 : 0;
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ if(strlen($new_pw) < 6){echo json_encode(['status'=>'error','message'=>'Password must be at least 6 characters.']);exit;}
+ $chk=$conn->prepare("SELECT id, role, first_name, last_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ if($tuser['role']==='admin' && $target !== $user_id){
+  echo json_encode(['status'=>'error','message'=>'Cannot change password of another administrator.']);exit;
+ }
+ $hash = password_hash($new_pw, PASSWORD_DEFAULT);
+ $u=$conn->prepare("UPDATE users SET password=?, force_password_reset=?, reset_token=NULL, reset_token_expires=NULL WHERE id=?");
+ $u->bind_param("sii", $hash, $require_reset, $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Password for '.htmlspecialchars($tuser['first_name']).' updated successfully.']);
+ break;
+
+ case 'admin_verify_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ $u=$conn->prepare("UPDATE users SET email_verified=1, is_approved=1, verification_token=NULL, token_expires_at=NULL WHERE id=?");
+ $u->bind_param("i", $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Account for '.htmlspecialchars($tuser['first_name']).' manually verified and activated.']);
+ break;
+
+ case 'admin_ban_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ $reason=trim($_POST['reason']??'');
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ if($target===$user_id){echo json_encode(['status'=>'error','message'=>'Cannot ban yourself.']);exit;}
+ $chk=$conn->prepare("SELECT role, first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ if($tuser['role']==='admin'){echo json_encode(['status'=>'error','message'=>'Admin accounts cannot be banned.']);exit;}
+ $u=$conn->prepare("UPDATE users SET is_banned=1, ban_reason=?, banned_at=NOW() WHERE id=?");
+ $u->bind_param("si", $reason, $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Account for '.htmlspecialchars($tuser['first_name']).' has been permanently banned.']);
+ break;
+
+ case 'admin_unban_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ $u=$conn->prepare("UPDATE users SET is_banned=0, ban_reason=NULL, banned_at=NULL WHERE id=?");
+ $u->bind_param("i", $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Ban lifted for '.htmlspecialchars($tuser['first_name'] ?? 'user').'.']);
+ break;
+
+ case 'admin_suspend_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ $hours=(int)($_POST['duration_hours']??24);
+ $custom_until=trim($_POST['until']??'');
+ $reason=trim($_POST['reason']??'');
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ if($target===$user_id){echo json_encode(['status'=>'error','message'=>'Cannot suspend yourself.']);exit;}
+ $chk=$conn->prepare("SELECT role, first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$tuser){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ if($tuser['role']==='admin'){echo json_encode(['status'=>'error','message'=>'Admin accounts cannot be suspended.']);exit;}
+
+ if(!empty($custom_until) && strtotime($custom_until) > time()){
+  $until = date('Y-m-d H:i:s', strtotime($custom_until));
+ } else {
+  if($hours <= 0) $hours = 24;
+  $until = date('Y-m-d H:i:s', time() + ($hours * 3600));
+ }
+ $u=$conn->prepare("UPDATE users SET suspended_until=?, suspension_reason=? WHERE id=?");
+ $u->bind_param("ssi", $until, $reason, $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Account for '.htmlspecialchars($tuser['first_name']).' suspended until '.date('M j, Y g:i A', strtotime($until)).'.','until'=>$until]);
+ break;
+
+ case 'admin_unsuspend_user':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT first_name FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $tuser=$chk->get_result()->fetch_assoc(); $chk->close();
+ $u=$conn->prepare("UPDATE users SET suspended_until=NULL, suspension_reason=NULL WHERE id=?");
+ $u->bind_param("i", $target);
+ $u->execute(); $u->close();
+ echo json_encode(['status'=>'success','message'=>'Suspension lifted for '.htmlspecialchars($tuser['first_name'] ?? 'user').'.']);
+ break;
+
+ case 'admin_toggle_force_reset':
+ if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
+ $target=(int)($_POST['user_id']??0);
+ if(!$target){echo json_encode(['status'=>'error','message'=>'Invalid user ID.']);exit;}
+ $chk=$conn->prepare("SELECT force_password_reset FROM users WHERE id=?");
+ $chk->bind_param("i", $target); $chk->execute(); $row=$chk->get_result()->fetch_assoc(); $chk->close();
+ if(!$row){echo json_encode(['status'=>'error','message'=>'User not found.']);exit;}
+ $new_val = empty($row['force_password_reset']) ? 1 : 0;
+ $u=$conn->prepare("UPDATE users SET force_password_reset=? WHERE id=?");
+ $u->bind_param("ii", $new_val, $target); $u->execute(); $u->close();
+ $msg = $new_val ? 'User will be required to set a new password on their next sign-in.' : 'Password reset requirement removed.';
+ echo json_encode(['status'=>'success','message'=>$msg,'force_password_reset'=>$new_val]);
  break;
 
  case 'admin_get_logs':

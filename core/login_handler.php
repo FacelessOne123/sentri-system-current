@@ -214,6 +214,11 @@ $migrations = [
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS municipality VARCHAR(150) DEFAULT NULL",
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS resident_address VARCHAR(255) DEFAULT NULL",
  "ALTER TABLE users ADD COLUMN IF NOT EXISTS responder_type VARCHAR(30) DEFAULT NULL",
+ "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned TINYINT(1) NOT NULL DEFAULT 0",
+ "ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason VARCHAR(255) DEFAULT NULL",
+ "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at DATETIME DEFAULT NULL",
+ "ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_until DATETIME DEFAULT NULL",
+ "ALTER TABLE users ADD COLUMN IF NOT EXISTS suspension_reason VARCHAR(255) DEFAULT NULL",
 ];
 foreach ($migrations as $q) $conn->query($q);
 if (!in_array('email_verified',$cols)) $conn->query("UPDATE users SET email_verified=1 WHERE created_at < NOW()");
@@ -248,15 +253,30 @@ if (isLockedOut($conn, $email)) {
  exit;
 }
 
- $stmt = $conn->prepare("SELECT id,first_name,last_name,password,role,email_verified,is_approved,force_password_reset FROM users WHERE email=? OR official_id=? LIMIT 1");
+ $stmt = $conn->prepare("SELECT id,first_name,last_name,password,role,email_verified,is_approved,force_password_reset,is_banned,ban_reason,suspended_until,suspension_reason FROM users WHERE email=? OR official_id=? LIMIT 1");
  $stmt->bind_param("ss",$email,$email); $stmt->execute(); $stmt->store_result();
 $log_status='Failed'; $log_uid=null; $resp=['status'=>'error','message'=>'Invalid credentials.'];
 $is_successful_login = false;
 
 if ($stmt->num_rows > 0) {
- $stmt->bind_result($id,$fn,$ln,$hash,$role,$verified,$approved,$force_reset);
+ $stmt->bind_result($id,$fn,$ln,$hash,$role,$verified,$approved,$force_reset,$is_banned,$ban_reason,$suspended_until,$suspension_reason);
  $stmt->fetch();
  if (password_verify($password,$hash)) {
+ if (!empty($is_banned)) {
+  $stmt->close();
+  $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
+  $s='Failed'; $lg->bind_param("issss",$id,$email,$ip,$device,$s); $lg->execute(); $lg->close();
+  $r = !empty($ban_reason) ? ' Reason: ' . htmlspecialchars($ban_reason) : '';
+  echo json_encode(['status'=>'error','message'=>'This account has been permanently banned by an administrator.' . $r]); exit;
+ }
+ if (!empty($suspended_until) && strtotime($suspended_until) > time()) {
+  $stmt->close();
+  $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
+  $s='Failed'; $lg->bind_param("issss",$id,$email,$ip,$device,$s); $lg->execute(); $lg->close();
+  $until_fmt = date('M j, Y g:i A', strtotime($suspended_until));
+  $r = !empty($suspension_reason) ? ' Reason: ' . htmlspecialchars($suspension_reason) : '';
+  echo json_encode(['status'=>'error','message'=>'This account is temporarily suspended until ' . $until_fmt . '.' . $r]); exit;
+ }
  if (!$verified && in_array($role, ['community','user'], true)) {
  $stmt->close();
  $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
