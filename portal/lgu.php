@@ -999,37 +999,188 @@ tr:hover td{background:#fafafa;}
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
 
  var allMarkers = [];
+ var spiderGuideLines = [];
  var lguHazardCircles = [];
  var showLguHazardRings = false;
  var currentFilter = 'all';
  var currentLguQuery = '';
 
- reports.forEach(function(r){
- var color = markerColors[r.status] || '#888';
- var m = L.marker([r.lat,r.lng],{icon:makeIcon(color)});
- m.reportData = r;
- m.bindPopup(
- '<div style="min-width:200px;font-family:Inter,sans-serif;">' +
- '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>' +
- '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
- '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
- '<span style="background:#eff6ff;color:#1e40af;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>' +
- (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
- (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>':'')+
- (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
- (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
- '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
- {maxWidth:260}
- );
- m.addTo(map);
- allMarkers.push(m);
- });
+ window.openLguReportFromMap = function(id){
+  for(var i=0; i<reports.length; i++){
+   var r = reports[i];
+   if(r.id == id){
+    lguViewReport(r.id, r.title, r.category, r.status, r.barangay, r.reporter, r.date, r.desc, r.escalated || 0, r.reporter_brgy, r.responder_pending || 0);
+    return;
+   }
+  }
+ };
 
- if(allMarkers.length > 0){
- var group = L.featureGroup(allMarkers);
- map.fitBounds(group.getBounds().pad(0.15));
+ function buildLguSinglePopup(r){
+  return '<div style="min-width:210px;font-family:Inter,sans-serif;">' +
+  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+esc(r.title)+'</div>' +
+  '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
+  '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger,#dc2626)':r.status==='caution'?'var(--sentri-caution,#d97706)':'var(--sentri-safe,#16a34a)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
+  '<span style="background:#eff6ff;color:#1e40af;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+esc(catLabels[r.category]||r.category)+'</span></div>' +
+  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+esc(r.barangay)+'</div>':'')+
+  (r.reporter?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+esc(r.reporter)+'</div>':'')+
+  (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+esc(r.reporter_brgy)+(r.reporter_address?', '+esc(r.reporter_address):'')+'</div>':'')+
+  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+esc(r.desc.substring(0,120))+(r.desc.length>120?'…':'')+'</div>':'')+
+  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;margin-bottom:10px;">'+esc(r.date)+' &middot; Report #'+r.id+'</div>' +
+  '<button onclick="openLguReportFromMap('+r.id+')" style="width:100%;padding:6px 12px;background:#1e40af;color:#fff;border:none;border-radius:8px;font-size:0.78rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;"><i class=\"fas fa-file-lines\"></i> View Incident Details</button>' +
+  '</div>';
+ }
+
+ function buildLguClusterPopup(reps, activeId){
+  var h = '<div style="min-width:240px;max-width:280px;font-family:Inter,sans-serif;">' +
+  '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e5e7eb;padding-bottom:6px;margin-bottom:8px;">' +
+  '<span style="font-weight:800;font-size:0.85rem;color:#1e40af;"><i class="fas fa-layer-group" style="margin-right:5px;color:#f59e0b;"></i>'+reps.length+' Reports at this Location</span>' +
+  '</div>' +
+  '<div style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:2px;">';
+
+  reps.forEach(function(r){
+   var isActive = (activeId && r.id === activeId);
+   var bg = isActive ? '#eff6ff' : '#f9fafb';
+   var border = isActive ? '#93c5fd' : '#e5e7eb';
+   var badgeBg = r.status==='dangerous'?'#fef2f2':(r.status==='caution'?'#fffbeb':'#f0fdf4');
+   var badgeCol = r.status==='dangerous'?'#dc2626':(r.status==='caution'?'#d97706':'#16a34a');
+
+   h += '<div style="background:'+bg+';border:1px solid '+border+';border-radius:8px;padding:8px;cursor:pointer;transition:all 0.15s ease;" onclick="openLguReportFromMap('+r.id+')">' +
+   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">' +
+   '<span style="font-weight:700;font-size:0.8rem;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">'+esc(r.title)+'</span>' +
+   '<span style="background:'+badgeBg+';color:'+badgeCol+';font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:12px;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>' +
+   '</div>' +
+   '<div style="font-size:0.72rem;color:#6b7280;margin-bottom:4px;">'+esc(r.date)+' &middot; '+esc(catLabels[r.category]||r.category)+'</div>' +
+   '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+   '<span style="font-size:0.7rem;color:#9ca3af;">#'+r.id+'</span>' +
+   '<span style="font-size:0.72rem;font-weight:600;color:#1e40af;"><i class="fas fa-arrow-right" style="font-size:0.65rem;"></i> View</span>' +
+   '</div>' +
+   '</div>';
+  });
+
+  h += '</div></div>';
+  return h;
+ }
+
+ function clearLguMarkersAndGuides(){
+  allMarkers.forEach(function(m){ map.removeLayer(m); });
+  allMarkers = [];
+  spiderGuideLines.forEach(function(l){ map.removeLayer(l); });
+  spiderGuideLines = [];
+ }
+
+ function renderLguReportMarkers(){
+  clearLguMarkersAndGuides();
+  var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
+
+  var validReports = [];
+  reports.forEach(function(r){
+   if(!isFinite(r.lat) || !isFinite(r.lng)) return;
+   if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return;
+
+   var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
+   var matchStatus = false;
+   if(currentFilter === 'all'){
+    matchStatus = !isArchivedOrSafe;
+   } else if(currentFilter === 'safe' || currentFilter === 'archived'){
+    matchStatus = isArchivedOrSafe;
+   } else {
+    matchStatus = (r.status === currentFilter && !r.is_archived);
+   }
+
+   var matchQuery = true;
+   if(currentLguQuery){
+    var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'') + ' ' + (r.reporter||'')).toLowerCase();
+    matchQuery = text.indexOf(currentLguQuery) !== -1;
+   }
+
+   if(matchStatus && matchQuery){
+    validReports.push(r);
+   }
+  });
+
+  var clusters = [];
+  validReports.forEach(function(r){
+   var matched = false;
+   for(var i=0; i<clusters.length; i++){
+    var c = clusters[i];
+    if(Math.abs(c.lat - r.lat) < 0.00018 && Math.abs(c.lng - r.lng) < 0.00018){
+     c.reports.push(r);
+     matched = true;
+     break;
+    }
+   }
+   if(!matched){
+    clusters.push({ lat: r.lat, lng: r.lng, reports: [r] });
+   }
+  });
+
+  clusters.forEach(function(cluster){
+   var cLat = cluster.lat;
+   var cLng = cluster.lng;
+   var reps = cluster.reports;
+   var count = reps.length;
+
+   if(count === 1){
+    var r = reps[0];
+    var color = markerColors[r.status] || '#888';
+    var m = L.marker([cLat, cLng], { icon: makeIcon(color) });
+    m.reportData = r;
+    m.bindPopup(buildLguSinglePopup(r), { maxWidth: 260 });
+    m.addTo(map);
+    allMarkers.push(m);
+   } else {
+    var hub = L.circleMarker([cLat, cLng], {
+     radius: 6,
+     color: '#ffffff',
+     weight: 2.5,
+     fillColor: '#1e40af',
+     fillOpacity: 1,
+     bubblingMouseEvents: false
+    }).addTo(map);
+    hub.bindTooltip('<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>' + count + ' Overlapping Reports (Click to view)</div>', { direction: 'top', offset: [0, -8] });
+    hub.bindPopup(buildLguClusterPopup(reps, null), { maxWidth: 280 });
+    allMarkers.push(hub);
+
+    var offsetRadius = 0.00022; // ~24 meters
+    reps.forEach(function(r, idx){
+     var angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+     var oLat = cLat + (offsetRadius * Math.cos(angle));
+     var oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+     var line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+      color: '#1e40af',
+      weight: 1.5,
+      dashArray: '3, 4',
+      opacity: 0.65,
+      interactive: false
+     }).addTo(map);
+     spiderGuideLines.push(line);
+
+     var color = markerColors[r.status] || '#888';
+     var m = L.marker([oLat, oLng], { icon: makeIcon(color) });
+     m.reportData = r;
+     m.bindTooltip('<div style="font-weight:700;font-size:0.75rem;">' + esc(r.title) + ' (' + (r.status.charAt(0).toUpperCase() + r.status.slice(1)) + ')</div>', { direction: 'top', offset: [0, -14] });
+     m.bindPopup(buildLguClusterPopup(reps, r.id), { maxWidth: 280 });
+     m.addTo(map);
+     allMarkers.push(m);
+    });
+   }
+  });
+
+  if(showLguHazardRings) drawLguHazardCircles();
+  if(showLguHeatmap) drawLguHeatmap();
+
+  if(allMarkers.length > 0 && !window.__lguMapBoundsSet){
+   var group = L.featureGroup(allMarkers);
+   map.fitBounds(group.getBounds().pad(0.15));
+   window.__lguMapBoundsSet = true;
+  }
+ }
+
+ if(typeof SentriGeo !== 'undefined' && SentriGeo.loadBarangays){
+  SentriGeo.loadBarangays().then(renderLguReportMarkers, renderLguReportMarkers);
  } else {
- map.setView([14.4240,120.9215],12);
+  renderLguReportMarkers();
  }
 
  // ── Official barangay perimeters (Imus City GeoJSON, 95 villages) ──
@@ -1065,9 +1216,13 @@ tr:hover td{background:#fafafa;}
 
  function drawLguHazardCircles() {
  clearLguHazardCircles();
+ var drawnPos = {};
  allMarkers.forEach(function(m){
  if(map.hasLayer(m) && m.reportData){
  var r = m.reportData;
+ var posKey = r.lat.toFixed(5) + ',' + r.lng.toFixed(5);
+ if(drawnPos[posKey]) return;
+ drawnPos[posKey] = true;
  if(r.status === 'dangerous' || r.status === 'caution'){
  var rad = r.status === 'dangerous' ? 250 : 150;
  var col = r.status === 'dangerous' ? '#dc2626' : '#d97706';
@@ -1078,7 +1233,7 @@ tr:hover td{background:#fafafa;}
  dashArray: '5 5',
  fillColor: col,
  fillOpacity: 0.16
- }).bindTooltip('<div style="font-weight:700;font-size:0.74rem;">'+(r.status==='dangerous'?'Hazard Perimeter (250m)':'Caution Zone (150m)')+'<br><span style="font-weight:400;font-size:0.7rem;">'+r.title+'</span></div>');
+ }).bindTooltip('<div style="font-weight:700;font-size:0.74rem;">'+(r.status==='dangerous'?'Hazard Perimeter (250m)':'Caution Zone (150m)')+'<br><span style="font-weight:400;font-size:0.7rem;">'+esc(r.title)+'</span></div>');
  circle.addTo(map);
  lguHazardCircles.push(circle);
  }
@@ -1147,28 +1302,7 @@ tr:hover td{background:#fafafa;}
  }
 
  function updateLguMapFilter(){
- allMarkers.forEach(function(m){
- var r = m.reportData;
- var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
- var matchStatus = false;
- if(currentFilter === 'all'){
-  matchStatus = !isArchivedOrSafe;
- } else if(currentFilter === 'safe' || currentFilter === 'archived'){
-  matchStatus = isArchivedOrSafe;
- } else {
-  matchStatus = (r.status === currentFilter && !r.is_archived);
- }
- var matchQuery = true;
- if(currentLguQuery){
- var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'')).toLowerCase();
- matchQuery = text.indexOf(currentLguQuery) !== -1;
- }
- var show = matchStatus && matchQuery;
- if(show){ if(!map.hasLayer(m)) map.addTo(map); }
- else { if(map.hasLayer(m)) map.removeLayer(m); }
- });
- if(showLguHazardRings) drawLguHazardCircles();
- if(showLguHeatmap) drawLguHeatmap();
+  renderLguReportMarkers();
  }
 
  function filterMap(status, btn){

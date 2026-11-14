@@ -1186,10 +1186,23 @@ function showTab(name) {
   } else if (name === 'overview' || name === 'my_reports') {
     renderFeed();
   }
-  if (typeof closeSidebar === 'function') closeSidebar();
+  if (isMobile()) {
+    if (typeof closeSidebar === 'function') closeSidebar();
+  } else {
+    var sb = document.getElementById('sidebar');
+    if (sb) sb.classList.remove('closed');
+    var m = document.querySelector('.main');
+    if (m) m.style.marginLeft = 'var(--sidebar-w)';
+  }
 }
 
 window.addEventListener('DOMContentLoaded', function(){
+  if (!isMobile()) {
+    var sb = document.getElementById('sidebar');
+    if (sb) sb.classList.remove('closed');
+    var m = document.querySelector('.main');
+    if (m) m.style.marginLeft = 'var(--sidebar-w)';
+  }
   var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
   if (hash && commTabMeta[hash]) {
     showTab(hash);
@@ -1236,7 +1249,7 @@ function toggleDark(){const d=document.body.classList.toggle('dark');document.ge
 function isMobile(){return window.innerWidth<=900;}
 function openSidebar(){const sb=document.getElementById('sidebar'),ov=document.getElementById('overlay');if(isMobile()){sb.classList.add('mobile-open');ov.classList.add('show');}else{sb.classList.remove('closed');document.querySelector('.main').style.marginLeft='var(--sidebar-w)';}}
 function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.getElementById('overlay');if(isMobile()){sb.classList.remove('mobile-open');ov.classList.remove('show');}else{sb.classList.add('closed');document.querySelector('.main').style.marginLeft='0';}}
-window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
+window.addEventListener('resize',()=>{if(!isMobile()){const sb=document.getElementById('sidebar');if(sb){sb.classList.remove('mobile-open');sb.classList.remove('closed');}const ov=document.getElementById('overlay');if(ov)ov.classList.remove('show');const m=document.querySelector('.main');if(m)m.style.marginLeft='var(--sidebar-w)';}});
 
 /* GPS */
 /* GPS source tracking: a live browser fix, or a labelled fallback (the last
@@ -1485,14 +1498,279 @@ function watchMapResize(getMap,el){
  window.addEventListener('orientationchange',()=>{const m=getMap();if(m)setTimeout(()=>m.invalidateSize(),250);});
 }
 
+function buildCommunitySinglePopup(r){
+ const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+ const fp=r.images&&r.images.length>0?r.images[0]:null;
+ const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';
+ return `<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]||'#888'};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;
+}
+
+function buildCommunityClusterPopup(reps, activeId){
+ const locName = reps[0].location_name || reps[0].city || 'Imus';
+ const count = reps.length;
+ let h = `<div style="min-width:230px;max-width:280px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;">` +
+  `<div style="font-weight:800;font-size:.92rem;color:#0a3d62;margin-bottom:2px;">${esc(locName)}</div>` +
+  `<div style="font-size:.73rem;color:#d97706;font-weight:700;margin-bottom:8px;"><i class="fas fa-layer-group"></i> ${count} Overlapping Reports at this location:</div>` +
+  `<div style="max-height:240px;overflow-y:auto;padding-right:2px;display:flex;flex-direction:column;gap:6px;">`;
+
+ reps.forEach(r => {
+  const isActive = (r.id === activeId);
+  const borderCol = isActive ? '#1a5276' : '#e2e8f0';
+  const bgCol = isActive ? '#f0f7ff' : '#ffffff';
+  const date = new Date(r.created_at).toLocaleDateString('en-PH', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  h += `<div style="border:1.5px solid ${borderCol};background:${bgCol};border-radius:8px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">` +
+   `<div style="font-weight:700;font-size:.82rem;color:#1e293b;margin-bottom:3px;">${esc(r.title)}</div>` +
+   `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">` +
+    `<span style="background:${SC[r.status]||'#888'};color:#fff;padding:2px 7px;border-radius:12px;font-size:.65rem;font-weight:700;text-transform:uppercase;">${ucFirst(r.status)}</span>` +
+    `<span style="background:#f1f5f9;color:#475569;padding:2px 7px;border-radius:12px;font-size:.65rem;font-weight:600;">${CL[r.category]||ucFirst(r.category)}</span>` +
+   `</div>` +
+   `<div style="font-size:.7rem;color:#64748b;margin-bottom:3px;">${esc(r.poster_name)} &middot; ${date}</div>` +
+   `<button type="button" onclick="openDetail(${r.id})" style="margin-top:4px;background:#1a5276;color:#fff;border:none;padding:5px 8px;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;width:100%;text-align:center;">Full Details</button>` +
+  `</div>`;
+ });
+ h += `</div></div>`;
+ return h;
+}
+
 /* Inline map (overview toggle) */
 let inlineMap=null,inlineLayers=[];
 function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(inlineMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);SentriGeo.addBarangayOverlay(inlineMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!inlineLayers.length)inlineMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderInlineMap();}).catch(()=>{});watchMapResize(()=>inlineMap,document.getElementById('inlineMap'));setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
-function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
+function renderInlineMap(){
+ if(!inlineMap)return;
+ inlineLayers.forEach(l=>inlineMap.removeLayer(l));
+ inlineLayers=[];
+ const list=getFiltered(false);
+ const bounds=[];
+ let pins=0,outside=0;
+ const geoReady=SentriGeo.geoReady();
+ const pinPts=[];
+
+ const validReports = [];
+ list.forEach(r=>{
+  const lat = r.latitude !== undefined ? parseFloat(r.latitude) : parseFloat(r.lat);
+  const lng = r.longitude !== undefined ? parseFloat(r.longitude) : parseFloat(r.lng);
+  if(!isFinite(lat) || !isFinite(lng)) return;
+  const ll=[lat,lng];
+  if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}
+  pins++;
+  bounds.push(ll);
+  pinPts.push(ll);
+  validReports.push(Object.assign({}, r, {_lat: lat, _lng: lng}));
+ });
+
+ const clusters = [];
+ validReports.forEach(r=>{
+  let matched = false;
+  for(let i=0; i<clusters.length; i++){
+   const c = clusters[i];
+   if(Math.abs(c.lat - r._lat) < 0.00018 && Math.abs(c.lng - r._lng) < 0.00018){
+    c.reports.push(r);
+    matched = true;
+    break;
+   }
+  }
+  if(!matched){
+   clusters.push({ lat: r._lat, lng: r._lng, reports: [r] });
+  }
+ });
+
+ clusters.forEach(cluster=>{
+  const cLat = cluster.lat;
+  const cLng = cluster.lng;
+  const reps = cluster.reports;
+  const count = reps.length;
+
+  let maxRadius = 200;
+  let worstStatus = 'safe';
+  const statusSeverity = { dangerous: 3, caution: 2, safe: 1 };
+  reps.forEach(r => {
+   if(r.radius_m && r.radius_m > maxRadius) maxRadius = r.radius_m;
+   if((statusSeverity[r.status] || 0) > (statusSeverity[worstStatus] || 0)) worstStatus = r.status;
+  });
+
+  const ci = L.circle([cLat, cLng], {
+   radius: maxRadius,
+   color: SC[worstStatus] || '#888',
+   fillColor: SF[worstStatus] || 'rgba(10,61,98,0.2)',
+   fillOpacity: 1,
+   weight: 2,
+   dashArray: '6 4'
+  }).addTo(inlineMap);
+  inlineLayers.push(ci);
+
+  if(count === 1){
+   const r = reps[0];
+   const mk = L.marker([cLat, cLng], { icon: markerIcon(r.status) }).addTo(inlineMap);
+   mk.bindPopup(buildCommunitySinglePopup(r), { maxWidth: 280 });
+   inlineLayers.push(mk);
+  } else {
+   const hub = L.circleMarker([cLat, cLng], {
+    radius: 6,
+    color: '#ffffff',
+    weight: 2.5,
+    fillColor: '#0a3d62',
+    fillOpacity: 1,
+    bubblingMouseEvents: false
+   }).addTo(inlineMap);
+   hub.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>${count} Overlapping Reports (Click to view)</div>`, { direction:'top', offset:[0,-8] });
+   hub.bindPopup(buildCommunityClusterPopup(reps, null), { maxWidth: 280 });
+   inlineLayers.push(hub);
+
+   const offsetRadius = 0.00022; // ~24m
+   reps.forEach((r, idx)=>{
+    const angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+    const oLat = cLat + (offsetRadius * Math.cos(angle));
+    const oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+    const line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+     color: '#0a3d62',
+     weight: 1.5,
+     dashArray: '3, 4',
+     opacity: 0.65,
+     interactive: false
+    }).addTo(inlineMap);
+    inlineLayers.push(line);
+
+    const mk = L.marker([oLat, oLng], { icon: markerIcon(r.status) }).addTo(inlineMap);
+    mk.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;">${esc(r.title)} (${ucFirst(r.status)})</div>`, { direction:'top', offset:[0,-38] });
+    mk.bindPopup(buildCommunityClusterPopup(reps, r.id), { maxWidth: 280 });
+    inlineLayers.push(mk);
+   });
+  }
+ });
+
+ if(bounds.length) inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});
+ SentriGeo.avoidLabelOverlap(inlineMap,pinPts);
+ const cnt=document.getElementById('inlineMapCount');
+ if(cnt) cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');
+ setTimeout(()=>inlineMap.invalidateSize(),300);
+ setTimeout(()=>inlineMap.invalidateSize(),600);
+}
 
 /* Full incidents map */
 let mainMap=null,mainLayers=[];
-function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
+function renderMainMap(){
+ if(!mainMap){
+  mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);
+  SentriGeo.lockToImus(mainMap,{fit:true});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);
+  SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});
+  watchMapResize(()=>mainMap,document.getElementById('incidentMap'));
+ }
+ mainLayers.forEach(l=>mainMap.removeLayer(l));
+ mainLayers=[];
+ const bounds=[];
+ let pins=0,outside=0;
+ const geoReady=SentriGeo.geoReady();
+ const pinPts=[];
+
+ const validReports = [];
+ allReports.forEach(r=>{
+  const lat = r.latitude !== undefined ? parseFloat(r.latitude) : parseFloat(r.lat);
+  const lng = r.longitude !== undefined ? parseFloat(r.longitude) : parseFloat(r.lng);
+  if(!isFinite(lat) || !isFinite(lng)) return;
+  const ll=[lat,lng];
+  if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}
+  pins++;
+  bounds.push(ll);
+  pinPts.push(ll);
+  validReports.push(Object.assign({}, r, {_lat: lat, _lng: lng}));
+ });
+
+ const clusters = [];
+ validReports.forEach(r=>{
+  let matched = false;
+  for(let i=0; i<clusters.length; i++){
+   const c = clusters[i];
+   if(Math.abs(c.lat - r._lat) < 0.00018 && Math.abs(c.lng - r._lng) < 0.00018){
+    c.reports.push(r);
+    matched = true;
+    break;
+   }
+  }
+  if(!matched){
+   clusters.push({ lat: r._lat, lng: r._lng, reports: [r] });
+  }
+ });
+
+ clusters.forEach(cluster=>{
+  const cLat = cluster.lat;
+  const cLng = cluster.lng;
+  const reps = cluster.reports;
+  const count = reps.length;
+
+  let maxRadius = 200;
+  let worstStatus = 'safe';
+  const statusSeverity = { dangerous: 3, caution: 2, safe: 1 };
+  reps.forEach(r => {
+   if(r.radius_m && r.radius_m > maxRadius) maxRadius = r.radius_m;
+   if((statusSeverity[r.status] || 0) > (statusSeverity[worstStatus] || 0)) worstStatus = r.status;
+  });
+
+  const ci = L.circle([cLat, cLng], {
+   radius: maxRadius,
+   color: SC[worstStatus] || '#888',
+   fillColor: SF[worstStatus] || 'rgba(10,61,98,0.2)',
+   fillOpacity: 1,
+   weight: 2,
+   dashArray: '6 4'
+  }).addTo(mainMap);
+  mainLayers.push(ci);
+
+  if(count === 1){
+   const r = reps[0];
+   const mk = L.marker([cLat, cLng], { icon: markerIcon(r.status) }).addTo(mainMap);
+   const popup = buildCommunitySinglePopup(r);
+   mk.bindTooltip(popup, { direction:'top', offset:[0,-38], opacity:1, sticky:false, permanent:false });
+   mk.bindPopup(popup, { maxWidth:280 });
+   mainLayers.push(mk);
+  } else {
+   // 1. Center hub dot
+   const hub = L.circleMarker([cLat, cLng], {
+    radius: 6,
+    color: '#ffffff',
+    weight: 2.5,
+    fillColor: '#0a3d62',
+    fillOpacity: 1,
+    bubblingMouseEvents: false
+   }).addTo(mainMap);
+   const clusterPopup = buildCommunityClusterPopup(reps, null);
+   hub.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>${count} Overlapping Reports (Click to view)</div>`, { direction:'top', offset:[0,-8] });
+   hub.bindPopup(clusterPopup, { maxWidth:280 });
+   mainLayers.push(hub);
+
+   // 2. Spider out markers
+   const offsetRadius = 0.00022; // ~24m
+   reps.forEach((r, idx)=>{
+    const angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+    const oLat = cLat + (offsetRadius * Math.cos(angle));
+    const oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+    const line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+     color: '#0a3d62',
+     weight: 1.5,
+     dashArray: '3, 4',
+     opacity: 0.65,
+     interactive: false
+    }).addTo(mainMap);
+    mainLayers.push(line);
+
+    const mk = L.marker([oLat, oLng], { icon: markerIcon(r.status) }).addTo(mainMap);
+    const itemPopup = buildCommunityClusterPopup(reps, r.id);
+    mk.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;">${esc(r.title)} (${ucFirst(r.status)})</div>`, { direction:'top', offset:[0,-38] });
+    mk.bindPopup(itemPopup, { maxWidth:280 });
+    mainLayers.push(mk);
+   });
+  }
+ });
+
+ if(bounds.length) mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});
+ SentriGeo.avoidLabelOverlap(mainMap,pinPts);
+ const cnt=document.getElementById('mapCount');
+ if(cnt) cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');
+ setTimeout(()=>mainMap.invalidateSize(),300);
+ setTimeout(()=>mainMap.invalidateSize(),600);
+}
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
