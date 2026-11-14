@@ -2226,14 +2226,24 @@ function renderPosts(){
  <td style="white-space:nowrap;">
  ${arc
  ? `<button class="act-btn restore" onclick="postAction(${r.id},'restore')"><i class="fas fa-rotate-left"></i> Restore</button>`
- : `<button class="act-btn del" onclick="postAction(${r.id},'delete')"><i class="fas fa-archive"></i> Archive</button>`
+ : (r.status === 'safe'
+     ? `<button class="act-btn del" onclick="postAction(${r.id},'delete')"><i class="fas fa-archive"></i> Archive</button>`
+     : `<button class="act-btn del" disabled style="opacity:0.4;cursor:not-allowed;" title="Only reports marked as safe can be archived"><i class="fas fa-archive"></i> Archive</button>`
+   )
  }
  </td>
  </tr>`;
  }).join('');
 }
 async function postAction(id, type){
- if(type==='delete'&&!confirm('Archive this report?')) return;
+ if(type==='delete'){
+  const target = allReports.find(x=>x.id==id);
+  if(target && target.status !== 'safe'){
+   showToast('Only reports marked as safe can be archived.','error');
+   return;
+  }
+  if(!confirm('Archive this report?')) return;
+ }
  if(type==='restore'&&!confirm('Restore this report?')) return;
  const fd=new FormData();
  fd.append('action',type==='delete'?'delete_report':'restore_report');

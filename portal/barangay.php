@@ -704,7 +704,7 @@ tr:hover td{background:#fafafa;}
    if(!isFinite(r.lat) || !isFinite(r.lng)) return;
    if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return;
 
-   var isArchivedOrSafe = (r.status === 'safe' || r.is_archived === 1);
+   var isArchivedOrSafe = (r.status === 'safe');
    var matchStatus = false;
    if(currentMapStatus === 'all'){
     matchStatus = !isArchivedOrSafe;
@@ -1522,7 +1522,7 @@ function applyRptFilters() {
  rows.forEach(function(row) {
  var statusEl = row.querySelector('.pill');
  var status = statusEl ? statusEl.className.replace(/pill\s*/g,'').replace('pill-','').trim() : '';
- var isArchivedOrSafe = (status === 'safe' || row.getAttribute('data-archived') === '1');
+ var isArchivedOrSafe = (status === 'safe');
  var matchStatus = false;
  if(activeRptStatus === 'all'){
   matchStatus = !isArchivedOrSafe;

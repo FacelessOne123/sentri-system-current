@@ -1927,7 +1927,7 @@ function collectLguFilteredRows(){
  var rows = Array.prototype.slice.call(document.querySelectorAll('#lguReportsTable tbody tr'));
  return rows.filter(function(row){
  var st = row.getAttribute('data-status') || '';
- var isArchivedOrSafe = (st === 'safe' || row.getAttribute('data-archived') === '1');
+ var isArchivedOrSafe = (st === 'safe');
  var matchStatus = true;
  if(currentTableFilter === 'all'){
   matchStatus = !isArchivedOrSafe;

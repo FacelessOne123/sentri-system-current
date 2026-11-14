@@ -687,6 +687,24 @@ switch ($action) {
  if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
  $report_id=(int)($_POST['report_id']??0);
  if(!$report_id){echo json_encode(['status'=>'error','message'=>'Invalid ID.']);exit;}
+
+ // Restriction: only reports marked as safe can be archived
+ $st = $conn->prepare("SELECT status FROM reports WHERE id=? LIMIT 1");
+ $st->bind_param("i", $report_id);
+ $st->execute();
+ $s_res = $st->get_result();
+ if ($s_res->num_rows === 0) {
+  echo json_encode(['status'=>'error','message'=>'Report not found.']);
+  exit;
+ }
+ $r_curr = $s_res->fetch_assoc();
+ $st->close();
+
+ if ($r_curr['status'] !== 'safe') {
+  echo json_encode(['status'=>'error','message'=>'Only reports marked as safe can be archived.']);
+  exit;
+ }
+
  if($role==='admin'){$d=$conn->prepare("UPDATE reports SET is_archived=1 WHERE id=?");$d->bind_param("i",$report_id);}
  else{$d=$conn->prepare("UPDATE reports SET is_archived=1 WHERE id=? AND user_id=?");$d->bind_param("ii",$report_id,$user_id);}
  $d->execute();

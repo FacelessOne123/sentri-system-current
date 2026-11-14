@@ -703,6 +703,20 @@ switch ($action) {
             mobile_respond(400, ['status' => 'error', 'message' => 'Report ID required']);
         }
 
+        // Restriction: only reports marked as safe can be archived
+        $chk_stmt = $conn->prepare("SELECT status FROM reports WHERE id = ? LIMIT 1");
+        $chk_stmt->bind_param('i', $report_id);
+        $chk_stmt->execute();
+        $r_row = $chk_stmt->get_result()->fetch_assoc();
+        $chk_stmt->close();
+
+        if (!$r_row) {
+            mobile_respond(404, ['status' => 'error', 'message' => 'Report not found']);
+        }
+        if ($r_row['status'] !== 'safe') {
+            mobile_respond(400, ['status' => 'error', 'message' => 'Only reports marked as safe can be archived']);
+        }
+
         $is_admin = in_array($user['role'], ['admin', 'lgu', 'barangay']);
         if ($is_admin) {
             $stmt = $conn->prepare("UPDATE reports SET is_archived = 1 WHERE id = ?");
