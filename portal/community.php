@@ -102,9 +102,31 @@ $danger_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' A
 $safe_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' OR is_archived=1");
 $my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=?",'i',[$uid]);
 
-/* ── Per-view data ────────────────────────────────────────────── */
+/* ── Per-view data: Scoped Emergency Contacts ────────────────────── */
+$all_contacts = [];
+$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");
+if($cs) while($r=$cs->fetch_assoc()) $all_contacts[]=$r;
+
+// Scope contacts for community member:
+// Include city-wide hotlines (LGU, Hospital, Police, Fire, Traffic, First Responders),
+// and strictly ONLY the resident's registered barangay office hotline.
 $contacts = [];
-$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");if($cs)while($r=$cs->fetch_assoc())$contacts[]=$r;
+$all_brgy_contacts = [];
+$user_brgy_canon = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($user_barangay) : $user_barangay;
+
+foreach ($all_contacts as $c) {
+    if ($c['type'] === 'barangay' && !empty($c['barangay'])) {
+        $all_brgy_contacts[$c['barangay']] = $c;
+    }
+    if ($c['type'] !== 'barangay') {
+        $contacts[] = $c;
+    } else {
+        $c_canon = function_exists('sentri_barangay_canonical') ? sentri_barangay_canonical($c['barangay']) : $c['barangay'];
+        if ($user_barangay !== '' && (strcasecmp($c_canon, $user_brgy_canon) === 0 || strcasecmp(trim($c['barangay']), trim($user_barangay)) === 0)) {
+            $contacts[] = $c;
+        }
+    }
+}
 
 $profile_msg = '';
 if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_profile'])){
@@ -155,9 +177,36 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
 }
 
 /* ── Lookup maps ──────────────────────────────────────────────── */
-$type_icons =['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
-$type_colors=['lgu'=>['#f0f7ff','#0a3d62'],'hospital'=>['#ecfdf5','#059669'],'traffic'=>['#fffbeb','#d97706'],'barangay'=>['#f0fdf4','#166534'],'police'=>['#eff6ff','#2563eb'],'fire'=>['#fef2f2','#dc2626'],'other'=>['#f5f3ff','#7c3aed']];
-$type_labels=['lgu'=>'LGU Offices','hospital'=>'Hospitals','police'=>'Police','fire'=>'Fire Services','traffic'=>'Traffic Management','barangay'=>'Barangay Offices','other'=>'Other Services'];
+$type_icons =[
+    'first_responder' => 'fa-truck-medical',
+    'police'          => 'fa-shield',
+    'fire'            => 'fa-fire-extinguisher',
+    'hospital'        => 'fa-hospital',
+    'traffic'         => 'fa-traffic-light',
+    'lgu'             => 'fa-landmark',
+    'barangay'        => 'fa-house-flag',
+    'other'           => 'fa-phone'
+];
+$type_colors=[
+    'first_responder' => ['#fef2f2','#dc2626'],
+    'police'          => ['#eff6ff','#2563eb'],
+    'fire'            => ['#fff1f2','#e11d48'],
+    'hospital'        => ['#ecfdf5','#059669'],
+    'traffic'         => ['#fffbeb','#d97706'],
+    'lgu'             => ['#f0f7ff','#0a3d62'],
+    'barangay'        => ['#f0fdf4','#166534'],
+    'other'           => ['#f5f3ff','#7c3aed']
+];
+$type_labels=[
+    'first_responder' => 'Emergency Response & Responders',
+    'police'          => 'Police Station',
+    'fire'            => 'Fire Protection Services',
+    'hospital'        => 'Hospitals & Medical Centers',
+    'traffic'         => 'Traffic Management',
+    'lgu'             => 'City Government & DRRM (LGU)',
+    'barangay'        => 'Barangay Office',
+    'other'           => 'Other Services'
+];
 $nav=['overview'=>['icon'=>'fa-house','label'=>'Community Feed'],'my_reports'=>['icon'=>'fa-file-lines','label'=>'My Reports'],'map'=>['icon'=>'fa-map-location-dot','label'=>'Incidents Map'],'contacts'=>['icon'=>'fa-address-book','label'=>'Emergency Contacts'],'profile'=>['icon'=>'fa-id-card','label'=>'My Profile']];
 $page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'Incidents Map','contacts'=>'Emergency Contacts','profile'=>'My Profile'];
 ?>
@@ -820,29 +869,84 @@ function actionToast(message,type){
  <div class="empty"><i class="fas fa-address-book"></i><p>No emergency contacts set up yet.<br>Contact your local administrator.</p></div>
  <?php else:
  $grouped=[];foreach($contacts as $c)$grouped[$c['type']][]=$c;
- foreach($type_labels as $type=>$label):if(empty($grouped[$type]))continue;[$bg,$fg]=$type_colors[$type]; ?>
+ foreach($type_labels as $type=>$label):
+  if($type !== 'barangay' && empty($grouped[$type])) continue;
+  [$bg,$fg] = $type_colors[$type] ?? ['#f0f7ff','#0a3d62'];
+ ?>
+ <?php if($type === 'barangay'): ?>
+ <div style="margin-bottom:24px;" id="commBrgySection">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+   <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:34px;height:34px;border-radius:9px;background:<?= $bg ?>;display:flex;align-items:center;justify-content:center;color:<?= $fg ?>;font-size:.95rem;flex-shrink:0;"><i class="fas <?= $type_icons[$type] ?>"></i></div>
+    <span style="font-size:.95rem;font-weight:700;color:var(--text);" id="commBrgyTitle"><?= !empty($user_barangay) ? 'Your Barangay Office (' . htmlspecialchars($user_barangay) . ')' : 'Barangay Office' ?></span>
+    <span style="font-size:.78rem;color:var(--muted);" id="commBrgyCount">(<?= !empty($grouped['barangay']) ? count($grouped['barangay']) : 0 ?>)</span>
+   </div>
+   <div style="display:flex;align-items:center;gap:8px;font-size:0.8rem;">
+    <span style="color:var(--muted);font-size:0.76rem;"><i class="fas fa-magnifying-glass"></i> Other Barangay:</span>
+    <select id="commLookupBrgySelect" onchange="lookupOtherBrgyContact(this.value)" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:0.78rem;background:var(--card);color:var(--text);outline:none;cursor:pointer;">
+     <option value="">-- View another barangay --</option>
+     <?php foreach($all_brgy_contacts as $bname => $bc): ?>
+     <option value="<?= htmlspecialchars($bname) ?>" <?= ($bname === $user_barangay)?'selected':'' ?>><?= htmlspecialchars($bname) ?></option>
+     <?php endforeach; ?>
+    </select>
+    <button type="button" id="commResetBrgyBtn" onclick="resetToMyBrgyContact()" style="display:none;padding:5px 9px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:8px;font-size:0.75rem;font-weight:600;cursor:pointer;"><i class="fas fa-rotate-left"></i> My Barangay</button>
+   </div>
+  </div>
+  <div class="contacts-grid" id="commBrgyCards">
+   <?php if(empty($grouped['barangay'])): ?>
+    <div style="grid-column:1/-1;padding:18px 20px;background:var(--card);border:1.5px dashed var(--border);border-radius:12px;color:var(--muted);font-size:0.83rem;display:flex;align-items:center;gap:12px;">
+     <i class="fas fa-house-flag" style="font-size:1.3rem;color:var(--muted);"></i>
+     <span>No barangay assigned to your profile yet. <a href="#tab=profile" onclick="showTab('profile')" style="color:var(--blue);font-weight:600;text-decoration:none;">Set your registered barangay in My Profile</a> to view your local barangay emergency hotline.</span>
+    </div>
+   <?php else: ?>
+    <?php foreach($grouped['barangay'] as $i=>$c): ?>
+     <div class="contact-card" style="border-left-color:<?= $fg ?>;animation-delay:<?= $i*.05 ?>s;">
+      <div class="contact-top">
+       <div class="contact-icon" style="background:<?= $bg ?>;color:<?= $fg ?>;"><i class="fas <?= $type_icons[$c['type']] ?>"></i></div>
+       <div>
+        <div class="contact-name"><?= htmlspecialchars($c['name']) ?></div>
+        <div class="contact-type-lbl" style="color:<?= $fg ?>;display:flex;align-items:center;gap:6px;">
+         <span><?= strtoupper(htmlspecialchars($c['type'])) ?></span>
+         <?php if(!empty($user_barangay) && strcasecmp(trim($c['barangay']), trim($user_barangay)) === 0): ?>
+          <span style="background:#dcfce7;color:#166534;font-size:0.68rem;padding:2px 6px;border-radius:4px;font-weight:700;">YOUR BARANGAY</span>
+         <?php endif; ?>
+        </div>
+       </div>
+      </div>
+      <div class="contact-details">
+       <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
+       <?php if(!empty($c['contact_number'])): ?><div class="contact-row"><i class="fas fa-phone"></i><a href="tel:<?= htmlspecialchars($c['contact_number']) ?>"><?= htmlspecialchars($c['contact_number']) ?></a></div><?php endif; ?>
+       <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
+      </div>
+     </div>
+    <?php endforeach; ?>
+   <?php endif; ?>
+  </div>
+ </div>
+ <?php else: ?>
  <div style="margin-bottom:24px;">
- <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
- <div style="width:34px;height:34px;border-radius:9px;background:<?= $bg ?>;display:flex;align-items:center;justify-content:center;color:<?= $fg ?>;font-size:.95rem;flex-shrink:0;"><i class="fas <?= $type_icons[$type] ?>"></i></div>
- <span style="font-size:.95rem;font-weight:700;color:var(--text);"><?= $label ?></span>
- <span style="font-size:.78rem;color:var(--muted);">(<?= count($grouped[$type]) ?>)</span>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+   <div style="width:34px;height:34px;border-radius:9px;background:<?= $bg ?>;display:flex;align-items:center;justify-content:center;color:<?= $fg ?>;font-size:.95rem;flex-shrink:0;"><i class="fas <?= $type_icons[$type] ?>"></i></div>
+   <span style="font-size:.95rem;font-weight:700;color:var(--text);"><?= $label ?></span>
+   <span style="font-size:.78rem;color:var(--muted);">(<?= count($grouped[$type]) ?>)</span>
+  </div>
+  <div class="contacts-grid">
+   <?php foreach($grouped[$type] as $i=>$c): ?>
+   <div class="contact-card" style="border-left-color:<?= $fg ?>;animation-delay:<?= $i*.05 ?>s;">
+    <div class="contact-top">
+     <div class="contact-icon" style="background:<?= $bg ?>;color:<?= $fg ?>;"><i class="fas <?= $type_icons[$c['type']] ?>"></i></div>
+     <div><div class="contact-name"><?= htmlspecialchars($c['name']) ?></div><div class="contact-type-lbl" style="color:<?= $fg ?>;"><?= strtoupper(htmlspecialchars($c['type'])) ?></div></div>
+    </div>
+    <div class="contact-details">
+     <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
+     <?php if(!empty($c['contact_number'])): ?><div class="contact-row"><i class="fas fa-phone"></i><a href="tel:<?= htmlspecialchars($c['contact_number']) ?>"><?= htmlspecialchars($c['contact_number']) ?></a></div><?php endif; ?>
+     <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
+    </div>
+   </div>
+   <?php endforeach; ?>
+  </div>
  </div>
- <div class="contacts-grid">
- <?php foreach($grouped[$type] as $i=>$c): ?>
- <div class="contact-card" style="border-left-color:<?= $fg ?>;animation-delay:<?= $i*.05 ?>s;">
- <div class="contact-top">
- <div class="contact-icon" style="background:<?= $bg ?>;color:<?= $fg ?>;"><i class="fas <?= $type_icons[$c['type']] ?>"></i></div>
- <div><div class="contact-name"><?= htmlspecialchars($c['name']) ?></div><div class="contact-type-lbl" style="color:<?= $fg ?>;"><?= strtoupper(htmlspecialchars($c['type'])) ?></div></div>
- </div>
- <div class="contact-details">
- <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
- <?php if(!empty($c['contact_number'])): ?><div class="contact-row"><i class="fas fa-phone"></i><a href="tel:<?= htmlspecialchars($c['contact_number']) ?>"><?= htmlspecialchars($c['contact_number']) ?></a></div><?php endif; ?>
- <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
- </div>
- </div>
- <?php endforeach; ?>
- </div>
- </div>
+ <?php endif; ?>
  <?php endforeach; endif; ?>
 
  </div>
@@ -1143,6 +1247,63 @@ function actionToast(message,type){
 <script src="../assets/js/sentri-geo.js?v=<?= filemtime(__DIR__ . '/../assets/js/sentri-geo.js') ?>"></script>
 <script>
 const MY_USER_ID = <?= $uid ?>;
+const ALL_BRGY_CONTACTS = <?= json_encode($all_brgy_contacts) ?>;
+const USER_ASSIGNED_BRGY = <?= json_encode($user_barangay) ?>;
+
+function lookupOtherBrgyContact(bname) {
+  var container = document.getElementById('commBrgyCards');
+  var titleEl = document.getElementById('commBrgyTitle');
+  var countEl = document.getElementById('commBrgyCount');
+  var resetBtn = document.getElementById('commResetBrgyBtn');
+  if (!container) return;
+  if (!bname || !ALL_BRGY_CONTACTS[bname]) {
+    resetToMyBrgyContact();
+    return;
+  }
+  var c = ALL_BRGY_CONTACTS[bname];
+  var isMy = (USER_ASSIGNED_BRGY && bname.toLowerCase() === USER_ASSIGNED_BRGY.toLowerCase());
+  if (titleEl) titleEl.textContent = isMy ? ('Your Barangay Office (' + bname + ')') : ('Barangay Office (' + bname + ')');
+  if (countEl) countEl.textContent = '(1)';
+  if (resetBtn) resetBtn.style.display = isMy ? 'none' : 'inline-flex';
+
+  var badgeHtml = isMy ? ' <span style="background:#dcfce7;color:#166534;font-size:0.68rem;padding:2px 6px;border-radius:4px;font-weight:700;">YOUR BARANGAY</span>' : '';
+  var phoneHtml = c.contact_number ? '<div class="contact-row"><i class="fas fa-phone"></i><a href="tel:' + encodeURIComponent(c.contact_number) + '">' + escContactHtml(c.contact_number) + '</a></div>' : '';
+  var emailHtml = c.contact_email ? '<div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:' + encodeURIComponent(c.contact_email) + '">' + escContactHtml(c.contact_email) + '</a></div>' : '';
+
+  container.innerHTML = `
+    <div class="contact-card" style="border-left-color:#166534;">
+      <div class="contact-top">
+        <div class="contact-icon" style="background:#f0fdf4;color:#166534;"><i class="fas fa-house-flag"></i></div>
+        <div>
+          <div class="contact-name">${escContactHtml(c.name)}</div>
+          <div class="contact-type-lbl" style="color:#166534;display:flex;align-items:center;gap:6px;">
+            <span>BARANGAY</span>${badgeHtml}
+          </div>
+        </div>
+      </div>
+      <div class="contact-details">
+        <div class="contact-row"><i class="fas fa-city"></i>${escContactHtml(c.city + (c.province ? ', ' + c.province : ''))}</div>
+        ${phoneHtml}
+        ${emailHtml}
+      </div>
+    </div>
+  `;
+}
+
+function resetToMyBrgyContact() {
+  var sel = document.getElementById('commLookupBrgySelect');
+  if (sel) sel.value = USER_ASSIGNED_BRGY || '';
+  var resetBtn = document.getElementById('commResetBrgyBtn');
+  if (resetBtn) resetBtn.style.display = 'none';
+  if (USER_ASSIGNED_BRGY && ALL_BRGY_CONTACTS[USER_ASSIGNED_BRGY]) {
+    lookupOtherBrgyContact(USER_ASSIGNED_BRGY);
+  }
+}
+
+function escContactHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 // ── Client-side Tab Routing ──────────────────────────────────────────────
 const commTabMeta = {

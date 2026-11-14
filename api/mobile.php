@@ -970,7 +970,16 @@ switch ($action) {
     }
 
     case 'contacts': {
-        $stmt = $conn->prepare("SELECT id, name, type, barangay, city, contact_number, contact_email FROM emergency_contacts WHERE is_active = 1 ORDER BY type ASC, name ASC");
+        $token = get_bearer_token();
+        $auth_user = verify_token($token, $conn);
+        $req_brgy = trim($_GET['barangay'] ?? ($auth_user['barangay_name'] ?? ''));
+
+        if ($req_brgy !== '') {
+            $stmt = $conn->prepare("SELECT id, name, type, barangay, city, contact_number, contact_email FROM emergency_contacts WHERE is_active = 1 AND (type != 'barangay' OR barangay = ?) ORDER BY type ASC, name ASC");
+            $stmt->bind_param("s", $req_brgy);
+        } else {
+            $stmt = $conn->prepare("SELECT id, name, type, barangay, city, contact_number, contact_email FROM emergency_contacts WHERE is_active = 1 AND (type != 'barangay' OR barangay IS NULL) ORDER BY type ASC, name ASC");
+        }
         $stmt->execute();
         $res = $stmt->get_result();
         $contacts = [];
