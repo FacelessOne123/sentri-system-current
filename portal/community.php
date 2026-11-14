@@ -245,6 +245,7 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .menu a.active{background:rgba(255,255,255,.2);color:#fff;font-weight:700;border-left:3px solid rgba(255,255,255,.65);}
 .menu a i{font-size:1rem;width:18px;text-align:center;flex-shrink:0;}
 .menu-badge{margin-left:auto;background:rgba(255,255,255,.2);color:#fff;font-size:.65rem;padding:2px 7px;border-radius:20px;font-weight:700;}
+.menu-badge.alert{background:#e53e3e;}
 .sidebar-stats{padding:8px 14px 4px;}
 .stat-label-s{font-size:.68rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;padding:0 4px;}
 .stat-box{background:rgba(255,255,255,.08);border-radius:10px;padding:10px 14px;margin-bottom:7px;border:1px solid rgba(255,255,255,.05);}
@@ -591,6 +592,8 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-accent);border-col
 @keyframes fadeInUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
 @keyframes scaleIn{from{opacity:0;transform:scale(.97);}to{opacity:1;transform:scale(1);}}
 @keyframes cardEntrance{from{opacity:0;transform:translateY(24px);}to{opacity:1;transform:translateY(0);}}
+.report-card.dimmed{opacity:.55;filter:grayscale(.35);}
+.report-card.dimmed:hover{opacity:.85;}
 .report-card.just-updated{animation:cardEntrance .45s both,notifFlash 2.4s ease .15s;}
 @keyframes notifFlash{0%,100%{box-shadow:0 2px 10px rgba(0,0,0,.06);}20%,60%{box-shadow:0 0 0 3px rgba(56,161,105,.55),0 8px 24px rgba(56,161,105,.25);}}
 @keyframes spin{to{transform:rotate(360deg);}}
@@ -728,7 +731,7 @@ function actionToast(message,type){
  <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
  <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i> <?= $item['label'] ?>
  <?php if($key==='my_reports'&&$my_count>0): ?><span class="menu-badge"><?= $my_count ?></span><?php endif; ?>
- <?php if($key==='updates'): ?><span class="menu-badge" id="sbUpdatesBadge" style="display:none;background:#e53e3e;">0</span><?php endif; ?>
+ <?php if($key==='updates'): ?><span class="menu-badge alert" id="sbUpdatesBadge" style="display:none;">0</span><?php endif; ?>
  </a>
  <?php endforeach; ?>
  </nav>
@@ -1647,7 +1650,7 @@ function updateCardHtml(r){
  const color=isResolved?'var(--green)':'#2563eb';
  const loc=[r.location_name,r.barangay,r.city].filter(Boolean).join(', ');
  const at=parseTs(isResolved?r.resolved_at:r.updated_at)||parseTs(r.updated_at)||parseTs(r.created_at);
- return `<div class="report-card safe${isResolved?' dimmed':''}${_flashIds.has(r.id)?' just-updated':''}" style="cursor:pointer;" onclick="openUpdateItem(${r.id})">
+ return `<div class="report-card safe${isResolved?' dimmed':''}${_flashIds.has(r.id)?' just-updated':''}" style="cursor:pointer;animation-delay:0s;" onclick="openUpdateItem(${r.id})">
   <div class="card-header">
    <h3>${esc(r.title)}</h3>
    <span class="badge safe">${label}</span>
@@ -1740,9 +1743,12 @@ async function loadMyNotifs(){
    list.forEach(r=>{
     const curV=notifIsVerified(r)?1:0;
     next[r.id]={s:r.status,v:curV};
-    if(!prev)return;
+    if(!prev)return;                 // first run is a quiet baseline
     const p=prev[r.id];
-    if(!p){unread++;changed=true;changedIds.push(r.id);return;}
+    if(!p){unread++;changed=true;changedIds.push(r.id);return;} // newly notifiable report
+    // Count each report at most once, and only on a real transition. Extra
+    // upvotes past the 2-vote threshold do not re-notify, so repeated voting
+    // cannot multiply notifications.
     if(notifIsResolved(r)){ if(p.s!=='safe'){unread++;changed=true;changedIds.push(r.id);} return; }
     if(p.v!==1&&curV===1){unread++;changed=true;changedIds.push(r.id);}
    });
