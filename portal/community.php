@@ -6,6 +6,15 @@ require_role(['community','user']);
 require_approved();
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/geo.php';
+require_once __DIR__ . '/../core/weather.php';
+
+if (!function_exists('esc')) {
+    function esc($s): string {
+        return htmlspecialchars((string)($s ?? ''), ENT_QUOTES, 'UTF-8');
+    }
+}
+
+$live_weather = sentri_get_imus_weather();
 
 
 $identity = sentri_identity();
@@ -45,14 +54,6 @@ if ($user_barangay !== '') {
  if ($center !== null) { $home_area_lat = $center[0]; $home_area_lng = $center[1]; }
 }
 
-// Age of the last known fix, computed server-side so browser clocks and
-// timezones cannot produce a negative "2h ago".
-$saved_gps_age = null;
-if ($saved_gps_at !== null) {
- $ts = strtotime((string)$saved_gps_at);
- if ($ts !== false) $saved_gps_age = max(0, time() - $ts);
-}
-
 // Last known position for this user (a previous browser fix), so the app
 // has a location immediately on load even before a live fix arrives.
 $saved_gps_lat=$saved_gps_lng=null; $saved_gps_at=null; $saved_gps_source=null; $saved_gps_accuracy=null;
@@ -78,6 +79,14 @@ if(sentri_table_has_column($conn,'users','gps_lat')&&sentri_table_has_column($co
  }
 }
 
+// Age of the last known fix, computed server-side so browser clocks and
+// timezones cannot produce a negative "2h ago".
+$saved_gps_age = null;
+if ($saved_gps_at !== null) {
+ $ts = strtotime((string)$saved_gps_at);
+ if ($ts !== false) $saved_gps_age = max(0, time() - $ts);
+}
+
 // Barangay change lock: current value + seconds remaining, measured with DB
 // time so PHP/MySQL timezone differences cannot skew the countdown.
 [$lock_brgy, $brgy_lock_secs] = sentri_brgy_lock_state($conn, $uid);
@@ -90,12 +99,36 @@ if($avRes&&$avRes->num_rows>0){$as=$conn->prepare("SELECT avatar_color FROM user
 function cq($conn,$sql,$t='',$p=[]){$s=$conn->prepare($sql);if($t&&$p){$refs=[];foreach($p as &$v)$refs[]=&$v;array_unshift($refs,$t);call_user_func_array([$s,'bind_param'],$refs);}$s->execute();$s->bind_result($n);$s->fetch();$s->close();return(int)$n;}
 $total_reports=cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0 AND status!='safe'");
 $danger_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
-$safe_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
-$my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=? AND is_archived=0 AND status!='safe'",'i',[$uid]);
+$safe_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' OR is_archived=1");
+$my_count =cq($conn,"SELECT COUNT(*) FROM reports WHERE user_id=?",'i',[$uid]);
 
-/* ── Per-view data ────────────────────────────────────────────── */
+/* ── Per-view data: Scoped Emergency Contacts ────────────────────── */
+$all_contacts = [];
+$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");
+if($cs) while($r=$cs->fetch_assoc()) $all_contacts[]=$r;
+
+// Scope contacts for community member:
+// Include city-wide hotlines (LGU, Hospital, Police, Fire, Traffic, First Responders),
+// and strictly ONLY the resident's registered barangay office hotline.
 $contacts = [];
-if($view==='contacts'){$cs=$conn->query("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");if($cs)while($r=$cs->fetch_assoc())$contacts[]=$r;}
+$all_brgy_contacts = [];
+$user_brgy_canon = ($user_barangay !== '' && function_exists('sentri_barangay_canonical')) ? (sentri_barangay_canonical($user_barangay) ?? $user_barangay) : $user_barangay;
+
+foreach ($all_contacts as $c) {
+    $c_brgy = trim((string)($c['barangay'] ?? ''));
+    if ($c['type'] === 'barangay' && $c_brgy !== '') {
+        $all_brgy_contacts[$c_brgy] = $c;
+    }
+    if ($c['type'] !== 'barangay') {
+        $contacts[] = $c;
+    } else {
+        if ($c_brgy === '') continue; // Skip orphan or null barangay contacts safely
+        $c_canon = function_exists('sentri_barangay_canonical') ? (sentri_barangay_canonical($c_brgy) ?? $c_brgy) : $c_brgy;
+        if ($user_barangay !== '' && (strcasecmp($c_canon, $user_brgy_canon) === 0 || strcasecmp($c_brgy, $user_barangay) === 0)) {
+            $contacts[] = $c;
+        }
+    }
+}
 
 $profile_msg = '';
 if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_profile'])){
@@ -146,11 +179,38 @@ if($view==='profile'&&$_SERVER['REQUEST_METHOD']==='POST'&&isset($_POST['save_pr
 }
 
 /* ── Lookup maps ──────────────────────────────────────────────── */
-$type_icons =['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
-$type_colors=['lgu'=>['#f0f7ff','#0a3d62'],'hospital'=>['#ecfdf5','#059669'],'traffic'=>['#fffbeb','#d97706'],'barangay'=>['#f0fdf4','#166534'],'police'=>['#eff6ff','#2563eb'],'fire'=>['#fef2f2','#dc2626'],'other'=>['#f5f3ff','#7c3aed']];
-$type_labels=['lgu'=>'LGU Offices','hospital'=>'Hospitals','police'=>'Police','fire'=>'Fire Services','traffic'=>'Traffic Management','barangay'=>'Barangay Offices','other'=>'Other Services'];
-$nav=['overview'=>['icon'=>'fa-house','label'=>'Community Feed'],'my_reports'=>['icon'=>'fa-file-lines','label'=>'My Reports'],'map'=>['icon'=>'fa-map-location-dot','label'=>'Incidents Map'],'contacts'=>['icon'=>'fa-address-book','label'=>'Emergency Contacts'],'profile'=>['icon'=>'fa-id-card','label'=>'My Profile']];
-$page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'Incidents Map','contacts'=>'Emergency Contacts','profile'=>'My Profile'];
+$type_icons =[
+    'first_responder' => 'fa-truck-medical',
+    'police'          => 'fa-shield',
+    'fire'            => 'fa-fire-extinguisher',
+    'hospital'        => 'fa-hospital',
+    'traffic'         => 'fa-traffic-light',
+    'lgu'             => 'fa-landmark',
+    'barangay'        => 'fa-house-flag',
+    'other'           => 'fa-phone'
+];
+$type_colors=[
+    'first_responder' => ['#fef2f2','#dc2626'],
+    'police'          => ['#eff6ff','#2563eb'],
+    'fire'            => ['#fff1f2','#e11d48'],
+    'hospital'        => ['#ecfdf5','#059669'],
+    'traffic'         => ['#fffbeb','#d97706'],
+    'lgu'             => ['#f0f7ff','#0a3d62'],
+    'barangay'        => ['#f0fdf4','#166534'],
+    'other'           => ['#f5f3ff','#7c3aed']
+];
+$type_labels=[
+    'first_responder' => 'Emergency Response & Responders',
+    'police'          => 'Police Station',
+    'fire'            => 'Fire Protection Services',
+    'hospital'        => 'Hospitals & Medical Centers',
+    'traffic'         => 'Traffic Management',
+    'lgu'             => 'City Government & DRRM (LGU)',
+    'barangay'        => 'Barangay Office',
+    'other'           => 'Other Services'
+];
+$nav=['overview'=>['icon'=>'fa-house','label'=>'Community Feed'],'my_reports'=>['icon'=>'fa-file-lines','label'=>'My Reports'],'map'=>['icon'=>'fa-map-location-dot','label'=>'Incidents Map'],'updates'=>['icon'=>'fa-bell','label'=>'Notifications'],'contacts'=>['icon'=>'fa-address-book','label'=>'Emergency Contacts'],'profile'=>['icon'=>'fa-id-card','label'=>'My Profile']];
+$page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'Incidents Map','updates'=>'Notifications','contacts'=>'Emergency Contacts','profile'=>'My Profile'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -185,6 +245,7 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .menu a.active{background:rgba(255,255,255,.2);color:#fff;font-weight:700;border-left:3px solid rgba(255,255,255,.65);}
 .menu a i{font-size:1rem;width:18px;text-align:center;flex-shrink:0;}
 .menu-badge{margin-left:auto;background:rgba(255,255,255,.2);color:#fff;font-size:.65rem;padding:2px 7px;border-radius:20px;font-weight:700;}
+.menu-badge.alert{background:#e53e3e;}
 .sidebar-stats{padding:8px 14px 4px;}
 .stat-label-s{font-size:.68rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;padding:0 4px;}
 .stat-box{background:rgba(255,255,255,.08);border-radius:10px;padding:10px 14px;margin-bottom:7px;border:1px solid rgba(255,255,255,.05);}
@@ -339,9 +400,16 @@ body.dark .contacts-hdr{background:linear-gradient(135deg,#3d1f1f,#2e2010);borde
 .contact-row{display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--muted);}
 .contact-row a{color:var(--blue);text-decoration:none;font-weight:600;}
 .contact-row a:hover{text-decoration:underline;}
+.phone-type-tag{display:inline-flex;align-items:center;gap:4px;font-size:0.66rem;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:0.3px;text-transform:uppercase;flex-shrink:0;}
+.phone-type-telephone{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;}
+.phone-type-mobile{background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;}
+.phone-type-hotline{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;}
 body.dark .contact-card{background:var(--card);}
 body.dark .contact-name{color:var(--text);}
 body.dark .contact-row{color:#8b949e;}
+body.dark .phone-type-telephone{background:rgba(14,165,233,0.18);color:#7dd3fc;border-color:rgba(56,189,248,0.35);}
+body.dark .phone-type-mobile{background:rgba(34,197,94,0.18);color:#86efac;border-color:rgba(74,222,128,0.35);}
+body.dark .phone-type-hotline{background:rgba(239,68,68,0.18);color:#fca5a5;border-color:rgba(248,113,113,0.35);}
 
 /* ── Profile Page ── */
 .profile-grid{display:grid;grid-template-columns:300px 1fr;gap:22px;align-items:start;}
@@ -524,6 +592,10 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-accent);border-col
 @keyframes fadeInUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
 @keyframes scaleIn{from{opacity:0;transform:scale(.97);}to{opacity:1;transform:scale(1);}}
 @keyframes cardEntrance{from{opacity:0;transform:translateY(24px);}to{opacity:1;transform:translateY(0);}}
+.report-card.dimmed{opacity:.55;filter:grayscale(.35);}
+.report-card.dimmed:hover{opacity:.85;}
+.report-card.just-updated{animation:cardEntrance .45s both,notifFlash 2.4s ease .15s;}
+@keyframes notifFlash{0%,100%{box-shadow:0 2px 10px rgba(0,0,0,.06);}20%,60%{box-shadow:0 0 0 3px rgba(56,161,105,.55),0 8px 24px rgba(56,161,105,.25);}}
 @keyframes spin{to{transform:rotate(360deg);}}
 @keyframes toastSlide{from{opacity:0;transform:translateX(120%);}to{opacity:1;transform:translateX(0);}}
 @keyframes toastFade{from{opacity:1;transform:translateX(0);}to{opacity:0;transform:translateX(120%);}}
@@ -613,9 +685,13 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 /* ── Incident sub-type dropdown ── */
 .incident-fields{margin-top:14px;animation:fadeIn .25s ease;}
 .incident-fields label{display:block;font-size:.79rem;font-weight:700;color:var(--muted);margin-bottom:6px;}
-.incident-fields select,.incident-fields input[type=text]{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;box-sizing:border-box;}
-.incident-fields select:focus,.incident-fields input[type=text]:focus{border-color:var(--blue-accent);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
+.incident-fields select{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;}
+.incident-fields select:focus{border-color:var(--blue-accent);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
 
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; animation: fadeInView 0.22s ease both; }
+@keyframes fadeInView { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
@@ -648,13 +724,14 @@ function actionToast(message,type){
  <div class="brand-icon-s" style="background:rgba(243,156,18,.2);border-color:rgba(243,156,18,.4);"><i class="fas fa-shield-halved" style="color:#f39c12;"></i></div>
  <div><div class="brand-name-s">SenTri</div><div class="brand-sub">Community Portal</div></div>
  </div>
- <button class="toggle-btn" onclick="closeSidebar()"><i class="fas fa-xmark"></i></button>
+ <button type="button" class="toggle-btn" onclick="closeSidebar()" aria-label="Close navigation menu"><i class="fas fa-xmark" style="pointer-events:none;"></i></button>
  </div>
  <nav class="menu">
  <?php foreach($nav as $key=>$item): ?>
- <a href="community.php?view=<?= $key ?>" <?= $view===$key?'class="active"':'' ?>>
- <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
+ <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
+ <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i> <?= $item['label'] ?>
  <?php if($key==='my_reports'&&$my_count>0): ?><span class="menu-badge"><?= $my_count ?></span><?php endif; ?>
+ <?php if($key==='updates'): ?><span class="menu-badge alert" id="sbUpdatesBadge" style="display:none;">0</span><?php endif; ?>
  </a>
  <?php endforeach; ?>
  </nav>
@@ -678,15 +755,13 @@ function actionToast(message,type){
 <div class="main" id="main">
  <div class="topbar">
  <div class="topbar-left">
- <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
- <h1><i class="fas <?= $nav[$view]['icon']??'fa-house' ?>" style="color:var(--blue-accent);"></i><span><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?></span></h1>
+ <button type="button" class="ham-btn" onclick="openSidebar()" aria-label="Open navigation menu"><i class="fas fa-bars" style="pointer-events:none;"></i></button>
+ <h1><i id="commPageIcon" class="fas <?= $nav[$view]['icon']??'fa-house' ?>" style="color:var(--blue-accent);"></i><span id="commPageTitle"><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?></span></h1>
  </div>
  <div class="right-top">
- <?php if(in_array($view,['overview','my_reports','map'])): ?>
- <div class="gps-chip" id="gpsChip"><span class="gps-dot" id="gpsDot"></span><span id="gpsLabel">GPS Off</span><span id="gpsAcc" style="display:none;margin-left:3px;font-size:.6rem;font-weight:700;letter-spacing:.3px;" title="GPS accuracy — &lt;12m good / &lt;50m ok / weak"></span></div>
- <button class="post-btn" onclick="openModal()"><i class="fas fa-plus"></i> <span>Post Report</span></button>
- <?php endif; ?>
- <div class="user-info" onclick="window.location='community.php?view=profile'" title="My Profile">
+ <div class="gps-chip" id="gpsChip" style="display:<?= in_array($view,['overview','my_reports','map'])?'inline-flex':'none' ?>;"><span class="gps-dot" id="gpsDot"></span><span id="gpsLabel">GPS Off</span><span id="gpsAcc" style="display:none;margin-left:3px;font-size:.6rem;font-weight:700;letter-spacing:.3px;" title="GPS accuracy — &lt;12m good / &lt;50m ok / weak"></span></div>
+ <button class="post-btn" id="commPostBtn" onclick="openModal()" style="display:<?= in_array($view,['overview','my_reports','map'])?'inline-flex':'none' ?>;"><i class="fas fa-plus"></i> <span>Post Report</span></button>
+ <div class="user-info" onclick="showTab('profile')" title="My Profile">
  <div class="avatar" id="topAvatar" style="background:<?= htmlspecialchars($avatar_color) ?>"><?= strtoupper(substr($fname,0,1).substr($lname,0,1)) ?></div>
  <span class="user-name"><?= htmlspecialchars($fname) ?></span>
  </div>
@@ -695,19 +770,19 @@ function actionToast(message,type){
 
  <div class="content">
 
- <?php if($view==='overview'): ?>
+ <div class="tab-panel <?= $view==='overview'?'active':'' ?>" id="tab-overview">
  <div class="stats-row">
  <div class="stat-card" style="cursor:pointer;" onclick="resetFilters()" title="Click to view all reports"><div class="stat-icon blue"><i class="fas fa-clipboard-list"></i></div><div><strong><?= $total_reports ?></strong><span>Total Reports</span></div></div>
  <div class="stat-card" style="cursor:pointer;" onclick="quickFilterStatus('dangerous')" title="Click to filter dangerous areas"><div class="stat-icon red"><i class="fas fa-circle-exclamation"></i></div><div><strong><?= $danger_count ?></strong><span>Dangerous Areas</span></div></div>
  <div class="stat-card" style="cursor:pointer;" onclick="quickFilterStatus('safe')" title="Click to filter safe areas"><div class="stat-icon green"><i class="fas fa-circle-check"></i></div><div><strong><?= $safe_count ?></strong><span>Safe Areas</span></div></div>
- <div class="stat-card" style="cursor:pointer;" onclick="location.href='community.php?view=my_reports'" title="Click to view your submitted reports"><div class="stat-icon orange"><i class="fas fa-pen-to-square"></i></div><div><strong><?= $my_count ?></strong><span>My Reports</span></div></div>
+ <div class="stat-card" style="cursor:pointer;" onclick="showTab('my_reports')" title="Click to view your submitted reports"><div class="stat-icon orange"><i class="fas fa-pen-to-square"></i></div><div><strong><?= $my_count ?></strong><span>My Reports</span></div></div>
  </div>
 
  <!-- ── Dynamic Weather Watch & Flash Advisory Banner ── -->
  <div class="weather-flash-banner" style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);border-left:4px solid #38bdf8;border-radius:14px;padding:12px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;box-shadow:0 4px 16px rgba(0,0,0,0.18);">
  <div style="display:flex;align-items:center;gap:10px;min-width:0;">
- <span style="background:#0284c7;color:#fff;font-size:0.68rem;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;padding:3px 8px;border-radius:6px;flex-shrink:0;"><i class="fas fa-cloud-bolt"></i> Weather Watch</span>
- <span style="font-size:0.83rem;color:#f1f5f9;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><strong style="color:#38bdf8;">NCR Advisory:</strong> Heavy rainfall & thunderstorm advisory in effect. Flood risk alert for low-lying areas.</span>
+ <span style="background:#0284c7;color:#fff;font-size:0.68rem;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;padding:3px 8px;border-radius:6px;flex-shrink:0;"><i class="fas fa-cloud-bolt"></i> Imus Weather</span>
+ <span style="font-size:0.83rem;color:#f1f5f9;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><strong style="color:#38bdf8;"><?= esc($live_weather['location']) ?>:</strong> <?= esc($live_weather['condition']) ?> (<?= esc($live_weather['temperature']) ?>) &bull; <?= esc($live_weather['emergency_advisory']) ?></span>
  </div>
  <button onclick="openWeatherModal()" style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.35);color:#38bdf8;padding:6px 12px;border-radius:8px;font-size:0.76rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.15s;font-family:'Poppins',sans-serif;" onmouseover="this.style.background='rgba(56,189,248,0.25)'" onmouseout="this.style.background='rgba(56,189,248,0.15)'"><i class="fas fa-circle-info"></i> Advisory Details</button>
  </div>
@@ -763,16 +838,18 @@ function actionToast(message,type){
  </div>
  <div id="feed"><div class="loading"><i class="fas fa-spinner"></i> Loading community reports…</div></div>
 
- <?php elseif($view==='my_reports'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='my_reports'?'active':'' ?>" id="tab-my_reports">
  <div class="my-reports-hdr">
  <div class="mh-icon"><i class="fas fa-file-lines"></i></div>
  <div><h2>My Reports</h2><p>All <?= $my_count ?> report<?= $my_count!==1?'s':'' ?> you've submitted</p></div>
  </div>
  <div class="filters">
- <input type="text" id="searchInput" placeholder="Search my reports...">
- <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
- <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
- <select id="timeFilter" title="Show only incidents from this time range">
+ <input type="text" id="mySearchInput" placeholder="Search my reports...">
+ <select id="myStatusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
+ <select id="myCategoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+ <select id="myTimeFilter" title="Show only incidents from this time range">
  <option value="">Any time</option>
  <option value="15">Last 15 min</option>
  <option value="60">Last hour</option>
@@ -780,11 +857,13 @@ function actionToast(message,type){
  <option value="10080">Last 7 days</option>
  <option value="43200">Last 30 days</option>
  </select>
- <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
+ <button onclick="resetMyFilters()"><i class="fas fa-rotate"></i> Reset</button>
  </div>
- <div id="feed"><div class="loading"><i class="fas fa-spinner"></i> Loading your reports…</div></div>
+ <div id="myFeed"><div class="loading"><i class="fas fa-spinner"></i> Loading your reports…</div></div>
 
- <?php elseif($view==='map'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='map'?'active':'' ?>" id="tab-map">
  <div id="mapWrap">
  <div id="incidentMap"></div>
  <div class="map-legend">
@@ -794,7 +873,17 @@ function actionToast(message,type){
  </div>
  </div>
 
- <?php elseif($view==='contacts'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='updates'?'active':'' ?>" id="tab-updates">
+ <div class="my-reports-hdr">
+ <div class="mh-icon"><i class="fas fa-bell"></i></div>
+ <div><h2>Notifications</h2><p>Updates when your reports are validated or marked safe</p></div>
+ </div>
+ <div id="updatesList"><div class="loading"><i class="fas fa-spinner"></i> Loading your notifications…</div></div>
+ </div>
+
+  <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
  <div class="contacts-hdr">
  <div class="ch-icon"><i class="fas fa-phone-volume"></i></div>
  <div><h2>Emergency Contacts</h2><p>Local emergency services, hospitals, and responder hotlines</p></div>
@@ -803,33 +892,90 @@ function actionToast(message,type){
  <div class="empty"><i class="fas fa-address-book"></i><p>No emergency contacts set up yet.<br>Contact your local administrator.</p></div>
  <?php else:
  $grouped=[];foreach($contacts as $c)$grouped[$c['type']][]=$c;
- foreach($type_labels as $type=>$label):if(empty($grouped[$type]))continue;[$bg,$fg]=$type_colors[$type]; ?>
+ foreach($type_labels as $type=>$label):
+  if($type !== 'barangay' && empty($grouped[$type])) continue;
+  [$bg,$fg] = $type_colors[$type] ?? ['#f0f7ff','#0a3d62'];
+ ?>
+ <?php if($type === 'barangay'): ?>
+ <div style="margin-bottom:24px;" id="commBrgySection">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+   <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:34px;height:34px;border-radius:9px;background:<?= $bg ?>;display:flex;align-items:center;justify-content:center;color:<?= $fg ?>;font-size:.95rem;flex-shrink:0;"><i class="fas <?= $type_icons[$type] ?>"></i></div>
+    <span style="font-size:.95rem;font-weight:700;color:var(--text);" id="commBrgyTitle"><?= !empty($user_barangay) ? 'Your Barangay Office (' . htmlspecialchars($user_barangay) . ')' : 'Barangay Office' ?></span>
+    <span style="font-size:.78rem;color:var(--muted);" id="commBrgyCount">(<?= !empty($grouped['barangay']) ? count($grouped['barangay']) : 0 ?>)</span>
+   </div>
+   <div style="display:flex;align-items:center;gap:8px;font-size:0.8rem;">
+    <span style="color:var(--muted);font-size:0.76rem;"><i class="fas fa-magnifying-glass"></i> Other Barangay:</span>
+    <select id="commLookupBrgySelect" onchange="lookupOtherBrgyContact(this.value)" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:0.78rem;background:var(--card);color:var(--text);outline:none;cursor:pointer;">
+     <option value="">-- View another barangay --</option>
+     <?php foreach($all_brgy_contacts as $bname => $bc): ?>
+     <option value="<?= htmlspecialchars($bname) ?>" <?= ($bname === $user_barangay)?'selected':'' ?>><?= htmlspecialchars($bname) ?></option>
+     <?php endforeach; ?>
+    </select>
+    <button type="button" id="commResetBrgyBtn" onclick="resetToMyBrgyContact()" style="display:none;padding:5px 9px;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:8px;font-size:0.75rem;font-weight:600;cursor:pointer;"><i class="fas fa-rotate-left"></i> My Barangay</button>
+   </div>
+  </div>
+  <div class="contacts-grid" id="commBrgyCards">
+   <?php if(empty($grouped['barangay'])): ?>
+    <div style="grid-column:1/-1;padding:18px 20px;background:var(--card);border:1.5px dashed var(--border);border-radius:12px;color:var(--muted);font-size:0.83rem;display:flex;align-items:center;gap:12px;">
+     <i class="fas fa-house-flag" style="font-size:1.3rem;color:var(--muted);"></i>
+     <span>No barangay assigned to your profile yet. <a href="#tab=profile" onclick="showTab('profile')" style="color:var(--blue);font-weight:600;text-decoration:none;">Set your registered barangay in My Profile</a> to view your local barangay emergency hotline.</span>
+    </div>
+   <?php else: ?>
+    <?php foreach($grouped['barangay'] as $i=>$c): ?>
+     <div class="contact-card" style="border-left-color:<?= $fg ?>;animation-delay:<?= $i*.05 ?>s;">
+      <div class="contact-top">
+       <div class="contact-icon" style="background:<?= $bg ?>;color:<?= $fg ?>;"><i class="fas <?= $type_icons[$c['type']] ?>"></i></div>
+       <div>
+        <div class="contact-name"><?= htmlspecialchars($c['name']) ?></div>
+        <div class="contact-type-lbl" style="color:<?= $fg ?>;display:flex;align-items:center;gap:6px;">
+         <span><?= strtoupper(htmlspecialchars($c['type'])) ?></span>
+         <?php if(!empty($user_barangay) && strcasecmp(trim($c['barangay']), trim($user_barangay)) === 0): ?>
+          <span style="background:#dcfce7;color:#166534;font-size:0.68rem;padding:2px 6px;border-radius:4px;font-weight:700;">YOUR BARANGAY</span>
+         <?php endif; ?>
+        </div>
+       </div>
+      </div>
+      <div class="contact-details">
+       <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
+       <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '') ?>
+       <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
+      </div>
+     </div>
+    <?php endforeach; ?>
+   <?php endif; ?>
+  </div>
+ </div>
+ <?php else: ?>
  <div style="margin-bottom:24px;">
- <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
- <div style="width:34px;height:34px;border-radius:9px;background:<?= $bg ?>;display:flex;align-items:center;justify-content:center;color:<?= $fg ?>;font-size:.95rem;flex-shrink:0;"><i class="fas <?= $type_icons[$type] ?>"></i></div>
- <span style="font-size:.95rem;font-weight:700;color:var(--text);"><?= $label ?></span>
- <span style="font-size:.78rem;color:var(--muted);">(<?= count($grouped[$type]) ?>)</span>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+   <div style="width:34px;height:34px;border-radius:9px;background:<?= $bg ?>;display:flex;align-items:center;justify-content:center;color:<?= $fg ?>;font-size:.95rem;flex-shrink:0;"><i class="fas <?= $type_icons[$type] ?>"></i></div>
+   <span style="font-size:.95rem;font-weight:700;color:var(--text);"><?= $label ?></span>
+   <span style="font-size:.78rem;color:var(--muted);">(<?= count($grouped[$type]) ?>)</span>
+  </div>
+  <div class="contacts-grid">
+   <?php foreach($grouped[$type] as $i=>$c): ?>
+   <div class="contact-card" style="border-left-color:<?= $fg ?>;animation-delay:<?= $i*.05 ?>s;">
+    <div class="contact-top">
+     <div class="contact-icon" style="background:<?= $bg ?>;color:<?= $fg ?>;"><i class="fas <?= $type_icons[$c['type']] ?>"></i></div>
+     <div><div class="contact-name"><?= htmlspecialchars($c['name']) ?></div><div class="contact-type-lbl" style="color:<?= $fg ?>;"><?= strtoupper(htmlspecialchars($c['type'])) ?></div></div>
+    </div>
+    <div class="contact-details">
+     <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
+     <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '') ?>
+     <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
+    </div>
+   </div>
+   <?php endforeach; ?>
+  </div>
  </div>
- <div class="contacts-grid">
- <?php foreach($grouped[$type] as $i=>$c): ?>
- <div class="contact-card" style="border-left-color:<?= $fg ?>;animation-delay:<?= $i*.05 ?>s;">
- <div class="contact-top">
- <div class="contact-icon" style="background:<?= $bg ?>;color:<?= $fg ?>;"><i class="fas <?= $type_icons[$c['type']] ?>"></i></div>
- <div><div class="contact-name"><?= htmlspecialchars($c['name']) ?></div><div class="contact-type-lbl" style="color:<?= $fg ?>;"><?= strtoupper(htmlspecialchars($c['type'])) ?></div></div>
- </div>
- <div class="contact-details">
- <div class="contact-row"><i class="fas fa-city"></i><?= htmlspecialchars($c['city']).(isset($c['province'])&&$c['province']?', '.htmlspecialchars($c['province']):'') ?></div>
- <?php if(!empty($c['contact_number'])): ?><div class="contact-row"><i class="fas fa-phone"></i><a href="tel:<?= htmlspecialchars($c['contact_number']) ?>"><?= htmlspecialchars($c['contact_number']) ?></a></div><?php endif; ?>
- <?php if(!empty($c['contact_email'])): ?><div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:<?= htmlspecialchars($c['contact_email']) ?>"><?= htmlspecialchars($c['contact_email']) ?></a></div><?php endif; ?>
- </div>
- </div>
- <?php endforeach; ?>
- </div>
- </div>
+ <?php endif; ?>
  <?php endforeach; endif; ?>
 
- <?php elseif($view==='profile'):
- [$pm_type,$pm_text]=$profile_msg?explode(':',$profile_msg,2):['','']; ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
+  <?php [$pm_type,$pm_text]=$profile_msg?explode(':',$profile_msg,2):['','']; ?>
  <div class="profile-grid">
  <div class="profile-card">
  <div class="profile-avatar-section">
@@ -846,7 +992,7 @@ function actionToast(message,type){
  <div class="profile-card">
  <?php if($pm_text): ?><div class="pf-msg <?= htmlspecialchars($pm_type) ?>" style="display:block;"><?= htmlspecialchars($pm_text) ?></div><?php endif; ?>
  <div id="pfMsg" class="pf-msg"></div>
- <form method="post" action="community.php?view=profile">
+ <form method="post" action="community.php#tab=profile">
  <input type="hidden" name="save_profile" value="1">
  <div class="pf-section-label">Personal Information</div>
  <div class="form-row">
@@ -887,7 +1033,7 @@ function actionToast(message,type){
  </form>
  </div>
  </div>
- <?php endif; ?>
+ </div>
 
 
  </div>
@@ -993,10 +1139,19 @@ function actionToast(message,type){
     </select>
 </div>
 
-<!-- Other -->
+<!-- Other Dropdown -->
 <div id="other_fields" class="incident-fields" style="display: none;">
-    <label for="other_text">What is the incident? <span style="font-weight:400;color:var(--muted);">(required)</span></label>
-    <input type="text" name="other_text" id="other_text" maxlength="100" required placeholder="e.g. Stray dogs, illegal dumping, damaged signage…">
+    <label for="other_type">Select Incident Type</label>
+    <select name="other_type" id="other_type">
+        <option value="noise_complaint">Noise Complaint</option>
+        <option value="missing_person">Missing Person</option>
+        <option value="suspicious_activity">Suspicious Activity</option>
+        <option value="public_disturbance">Public Disturbance</option>
+    </select>
+    <div class="form-group" style="margin-top:10px;margin-bottom:0;">
+        <label for="other_text">Please specify <span style="font-weight:400;color:var(--muted);">(what is the incident?)</span></label>
+        <input type="text" name="other_text" id="other_text" maxlength="100" placeholder="e.g. Stray dogs, illegal dumping, damaged signage…">
+    </div>
 </div>
 
 
@@ -1096,6 +1251,19 @@ function actionToast(message,type){
  </div>
 </div>
 
+<!-- ═══ UPDATE DETAIL (resolved / archived reports) ═══ -->
+<div class="detail-overlay" id="updateDetailOverlay" onclick="if(event.target===this)closeUpdateDetail()">
+ <div class="detail-modal" style="max-width:480px;">
+ <button class="detail-close" onclick="closeUpdateDetail()"><i class="fas fa-xmark"></i></button>
+ <div class="detail-header">
+ <div class="detail-status-bar"><span class="detail-badge" id="u_badge"></span></div>
+ <div class="detail-title" id="u_title"></div>
+ <div class="detail-reporter" id="u_reporter"></div>
+ </div>
+ <div class="detail-body"><div class="detail-meta-grid" id="u_meta"></div></div>
+ </div>
+</div>
+
 <!-- ═══ MINI MAP ═══ -->
 <div class="mini-map-modal" id="miniMapModal" onclick="closeMiniMap(event)">
  <div class="mini-map-box">
@@ -1115,7 +1283,172 @@ function actionToast(message,type){
 <script src="../assets/js/sentri-geo.js?v=<?= filemtime(__DIR__ . '/../assets/js/sentri-geo.js') ?>"></script>
 <script>
 const MY_USER_ID = <?= $uid ?>;
-const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
+const ALL_BRGY_CONTACTS = <?= json_encode($all_brgy_contacts) ?>;
+const USER_ASSIGNED_BRGY = <?= json_encode($user_barangay) ?>;
+
+function lookupOtherBrgyContact(bname) {
+  var container = document.getElementById('commBrgyCards');
+  var titleEl = document.getElementById('commBrgyTitle');
+  var countEl = document.getElementById('commBrgyCount');
+  var resetBtn = document.getElementById('commResetBrgyBtn');
+  if (!container) return;
+  if (!bname || !ALL_BRGY_CONTACTS[bname]) {
+    resetToMyBrgyContact();
+    return;
+  }
+  var c = ALL_BRGY_CONTACTS[bname];
+  var isMy = (USER_ASSIGNED_BRGY && bname.toLowerCase() === USER_ASSIGNED_BRGY.toLowerCase());
+  if (titleEl) titleEl.textContent = isMy ? ('Your Barangay Office (' + bname + ')') : ('Barangay Office (' + bname + ')');
+  if (countEl) countEl.textContent = '(1)';
+  if (resetBtn) resetBtn.style.display = isMy ? 'none' : 'inline-flex';
+
+  var badgeHtml = isMy ? ' <span style="background:#dcfce7;color:#166534;font-size:0.68rem;padding:2px 6px;border-radius:4px;font-weight:700;">YOUR BARANGAY</span>' : '';
+  var phoneHtml = formatContactNumbersJs(c.contact_number);
+  var emailHtml = c.contact_email ? '<div class="contact-row"><i class="fas fa-envelope"></i><a href="mailto:' + encodeURIComponent(c.contact_email) + '">' + escContactHtml(c.contact_email) + '</a></div>' : '';
+
+  container.innerHTML = `
+    <div class="contact-card" style="border-left-color:#166534;">
+      <div class="contact-top">
+        <div class="contact-icon" style="background:#f0fdf4;color:#166534;"><i class="fas fa-house-flag"></i></div>
+        <div>
+          <div class="contact-name">${escContactHtml(c.name)}</div>
+          <div class="contact-type-lbl" style="color:#166534;display:flex;align-items:center;gap:6px;">
+            <span>BARANGAY</span>${badgeHtml}
+          </div>
+        </div>
+      </div>
+      <div class="contact-details">
+        <div class="contact-row"><i class="fas fa-city"></i>${escContactHtml(c.city + (c.province ? ', ' + c.province : ''))}</div>
+        ${phoneHtml}
+        ${emailHtml}
+      </div>
+    </div>
+  `;
+}
+
+function resetToMyBrgyContact() {
+  var sel = document.getElementById('commLookupBrgySelect');
+  if (sel) sel.value = USER_ASSIGNED_BRGY || '';
+  var resetBtn = document.getElementById('commResetBrgyBtn');
+  if (resetBtn) resetBtn.style.display = 'none';
+  if (USER_ASSIGNED_BRGY && ALL_BRGY_CONTACTS[USER_ASSIGNED_BRGY]) {
+    lookupOtherBrgyContact(USER_ASSIGNED_BRGY);
+  }
+}
+
+function escContactHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatContactNumbersJs(raw) {
+  if (!raw) return '';
+  var parts = String(raw).split(/[\/\n]/);
+  var html = '';
+  parts.forEach(function(p) {
+    p = p.trim();
+    if (!p) return;
+    var digitsOnly = p.replace(/[^0-9]/g, '');
+    var norm = p.replace(/[\s-]/g, '');
+    var type = 'telephone';
+    var label = 'Telephone';
+    var icon = 'fa-phone';
+
+    if (/^(09|\+?639)\d{9}$/.test(norm) || (digitsOnly.length === 11 && digitsOnly.indexOf('09') === 0) || (digitsOnly.length === 12 && digitsOnly.indexOf('639') === 0)) {
+      type = 'mobile';
+      label = 'Mobile';
+      icon = 'fa-mobile-screen-button';
+    } else if (['911', '117', '16211', '1626'].indexOf(digitsOnly) !== -1 || (digitsOnly.length >= 3 && digitsOnly.length <= 4 && digitsOnly.indexOf('0') !== 0)) {
+      type = 'hotline';
+      label = 'Hotline';
+      icon = 'fa-tower-broadcast';
+    }
+
+    var dial = p.replace(/[^0-9+]/g, '');
+    var locMatch = p.match(/loc\.\s*(\d+)/i);
+    if (locMatch) {
+      dial = p.replace(/loc\..*$/i, '').replace(/[^0-9+]/g, '') + ',' + locMatch[1];
+    }
+
+    html += '<div class="contact-row contact-phone-row" style="display:flex;align-items:center;gap:7px;margin-top:3px;flex-wrap:wrap;">' +
+      '<span class="phone-type-tag phone-type-' + type + '"><i class="fas ' + icon + '" style="font-size:0.62rem;"></i>' + escContactHtml(label) + '</span>' +
+      '<a href="tel:' + encodeURIComponent(dial) + '">' + escContactHtml(p) + '</a>' +
+      '</div>';
+  });
+  return html;
+}
+
+// ── Client-side Tab Routing ──────────────────────────────────────────────
+const commTabMeta = {
+  overview: { title: 'Community Feed', icon: 'fa-house' },
+  my_reports: { title: 'My Reports', icon: 'fa-file-lines' },
+  map: { title: 'Incidents Map', icon: 'fa-map-location-dot' },
+  updates: { title: 'Notifications', icon: 'fa-bell' },
+  contacts: { title: 'Emergency Contacts', icon: 'fa-address-book' },
+  profile: { title: 'My Profile', icon: 'fa-id-card' }
+};
+
+function showTab(name) {
+  if (!commTabMeta[name]) return;
+  CURRENT_VIEW = name;
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.menu a').forEach(function(a){ a.classList.remove('active'); });
+  var target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+  
+  var titleEl = document.getElementById('commPageTitle');
+  if (titleEl) titleEl.textContent = commTabMeta[name].title;
+  var iconEl = document.getElementById('commPageIcon');
+  if (iconEl) iconEl.className = 'fas ' + commTabMeta[name].icon;
+  
+  var isReportTab = ['overview', 'my_reports', 'map'].includes(name);
+  var gps = document.getElementById('gpsChip');
+  if (gps) gps.style.display = isReportTab ? 'inline-flex' : 'none';
+  var post = document.getElementById('commPostBtn');
+  if (post) post.style.display = isReportTab ? 'inline-flex' : 'none';
+  
+  try { history.replaceState(null, '', '#tab=' + name); } catch(e){}
+  
+  if (name === 'map') {
+    setTimeout(function(){
+      renderMainMap();
+      if (typeof mainMap !== 'undefined' && mainMap) {
+        mainMap.invalidateSize();
+      }
+    }, 80);
+  } else if (name === 'overview' || name === 'my_reports') {
+    renderFeed();
+  } else if (name === 'updates') {
+    renderUpdatesList();
+    markNotifsRead();
+    loadMyNotifs();
+  }
+  if (isMobile()) {
+    if (typeof closeSidebar === 'function') closeSidebar();
+  } else {
+    var sb = document.getElementById('sidebar');
+    if (sb) sb.classList.remove('closed');
+    var m = document.querySelector('.main');
+    if (m) m.style.marginLeft = 'var(--sidebar-w)';
+  }
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  if (!isMobile()) {
+    var sb = document.getElementById('sidebar');
+    if (sb) sb.classList.remove('closed');
+    var m = document.querySelector('.main');
+    if (m) m.style.marginLeft = 'var(--sidebar-w)';
+  }
+  var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
+  if (hash && commTabMeta[hash]) {
+    showTab(hash);
+  }
+});
+
+let CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
 const INIT_COLOR = '<?= htmlspecialchars($avatar_color) ?>';
 const DM_KEY = `sentri_dm_${MY_USER_ID}`;
 
@@ -1124,6 +1457,13 @@ const SF = {dangerous:'rgba(229,62,62,.15)',caution:'rgba(221,107,32,.15)',safe:
 const CI = {crime:'fa-user-shield',accident:'fa-car-burst',flooding:'fa-water',fire:'fa-fire',health:'fa-heart-pulse',infrastructure:'fa-road',other:'fa-circle-info'};
 const CL = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
 const SWATCHES = ['#1c57b2','#0e3d8c','#3a8dff','#7c3aed','#db2777','#dc2626','#ea580c','#d97706','#16a34a','#0891b2','#374151','#be185d','#0f766e','#7c2d12','#1d4ed8'];
+
+function normImgUrl(u){
+ if(!u) return '';
+ if(u.startsWith('http://') || u.startsWith('https://')) return u;
+ if(u.startsWith('/')) return u;
+ return '/' + u.replace(/^\.\//, '').replace(/^\.\.\//, '');
+}
 
 let allReports=[], curView='feed';
 let userLat=null, userLng=null, hasGPS=false, liveGPS=false;
@@ -1155,7 +1495,7 @@ function toggleDark(){const d=document.body.classList.toggle('dark');document.ge
 function isMobile(){return window.innerWidth<=900;}
 function openSidebar(){const sb=document.getElementById('sidebar'),ov=document.getElementById('overlay');if(isMobile()){sb.classList.add('mobile-open');ov.classList.add('show');}else{sb.classList.remove('closed');document.querySelector('.main').style.marginLeft='var(--sidebar-w)';}}
 function closeSidebar(){const sb=document.getElementById('sidebar'),ov=document.getElementById('overlay');if(isMobile()){sb.classList.remove('mobile-open');ov.classList.remove('show');}else{sb.classList.add('closed');document.querySelector('.main').style.marginLeft='0';}}
-window.addEventListener('resize',()=>{if(!isMobile()){document.getElementById('sidebar').classList.remove('mobile-open');document.getElementById('overlay').classList.remove('show');}});
+window.addEventListener('resize',()=>{if(!isMobile()){const sb=document.getElementById('sidebar');if(sb){sb.classList.remove('mobile-open');sb.classList.remove('closed');}const ov=document.getElementById('overlay');if(ov)ov.classList.remove('show');const m=document.querySelector('.main');if(m)m.style.marginLeft='var(--sidebar-w)';}});
 
 /* GPS */
 /* GPS source tracking: a live browser fix, or a labelled fallback (the last
@@ -1262,20 +1602,216 @@ function checkProximity(){if(!hasGPS||userLat===null)return;const now=Date.now()
 function showToast(r,dm){const d=dm<1000?dm+'m':(dm/1000).toFixed(1)+'km';const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};const t=document.createElement('div');t.className=`toast ${r.status}`;t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[r.status]}"></i></div><div><div class="toast-title">Nearby ${ucFirst(r.status)} Report</div><div class="toast-body"><strong>${esc(r.title)}</strong><br>You are ${d} away · ${esc(r.city)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;document.getElementById('toastContainer').appendChild(t);setTimeout(()=>dismissToast(t),5200);}
 function dismissToast(t){if(!t||!t.parentElement)return;t.classList.add('fade-out');setTimeout(()=>{if(t.parentElement)t.parentElement.removeChild(t);},400);}
 
+/* ── Notifications: only validated / safe reports ── */
+const NOTIF_STATUS_KEY=`sentri_report_status_${MY_USER_ID}`;
+let notifItems=[];
+let _notifBusy=false,_notifTimer=null,_notifDelay=15000;
+let _reportsBusy=false;
+const _flashIds=new Set();
+
+function readNotifStatusMap(){
+ try{
+  const raw=localStorage.getItem(NOTIF_STATUS_KEY);
+  if(!raw)return null;
+  const m=JSON.parse(raw)||null;
+  if(!m)return null;
+  const out={};
+  Object.keys(m).forEach(k=>{
+   const v=m[k];
+   out[k]=(v&&typeof v==='object')?{s:v.s||'',v:(v.v===1?1:0)}:{s:String(v||''),v:0};
+  });
+  return out;
+ }catch(e){return null;}
+}
+function markNotifsRead(){
+ const b=document.getElementById('sbUpdatesBadge');if(b)b.style.display='none';
+}
+function notifAgo(s){
+ const t=parseTs(s);
+ if(t===null)return '';
+ const sec=Math.max(0,Math.round((Date.now()-t)/1000));
+ if(sec<60)return 'just now';
+ if(sec<3600)return Math.round(sec/60)+'m ago';
+ if(sec<86400)return Math.round(sec/3600)+'h ago';
+ if(sec<604800)return Math.round(sec/86400)+'d ago';
+ return new Date(t).toLocaleDateString('en-PH',{month:'short',day:'numeric'});
+}
+const NOTIF_STATUS_LABEL={dangerous:'Dangerous',caution:'Caution',safe:'Safe'};
+function notifIsResolved(r){return r.status==='safe'||!!r.resolved_at;}
+function notifIsVerified(r){return Number(r.upvotes)>=2;}
+
+function updateCardHtml(r){
+ const isResolved=notifIsResolved(r);
+ const label=isResolved?'Safe':'Verified';
+ const msg=isResolved
+  ? 'Your report is now marked Safe'
+  : 'Your report was validated by the community';
+ const icon=isResolved?'fa-circle-check':'fa-shield-halved';
+ const color=isResolved?'var(--green)':'#2563eb';
+ const loc=[r.location_name,r.barangay,r.city].filter(Boolean).join(', ');
+ const at=parseTs(isResolved?r.resolved_at:r.updated_at)||parseTs(r.updated_at)||parseTs(r.created_at);
+ return `<div class="report-card safe${isResolved?' dimmed':''}${_flashIds.has(r.id)?' just-updated':''}" style="cursor:pointer;animation-delay:0s;" onclick="openUpdateItem(${r.id})">
+  <div class="card-header">
+   <h3>${esc(r.title)}</h3>
+   <span class="badge safe">${label}</span>
+  </div>
+  <div class="card-body" style="margin-bottom:8px;">
+   <p style="display:flex;align-items:center;gap:7px;font-weight:600;color:${color};">
+    <i class="fas ${icon}"></i> ${msg}
+   </p>
+  </div>
+  <div class="card-meta" style="margin-bottom:0;">
+   ${loc?`<span><i class="fas fa-map-location-dot"></i>${esc(loc)}</span>`:''}
+   <span><i class="fas fa-clock"></i>${notifAgo(at)}</span>
+   <span><i class="fas fa-thumbs-up" style="color:var(--green);"></i>${r.upvotes} upvote${r.upvotes===1?'':'s'}</span>
+  </div>
+ </div>`;
+}
+
+function renderUpdatesList(){
+ const el=document.getElementById('updatesList');if(!el)return;
+ if(!notifItems.length){
+  el.innerHTML='<div class="empty"><i class="fas fa-bell-slash"></i><p>No notifications yet.<br>You will be notified here when a report is validated or marked safe.</p></div>';
+  return;
+ }
+ const items=notifItems.slice().sort((a,b)=>(parseTs(b.resolved_at)||parseTs(b.updated_at)||0)-(parseTs(a.resolved_at)||parseTs(a.updated_at)||0));
+ el.innerHTML=items.map(updateCardHtml).join('');
+}
+
+function updateUpdatesBadge(unread){
+ const b=document.getElementById('sbUpdatesBadge');
+ if(!b)return;
+ if(unread>0){b.textContent=unread>9?'9+':String(unread);b.style.display='';}
+ else b.style.display='none';
+}
+
+function openUpdateItem(id){
+ const r=notifItems.find(x=>x.id==id);
+ if(!r)return;
+ const live=allReports.find(x=>x.id==id);
+ if(live){openDetail(id);return;}
+ openUpdateDetail(r);
+}
+function openUpdateDetail(r){
+ const isResolved=notifIsResolved(r);
+ const badge=document.getElementById('u_badge');
+ if(badge){badge.textContent=isResolved?'Safe':(NOTIF_STATUS_LABEL[r.status]||ucFirst(r.status));badge.className='detail-badge '+r.status;}
+ document.getElementById('u_title').textContent=r.title;
+ document.getElementById('u_reporter').innerHTML=`Filed ${notifAgo(r.created_at)}${isResolved?' · Resolved '+notifAgo(r.resolved_at):''}`;
+ const loc=[r.location_name,r.barangay,r.city].filter(Boolean).join(', ');
+ document.getElementById('u_meta').innerHTML=[
+  {icon:'fa-circle-dot',color:r.status==='safe'?'var(--green)':r.status==='dangerous'?'var(--red)':'var(--orange)',label:'Status',value:NOTIF_STATUS_LABEL[r.status]||ucFirst(r.status)},
+  {icon:'fa-thumbs-up',color:'var(--green)',label:'Community Upvotes',value:r.upvotes},
+  {icon:'fa-map-location-dot',color:'#888',label:'Location',value:loc||'—'},
+  {icon:'fa-clock',color:'#888',label:'Last Activity',value:notifAgo(r.updated_at)||'—'}
+ ].map(m=>`<div class="detail-meta-item"><div class="detail-meta-label">${m.label}</div><div class="detail-meta-value"><i class="fas ${m.icon}" style="color:${m.color};"></i>${esc(m.value)}</div></div>`).join('');
+ document.getElementById('updateDetailOverlay').classList.add('open');
+ document.body.style.overflow='hidden';
+}
+function closeUpdateDetail(){
+ document.getElementById('updateDetailOverlay').classList.remove('open');
+ document.body.style.overflow='';
+}
+function notifToast(title,body,status){
+ const cls=status==='dangerous'?'dangerous':status==='caution'?'caution':'safe';
+ const icons={dangerous:'fa-circle-exclamation',caution:'fa-triangle-exclamation',safe:'fa-circle-check'};
+ const box=document.getElementById('toastContainer');if(!box)return;
+ const key=title+'|'+body;
+ box.querySelectorAll('.toast[data-msg]').forEach(t=>{if(t.getAttribute('data-msg')===key){clearTimeout(t._timer);t.remove();}});
+ const t=document.createElement('div');
+ t.className=`toast ${cls}`;
+ t.setAttribute('data-msg',key);
+ t.innerHTML=`<div class="toast-icon"><i class="fas ${icons[cls]}"></i></div><div><div class="toast-title">${esc(title)}</div><div class="toast-body">${esc(body)}</div></div><button class="toast-close" onclick="dismissToast(this.closest('.toast'))"><i class="fas fa-xmark"></i></button><div class="toast-progress"></div>`;
+ box.appendChild(t);
+ t._timer=setTimeout(()=>dismissToast(t),6000);
+}
+async function loadMyNotifs(){
+ if(_notifBusy)return;
+ _notifBusy=true;
+ let ok=false,changed=false;
+ try{
+  const res=await fetch('../api/reports.php?action=my_report_updates');
+  const data=await res.json();
+  if(data.status==='success'){
+   ok=true;
+   const list=data.reports||[];
+   const prev=readNotifStatusMap();
+   notifItems=list;
+   let unread=0;
+   const changedIds=[];
+   const next={};
+   list.forEach(r=>{
+    const curV=notifIsVerified(r)?1:0;
+    next[r.id]={s:r.status,v:curV};
+    if(!prev)return;                 // first run is a quiet baseline
+    const p=prev[r.id];
+    if(!p){unread++;changed=true;changedIds.push(r.id);return;} // newly notifiable report
+    // Count each report at most once, and only on a real transition. Extra
+    // upvotes past the 2-vote threshold do not re-notify, so repeated voting
+    // cannot multiply notifications.
+    if(notifIsResolved(r)){ if(p.s!=='safe'){unread++;changed=true;changedIds.push(r.id);} return; }
+    if(p.v!==1&&curV===1){unread++;changed=true;changedIds.push(r.id);}
+   });
+   renderUpdatesList();
+   updateUpdatesBadge(unread);
+   if(!prev||CURRENT_VIEW==='updates')markNotifsRead();
+   if(prev){
+    list.forEach(r=>{
+     const p=prev[r.id];
+     if(!p)return;
+     if(notifIsResolved(r)&&p.s!=='safe'&&r.resolved_at){
+      notifToast('Your report is now Safe', r.title, 'safe');
+     }else if(!notifIsResolved(r)&&p.v!==1&&notifIsVerified(r)){
+      notifToast('Your report was validated', r.title, 'safe');
+     }
+    });
+   }
+   try{localStorage.setItem(NOTIF_STATUS_KEY,JSON.stringify(next));}catch(e){}
+   if(changed){
+    changedIds.forEach(id=>_flashIds.add(id));
+    renderUpdatesList();
+    setTimeout(()=>_flashIds.clear(),6000);
+    if(['overview','my_reports','map','updates'].includes(CURRENT_VIEW))fetchReports();
+   }
+  }
+ }catch(e){}
+ finally{
+  _notifBusy=false;
+  _notifDelay=ok?15000:60000;
+  scheduleNotifPoll();
+ }
+}
+function scheduleNotifPoll(){
+ clearTimeout(_notifTimer);
+ _notifTimer=null;
+ if(document.hidden)return;
+ _notifTimer=setTimeout(loadMyNotifs,_notifDelay);
+}
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden){clearTimeout(_notifTimer);_notifTimer=null;return;}
+ loadMyNotifs();
+});
+window.addEventListener('focus',()=>{
+ if(!_notifBusy&&!_notifTimer)loadMyNotifs();
+});
+
 /* Fetch reports */
 async function fetchReports(){
+ if(_reportsBusy)return;
+ _reportsBusy=true;
  const isMine=CURRENT_VIEW==='my_reports';
  try{const res=await fetch('../api/reports.php?action=get_reports');const data=await res.json();
  if(data.status==='success'){allReports=data.reports;renderFeed(isMine);if(CURRENT_VIEW==='map')renderMainMap();checkProximity();}
  else{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-triangle-exclamation"></i><p>Failed to load reports.</p></div>';}
  }catch{const f=document.getElementById('feed');if(f)f.innerHTML='<div class="empty"><i class="fas fa-wifi"></i><p>Network error.</p></div>';}
+ finally{_reportsBusy=false;}
 }
 
-function getFiltered(mineOnly){
- const s=(document.getElementById('searchInput')?.value||'').trim().toLowerCase();
- const st=document.getElementById('statusFilter')?.value||'';
- const ca=document.getElementById('categoryFilter')?.value||'';
- const tf=parseInt(document.getElementById('timeFilter')?.value||'',10);
+function getFiltered(mineOnly, searchId, statusId, catId, timeId){
+ const s=(document.getElementById(searchId||'searchInput')?.value||'').trim().toLowerCase();
+ const st=document.getElementById(statusId||'statusFilter')?.value||'';
+ const ca=document.getElementById(catId||'categoryFilter')?.value||'';
+ const tf=parseInt(document.getElementById(timeId||'timeFilter')?.value||'',10);
  const cutoff=isFinite(tf)&&tf>0?Date.now()-tf*60000:null;
  return allReports.filter(r=>{
  if(mineOnly&&r.user_id!=MY_USER_ID)return false;
@@ -1303,9 +1839,9 @@ function timeAgoText(s){
  return new Date(t).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
 }
 
-function renderFeed(mineOnly=false){
- const feed=document.getElementById('feed');if(!feed)return;
- const list=getFiltered(mineOnly);
+function renderFeedContainer(feedId, mineOnly, searchId, statusId, catId, timeId){
+ const feed=document.getElementById(feedId);if(!feed)return;
+ const list=getFiltered(mineOnly, searchId, statusId, catId, timeId);
  if(!list.length){
  feed.innerHTML=`<div class="empty"><i class="fas fa-binoculars"></i><p>${mineOnly?"You haven't posted any reports yet.":'No reports match your filters.'}</p></div>`;
  return;
@@ -1336,13 +1872,24 @@ function renderFeed(mineOnly=false){
  <button class="vote-btn down ${dnV?'voted':''}" onclick="vote(${r.id},'down')"><i class="fas fa-thumbs-down"></i><span id="dn_${r.id}">${r.downvotes}</span></button>
  <button class="pin-chip" style="background:#eff6ff;color:#2563eb;border-color:#bfdbfe;font-weight:700;" onclick="crowdVerify(${r.id})"><i class="fas fa-shield-check"></i> +1 Verify</button>
  ${hasPin?`<button class="pin-chip" onclick="openMiniMap(${r.id})"><i class="fas fa-map-pin"></i> Map</button>`:''}
- ${isMine?`<button class="vote-btn" style="margin-left:auto;border-color:var(--red);color:var(--red);" onclick="deleteReport(${r.id})"><i class="fas fa-trash-can"></i></button>`:`<span class="category-tag" style="margin-left:auto;"><i class="fas ${CI[r.category]||'fa-circle-info'}"></i> ${ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}</span>`}
+ ${(isMine && r.status==='safe')?`<button class="vote-btn" style="margin-left:auto;border-color:var(--red);color:var(--red);" onclick="deleteReport(${r.id})" title="Archive resolved report"><i class="fas fa-trash-can"></i></button>`:`<span class="category-tag" style="margin-left:auto;"><i class="fas ${CI[r.category]||'fa-circle-info'}"></i> ${ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}</span>`}
  </div>
  </div>`;
  }).join('');
 }
 
-['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();},200);});});
+function renderFeed(mineOnly=false){
+ renderFeedContainer('feed', false, 'searchInput', 'statusFilter', 'categoryFilter', 'timeFilter');
+ renderFeedContainer('myFeed', true, 'mySearchInput', 'myStatusFilter', 'myCategoryFilter', 'myTimeFilter');
+}
+
+function resetMyFilters(){
+ ['mySearchInput','myStatusFilter','myCategoryFilter','myTimeFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+ renderFeedContainer('myFeed', true, 'mySearchInput', 'myStatusFilter', 'myCategoryFilter', 'myTimeFilter');
+}
+
+['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(window._ft);window._ft=setTimeout(()=>{renderFeedContainer('feed',false,'searchInput','statusFilter','categoryFilter','timeFilter');if(curView==='map')renderInlineMap();},200);});});
+['mySearchInput','myStatusFilter','myCategoryFilter','myTimeFilter'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(id==='mySearchInput'?'input':'change',()=>{clearTimeout(window._ftMy);window._ftMy=setTimeout(()=>{renderFeedContainer('myFeed',true,'mySearchInput','myStatusFilter','myCategoryFilter','myTimeFilter');},200);});});
 function resetFilters(){['searchInput','statusFilter','categoryFilter','timeFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}
 function quickFilterStatus(status){const sf=document.getElementById('statusFilter');if(sf){sf.value=status;renderFeed(CURRENT_VIEW==='my_reports');if(curView==='map')renderInlineMap();}}
 
@@ -1360,7 +1907,7 @@ async function crowdVerify(id){
  }catch{actionToast('Network error — could not verify this incident.','error');}
 }
 async function vote(id,vt){const fd=new FormData();fd.append('action','vote');fd.append('report_id',id);fd.append('vote',vt);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){const r=allReports.find(x=>x.id==id);if(r){r.upvotes=d.upvotes;r.downvotes=d.downvotes;r.user_vote=d.user_vote;}renderFeed(CURRENT_VIEW==='my_reports');}}catch{}}
-async function deleteReport(id){if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');actionToast('Report deleted.','success');}else actionToast(d.message||'Could not delete this report.','error');}catch{actionToast('Network error — could not delete this report.','error');}}
+async function deleteReport(id){const target=allReports.find(x=>x.id==id);if(target&&target.status!=='safe'){actionToast('Only reports marked as safe can be archived.','error');return;}if(!confirm('Delete this report?'))return;const fd=new FormData();fd.append('action','delete_report');fd.append('report_id',id);try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const d=await res.json();if(d.status==='success'){allReports=allReports.filter(r=>r.id!=id);renderFeed(CURRENT_VIEW==='my_reports');actionToast('Report deleted.','success');}else actionToast(d.message||'Could not delete this report.','error');}catch{actionToast('Network error — could not delete this report.','error');}}
 
 /* View toggle (overview only) */
 function switchView(v){curView=v;const feedEl=document.getElementById('feed'),mapEl=document.getElementById('inlineMapWrap');if(!feedEl||!mapEl)return;if(v==='map'){feedEl.style.display='none';mapEl.style.display='block';document.getElementById('btnFeed').classList.remove('active');document.getElementById('btnMap').classList.add('active');setTimeout(()=>{initInlineMap();if(inlineMap)inlineMap.invalidateSize();},200);}else{feedEl.style.display='';mapEl.style.display='none';document.getElementById('btnMap').classList.remove('active');document.getElementById('btnFeed').classList.add('active');}}
@@ -1393,14 +1940,279 @@ function watchMapResize(getMap,el){
  window.addEventListener('orientationchange',()=>{const m=getMap();if(m)setTimeout(()=>m.invalidateSize(),250);});
 }
 
+function buildCommunitySinglePopup(r){
+ const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+ const fp=r.images&&r.images.length>0?normImgUrl(r.images[0]):null;
+ const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';
+ return `<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]||'#888'};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;
+}
+
+function buildCommunityClusterPopup(reps, activeId){
+ const locName = reps[0].location_name || reps[0].city || 'Imus';
+ const count = reps.length;
+ let h = `<div style="min-width:230px;max-width:280px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;">` +
+  `<div style="font-weight:800;font-size:.92rem;color:#0a3d62;margin-bottom:2px;">${esc(locName)}</div>` +
+  `<div style="font-size:.73rem;color:#d97706;font-weight:700;margin-bottom:8px;"><i class="fas fa-layer-group"></i> ${count} Overlapping Reports at this location:</div>` +
+  `<div style="max-height:240px;overflow-y:auto;padding-right:2px;display:flex;flex-direction:column;gap:6px;">`;
+
+ reps.forEach(r => {
+  const isActive = (r.id === activeId);
+  const borderCol = isActive ? '#1a5276' : '#e2e8f0';
+  const bgCol = isActive ? '#f0f7ff' : '#ffffff';
+  const date = new Date(r.created_at).toLocaleDateString('en-PH', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  h += `<div style="border:1.5px solid ${borderCol};background:${bgCol};border-radius:8px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">` +
+   `<div style="font-weight:700;font-size:.82rem;color:#1e293b;margin-bottom:3px;">${esc(r.title)}</div>` +
+   `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">` +
+    `<span style="background:${SC[r.status]||'#888'};color:#fff;padding:2px 7px;border-radius:12px;font-size:.65rem;font-weight:700;text-transform:uppercase;">${ucFirst(r.status)}</span>` +
+    `<span style="background:#f1f5f9;color:#475569;padding:2px 7px;border-radius:12px;font-size:.65rem;font-weight:600;">${CL[r.category]||ucFirst(r.category)}</span>` +
+   `</div>` +
+   `<div style="font-size:.7rem;color:#64748b;margin-bottom:3px;">${esc(r.poster_name)} &middot; ${date}</div>` +
+   `<button type="button" onclick="openDetail(${r.id})" style="margin-top:4px;background:#1a5276;color:#fff;border:none;padding:5px 8px;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;width:100%;text-align:center;">Full Details</button>` +
+  `</div>`;
+ });
+ h += `</div></div>`;
+ return h;
+}
+
 /* Inline map (overview toggle) */
 let inlineMap=null,inlineLayers=[];
 function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(inlineMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);SentriGeo.addBarangayOverlay(inlineMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!inlineLayers.length)inlineMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderInlineMap();}).catch(()=>{});watchMapResize(()=>inlineMap,document.getElementById('inlineMap'));setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
-function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];list.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});SentriGeo.avoidLabelOverlap(inlineMap,pinPts);const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
+function renderInlineMap(){
+ if(!inlineMap)return;
+ inlineLayers.forEach(l=>inlineMap.removeLayer(l));
+ inlineLayers=[];
+ const list=getFiltered(false);
+ const bounds=[];
+ let pins=0,outside=0;
+ const geoReady=SentriGeo.geoReady();
+ const pinPts=[];
+
+ const validReports = [];
+ list.forEach(r=>{
+  const lat = r.latitude !== undefined ? parseFloat(r.latitude) : parseFloat(r.lat);
+  const lng = r.longitude !== undefined ? parseFloat(r.longitude) : parseFloat(r.lng);
+  if(!isFinite(lat) || !isFinite(lng)) return;
+  const ll=[lat,lng];
+  if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}
+  pins++;
+  bounds.push(ll);
+  pinPts.push(ll);
+  validReports.push(Object.assign({}, r, {_lat: lat, _lng: lng}));
+ });
+
+ const clusters = [];
+ validReports.forEach(r=>{
+  let matched = false;
+  for(let i=0; i<clusters.length; i++){
+   const c = clusters[i];
+   if(Math.abs(c.lat - r._lat) < 0.00018 && Math.abs(c.lng - r._lng) < 0.00018){
+    c.reports.push(r);
+    matched = true;
+    break;
+   }
+  }
+  if(!matched){
+   clusters.push({ lat: r._lat, lng: r._lng, reports: [r] });
+  }
+ });
+
+ clusters.forEach(cluster=>{
+  const cLat = cluster.lat;
+  const cLng = cluster.lng;
+  const reps = cluster.reports;
+  const count = reps.length;
+
+  let maxRadius = 200;
+  let worstStatus = 'safe';
+  const statusSeverity = { dangerous: 3, caution: 2, safe: 1 };
+  reps.forEach(r => {
+   if(r.radius_m && r.radius_m > maxRadius) maxRadius = r.radius_m;
+   if((statusSeverity[r.status] || 0) > (statusSeverity[worstStatus] || 0)) worstStatus = r.status;
+  });
+
+  const ci = L.circle([cLat, cLng], {
+   radius: maxRadius,
+   color: SC[worstStatus] || '#888',
+   fillColor: SF[worstStatus] || 'rgba(10,61,98,0.2)',
+   fillOpacity: 1,
+   weight: 2,
+   dashArray: '6 4'
+  }).addTo(inlineMap);
+  inlineLayers.push(ci);
+
+  if(count === 1){
+   const r = reps[0];
+   const mk = L.marker([cLat, cLng], { icon: markerIcon(r.status) }).addTo(inlineMap);
+   mk.bindPopup(buildCommunitySinglePopup(r), { maxWidth: 280 });
+   inlineLayers.push(mk);
+  } else {
+   const hub = L.circleMarker([cLat, cLng], {
+    radius: 6,
+    color: '#ffffff',
+    weight: 2.5,
+    fillColor: '#0a3d62',
+    fillOpacity: 1,
+    bubblingMouseEvents: false
+   }).addTo(inlineMap);
+   hub.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>${count} Overlapping Reports (Click to view)</div>`, { direction:'top', offset:[0,-8] });
+   hub.bindPopup(buildCommunityClusterPopup(reps, null), { maxWidth: 280 });
+   inlineLayers.push(hub);
+
+   const offsetRadius = 0.00022; // ~24m
+   reps.forEach((r, idx)=>{
+    const angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+    const oLat = cLat + (offsetRadius * Math.cos(angle));
+    const oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+    const line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+     color: '#0a3d62',
+     weight: 1.5,
+     dashArray: '3, 4',
+     opacity: 0.65,
+     interactive: false
+    }).addTo(inlineMap);
+    inlineLayers.push(line);
+
+    const mk = L.marker([oLat, oLng], { icon: markerIcon(r.status) }).addTo(inlineMap);
+    mk.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;">${esc(r.title)} (${ucFirst(r.status)})</div>`, { direction:'top', offset:[0,-38] });
+    mk.bindPopup(buildCommunityClusterPopup(reps, r.id), { maxWidth: 280 });
+    inlineLayers.push(mk);
+   });
+  }
+ });
+
+ if(bounds.length) inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});
+ SentriGeo.avoidLabelOverlap(inlineMap,pinPts);
+ const cnt=document.getElementById('inlineMapCount');
+ if(cnt) cnt.textContent=`${pins} of ${list.length} reports pinned`+(outside?` · ${outside} outside Imus`:'');
+ setTimeout(()=>inlineMap.invalidateSize(),300);
+ setTimeout(()=>inlineMap.invalidateSize(),600);
+}
 
 /* Full incidents map */
 let mainMap=null,mainLayers=[];
-function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);SentriGeo.lockToImus(mainMap,{fit:true});L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0,outside=0;const geoReady=SentriGeo.geoReady();const pinPts=[];allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;const ll=[r.latitude,r.longitude];if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}pins++;bounds.push(ll);pinPts.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});SentriGeo.avoidLabelOverlap(mainMap,pinPts);const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
+function renderMainMap(){
+ if(!mainMap){
+  mainMap=L.map('incidentMap').setView([14.4240,120.9215],12);
+  SentriGeo.lockToImus(mainMap,{fit:true});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);
+  SentriGeo.addBarangayOverlay(mainMap,{onEach:barangayOnEach,labels:true}).then(l=>{try{if(!mainLayers.length)mainMap.fitBounds(l.getBounds(),{padding:[40,40]});}catch(e){}renderMainMap();}).catch(()=>{});
+  watchMapResize(()=>mainMap,document.getElementById('incidentMap'));
+ }
+ mainLayers.forEach(l=>mainMap.removeLayer(l));
+ mainLayers=[];
+ const bounds=[];
+ let pins=0,outside=0;
+ const geoReady=SentriGeo.geoReady();
+ const pinPts=[];
+
+ const validReports = [];
+ allReports.forEach(r=>{
+  const lat = r.latitude !== undefined ? parseFloat(r.latitude) : parseFloat(r.lat);
+  const lng = r.longitude !== undefined ? parseFloat(r.longitude) : parseFloat(r.lng);
+  if(!isFinite(lat) || !isFinite(lng)) return;
+  const ll=[lat,lng];
+  if(geoReady&&!SentriGeo.isInImus(ll[0],ll[1])){outside++;return;}
+  pins++;
+  bounds.push(ll);
+  pinPts.push(ll);
+  validReports.push(Object.assign({}, r, {_lat: lat, _lng: lng}));
+ });
+
+ const clusters = [];
+ validReports.forEach(r=>{
+  let matched = false;
+  for(let i=0; i<clusters.length; i++){
+   const c = clusters[i];
+   if(Math.abs(c.lat - r._lat) < 0.00018 && Math.abs(c.lng - r._lng) < 0.00018){
+    c.reports.push(r);
+    matched = true;
+    break;
+   }
+  }
+  if(!matched){
+   clusters.push({ lat: r._lat, lng: r._lng, reports: [r] });
+  }
+ });
+
+ clusters.forEach(cluster=>{
+  const cLat = cluster.lat;
+  const cLng = cluster.lng;
+  const reps = cluster.reports;
+  const count = reps.length;
+
+  let maxRadius = 200;
+  let worstStatus = 'safe';
+  const statusSeverity = { dangerous: 3, caution: 2, safe: 1 };
+  reps.forEach(r => {
+   if(r.radius_m && r.radius_m > maxRadius) maxRadius = r.radius_m;
+   if((statusSeverity[r.status] || 0) > (statusSeverity[worstStatus] || 0)) worstStatus = r.status;
+  });
+
+  const ci = L.circle([cLat, cLng], {
+   radius: maxRadius,
+   color: SC[worstStatus] || '#888',
+   fillColor: SF[worstStatus] || 'rgba(10,61,98,0.2)',
+   fillOpacity: 1,
+   weight: 2,
+   dashArray: '6 4'
+  }).addTo(mainMap);
+  mainLayers.push(ci);
+
+  if(count === 1){
+   const r = reps[0];
+   const mk = L.marker([cLat, cLng], { icon: markerIcon(r.status) }).addTo(mainMap);
+   const popup = buildCommunitySinglePopup(r);
+   mk.bindTooltip(popup, { direction:'top', offset:[0,-38], opacity:1, sticky:false, permanent:false });
+   mk.bindPopup(popup, { maxWidth:280 });
+   mainLayers.push(mk);
+  } else {
+   // 1. Center hub dot
+   const hub = L.circleMarker([cLat, cLng], {
+    radius: 6,
+    color: '#ffffff',
+    weight: 2.5,
+    fillColor: '#0a3d62',
+    fillOpacity: 1,
+    bubblingMouseEvents: false
+   }).addTo(mainMap);
+   const clusterPopup = buildCommunityClusterPopup(reps, null);
+   hub.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>${count} Overlapping Reports (Click to view)</div>`, { direction:'top', offset:[0,-8] });
+   hub.bindPopup(clusterPopup, { maxWidth:280 });
+   mainLayers.push(hub);
+
+   // 2. Spider out markers
+   const offsetRadius = 0.00022; // ~24m
+   reps.forEach((r, idx)=>{
+    const angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+    const oLat = cLat + (offsetRadius * Math.cos(angle));
+    const oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+    const line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+     color: '#0a3d62',
+     weight: 1.5,
+     dashArray: '3, 4',
+     opacity: 0.65,
+     interactive: false
+    }).addTo(mainMap);
+    mainLayers.push(line);
+
+    const mk = L.marker([oLat, oLng], { icon: markerIcon(r.status) }).addTo(mainMap);
+    const itemPopup = buildCommunityClusterPopup(reps, r.id);
+    mk.bindTooltip(`<div style="font-weight:700;font-size:0.75rem;">${esc(r.title)} (${ucFirst(r.status)})</div>`, { direction:'top', offset:[0,-38] });
+    mk.bindPopup(itemPopup, { maxWidth:280 });
+    mainLayers.push(mk);
+   });
+  }
+ });
+
+ if(bounds.length) mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});
+ SentriGeo.avoidLabelOverlap(mainMap,pinPts);
+ const cnt=document.getElementById('mapCount');
+ if(cnt) cnt.textContent=`${pins} pinned report${pins!==1?'s':''} in Imus`+(outside?` · ${outside} outside the city`:'');
+ setTimeout(()=>mainMap.invalidateSize(),300);
+ setTimeout(()=>mainMap.invalidateSize(),600);
+}
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
@@ -1982,7 +2794,8 @@ const SEVERITY_MAP = {
  flooding:{street_flooding:'caution',residential_flooding:'dangerous',flash_flood:'dangerous',river_overflow:'dangerous',other:'caution'},
  fire:{residential_fire:'dangerous',commercial_fire:'dangerous',vehicle_fire:'dangerous',electrical_fire:'dangerous',other:'caution'},
  health:{medical_emergency:'dangerous',injury:'caution',unconscious_person:'dangerous',breathing_difficulty:'dangerous',mental_health_crisis:'dangerous',other:'caution'},
- infrastructure:{road_damage:'caution',pothole:'dangerous',fallen_tree:'caution',obstructed_road:'caution',other:'caution'}
+ infrastructure:{road_damage:'caution',pothole:'dangerous',fallen_tree:'caution',obstructed_road:'caution',other:'caution'},
+ other:{noise_complaint:'caution',missing_person:'caution',suspicious_activity:'caution',public_disturbance:'caution'}
 };
 
 function applySeverity(cat){
@@ -2026,12 +2839,12 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  const cat=document.getElementById('r_category').value;
  const city=document.getElementById('r_city').value.trim();
  
- // Sub-type from the dropdown (e.g. crime -> murder); "Other" uses free text
+ // Sub-type from the dropdown (e.g. crime -> murder); "Other" also accepts
+ // a free-text description (NOV 9 consultation).
  const typeSel=document.getElementById(cat+'_type');
  const otherText=cat==='other'?(document.getElementById('other_text')?.value.trim()||''):'';
- if(cat==='other'&&!otherText){showMsg(msgEl,'error','Please specify what the incident is.');return;}
  const incType=typeSel?typeSel.value:otherText;
- const incLabel=typeSel?typeSel.options[typeSel.selectedIndex].text:(otherText||CL[cat]||'Incident');
+ const incLabel=(cat==='other'&&otherText)?otherText:(typeSel?typeSel.options[typeSel.selectedIndex].text:(CL[cat]||'Incident'));
 
  // Title and description are optional - auto-filled when blank
  let title=document.getElementById('r_title').value.trim();
@@ -2067,7 +2880,8 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
- fd.append('incident_type',incType);fd.append('other_text',otherText);
+ fd.append('incident_type',incType);
+ if(cat==='other') fd.append('other_text',otherText);
  fd.append('location_name',loc);fd.append('barangay', document.getElementById('r_barangay').value.trim());
  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);
@@ -2087,7 +2901,22 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
 });
 
 /* Report detail */
-function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const isVer=r.upvotes>=2;
+function renderCommunityPhotos(images){
+ const phEl=document.getElementById('d_photos');
+ if(!phEl) return;
+ if(images&&images.length>0){
+  phEl.style.display='flex';
+  phEl.innerHTML=images.map((u,i)=>{
+   const src=normImgUrl(typeof u==='string'?u:(u.url||u.file_name));
+   return `<div class="detail-photo" onclick="openLightbox('${src.replace(/'/g,'%27')}')"><img src="${esc(src)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${images.length}</div>`:''}</div>`;
+  }).join('');
+ }else{
+  phEl.style.display='none';
+  phEl.innerHTML='';
+ }
+}
+
+function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}${r.custom_type?' · '+esc(r.custom_type):''}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> - ${date}`;renderCommunityPhotos(r.images);if(!r.images||r.images.length===0){fetch('../api/reports.php?action=get_report_images&report_id='+r.id).then(res=>res.json()).then(data=>{if(data&&data.status==='success'&&Array.isArray(data.images)&&data.images.length>0){r.images=data.images.map(img=>normImgUrl(img.url||img.file_name));renderCommunityPhotos(r.images);}}).catch(()=>{});}const isVer=r.upvotes>=2;
 const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');
 document.getElementById('d_meta_grid').innerHTML=[
  {icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||' - '},
@@ -2119,7 +2948,7 @@ if(tlWrap){
  `).join('');
 }
 
-const db=document.getElementById('d_desc_box');if(r.description){db.style.display='';document.getElementById('d_desc').textContent=r.description;}else db.style.display='none';const upV=r.user_vote==='up',dnV=r.user_vote==='down',hp=r.latitude&&r.longitude;document.getElementById('d_footer').innerHTML=`<button class="vote-btn ${upV?'voted':''}" onclick="vote(${r.id},'up')"><i class="fas fa-thumbs-up"></i> ${r.upvotes}</button><button class="vote-btn down ${dnV?'voted':''}" onclick="vote(${r.id},'down')"><i class="fas fa-thumbs-down"></i> ${r.downvotes}</button>${hp?`<button class="detail-map-btn" onclick="closeDetail();openMiniMap(${r.id})"><i class="fas fa-map-pin"></i> View on Map</button>`:''}${r.user_id==MY_USER_ID?`<button class="vote-btn" onclick="closeDetail();deleteReport(${r.id})" style="margin-left:auto;border-color:var(--red);color:var(--red);"><i class="fas fa-trash-can"></i> Delete</button>`:''}`;document.getElementById('detailModal').style.borderLeft=`5px solid ${SC[r.status]||'#ccc'}`;document.getElementById('detailOverlay').classList.add('open');document.body.style.overflow='hidden';}
+const db=document.getElementById('d_desc_box');if(r.description){db.style.display='';document.getElementById('d_desc').textContent=r.description;}else db.style.display='none';const upV=r.user_vote==='up',dnV=r.user_vote==='down',hp=r.latitude&&r.longitude;document.getElementById('d_footer').innerHTML=`<button class="vote-btn ${upV?'voted':''}" onclick="vote(${r.id},'up')"><i class="fas fa-thumbs-up"></i> ${r.upvotes}</button><button class="vote-btn down ${dnV?'voted':''}" onclick="vote(${r.id},'down')"><i class="fas fa-thumbs-down"></i> ${r.downvotes}</button>${hp?`<button class="detail-map-btn" onclick="closeDetail();openMiniMap(${r.id})"><i class="fas fa-map-pin"></i> View on Map</button>`:''}${(r.user_id==MY_USER_ID&&r.status==='safe')?`<button class="vote-btn" onclick="closeDetail();deleteReport(${r.id})" style="margin-left:auto;border-color:var(--red);color:var(--red);"><i class="fas fa-trash-can"></i> Delete</button>`:''}`;document.getElementById('detailModal').style.borderLeft=`5px solid ${SC[r.status]||'#ccc'}`;document.getElementById('detailOverlay').classList.add('open');document.body.style.overflow='hidden';}
 function closeDetail(){document.getElementById('detailOverlay').classList.remove('open');document.body.style.overflow='';}
 function outsideCloseDetail(e){if(e.target===document.getElementById('detailOverlay'))closeDetail();}
 
@@ -2183,9 +3012,9 @@ function closeMiniMap(e){if(e.target===document.getElementById('miniMapModal'))c
 function closeMiniMapDirect(){document.getElementById('miniMapModal').classList.remove('open');}
 
 /* Lightbox */
-function openLightbox(url){document.getElementById('lightboxImg').src=url;document.getElementById('lightbox').classList.add('open');}
+function openLightbox(url){document.getElementById('lightboxImg').src=normImgUrl(url);document.getElementById('lightbox').classList.add('open');}
 function closeLightbox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightboxImg').src='';}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLightbox();closeDetail();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLightbox();closeDetail();closeUpdateDetail();}});
 
 /* Profile: avatar swatches */
 let selColor=INIT_COLOR;
@@ -2532,7 +3361,8 @@ updateChip();
 startGPS();
 initAddressSuggestions();
 if(document.getElementById('colorPalette'))buildPalette();
-if(['overview','my_reports','map'].includes(CURRENT_VIEW)){fetchReports();setInterval(fetchReports,60000);}
+fetchReports();setInterval(fetchReports,60000);
+loadMyNotifs();
 if(CURRENT_VIEW==='map')setTimeout(()=>renderMainMap(),300);
 if(document.fonts&&document.fonts.ready){document.fonts.ready.then(()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});}
 window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});
@@ -2545,17 +3375,17 @@ window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlin
  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
  <div style="width:40px;height:40px;border-radius:11px;background:#e0f2fe;color:#0284c7;display:flex;align-items:center;justify-content:center;font-size:1.25rem;flex-shrink:0;"><i class="fas fa-cloud-showers-heavy"></i></div>
  <div>
- <h2>Severe Weather Bulletin</h2>
- <div class="subtitle" style="margin-bottom:0;">PAGASA Doppler Radar & NCR DRRMO Flash Warning</div>
+ <h2>Imus Weather & Flood Advisory</h2>
+ <div class="subtitle" style="margin-bottom:0;"><?= esc($live_weather['source']) ?> &bull; Updated <?= esc($live_weather['updated_at']) ?></div>
  </div>
  </div>
  <div style="background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Rainfall Rate</div><div style="font-size:1.15rem;font-weight:800;color:#0284c7;">24.5 mm/h</div><div style="font-size:0.68rem;color:#e11d48;font-weight:600;">Heavy / Torrential</div></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Wind Gusts</div><div style="font-size:1.15rem;font-weight:800;color:var(--text);">38 km/h</div><div style="font-size:0.68rem;color:#059669;font-weight:600;">Moderate Breeze</div></div>
- <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Flood Threat</div><div style="font-size:1.15rem;font-weight:800;color:#dc2626;">High Risk</div><div style="font-size:0.68rem;color:var(--muted);font-weight:600;">Low-Lying Zones</div></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Rainfall Rate</div><div style="font-size:1.15rem;font-weight:800;color:#0284c7;"><?= esc(explode(' (', $live_weather['rainfall_rate'])[0]) ?></div><div style="font-size:0.68rem;color:#0369a1;font-weight:600;"><?= esc(trim(explode('(', $live_weather['rainfall_rate'])[1] ?? 'Normal', ')')) ?></div></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Wind Gusts</div><div style="font-size:1.15rem;font-weight:800;color:var(--text);"><?= esc(explode(' (', $live_weather['wind_gusts'])[0]) ?></div><div style="font-size:0.68rem;color:#059669;font-weight:600;"><?= esc(trim(explode('(', $live_weather['wind_gusts'])[1] ?? 'Normal', ')')) ?></div></div>
+ <div><div style="font-size:0.7rem;color:var(--muted);font-weight:700;text-transform:uppercase;">Flood Threat</div><div style="font-size:1.15rem;font-weight:800;color:<?= $live_weather['flood_threat']==='Critical Risk'||$live_weather['flood_threat']==='High Risk'?'#dc2626':($live_weather['flood_threat']==='Moderate Risk'?'#d97706':'#059669') ?>;"><?= esc($live_weather['flood_threat']) ?></div><div style="font-size:0.68rem;color:var(--muted);font-weight:600;"><?= esc($live_weather['pagasa_signal']) ?></div></div>
  </div>
  <div style="border-left:3px solid #0284c7;background:#f0f9ff;border-radius:0 10px 10px 0;padding:12px 14px;margin-bottom:14px;font-size:0.83rem;color:#0369a1;line-height:1.6;">
- <strong>Precautionary Measures:</strong> Residents near Tullahan and Marikina river basins should monitor barangay warning sirens. Keep battery-powered radios tuned to official NDRRMO announcements.
+ <strong>CDRRMO & Barangay Directive:</strong> <?= esc($live_weather['emergency_advisory']) ?>
  </div>
  <div style="display:flex;justify-content:flex-end;">
  <button type="button" onclick="closeWeatherModal()" style="padding:8px 18px;border:none;background:var(--blue-accent);color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;">Acknowledge</button>

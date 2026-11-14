@@ -1,6 +1,10 @@
 <?php
 // Bootstrap security headers before any output or redirect.
 require_once __DIR__ . '/headers.php';
+require_once __DIR__ . '/contacts.php';
+
+// Enforce Philippine Standard Time (UTC+8) across all date/time functions
+date_default_timezone_set('Asia/Manila');
 
 // .env-aware credentials: default remains root@socket / sentri; override via
 // .env keys DB_HOST / DB_USER / DB_PASS / DB_NAME (used on Linux Mint dev
@@ -37,6 +41,7 @@ if ($conn->connect_error) {
  die(json_encode(['status'=>'error','message'=>'Database connection failed.']));
 }
 $conn->set_charset("utf8mb4");
+$conn->query("SET time_zone = '+08:00'");
 
 if (!function_exists('sentri_table_has_column')) {
  function sentri_table_has_column(mysqli $conn, string $table, string $column): bool {

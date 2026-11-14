@@ -20,6 +20,12 @@ $org = $prof['org_name'] ?? 'Barangay Office';
 $pos = $prof['position'] ?? 'Barangay Official';
 $juri = $brgy ?: ($city ?: 'All Areas');
 
+if (!function_exists('esc')) {
+ function esc($s) {
+  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+ }
+}
+
 function cq($conn,$sql,$types='',$params=[]){
  $s=$conn->prepare($sql);
  if($types && count($params)){
@@ -49,10 +55,10 @@ $BRGY_COND = brgy_sql('r.barangay') . " = ?";
 // Stats - strictly scoped to this barangay official's assigned territory.
 // If no barangay is assigned, stats remain 0 to prevent unauthorized citywide data leak.
 if ($brgy) {
- $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $total = cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key]);
  $danger = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='dangerous' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
  $caution = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='caution' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
- $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.status='safe' AND r.is_archived=0 AND $BRGY_COND","s",[$brgy_key]);
+ $safe = cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key]);
 } else {
  $total = 0; $danger = 0; $caution = 0; $safe = 0;
 }
@@ -61,65 +67,64 @@ $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'f
 $type_icons = ['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
 $type_colors = ['lgu'=>['#f0f7ff','#0a3d62'],'hospital'=>['#ecfdf5','#059669'],'traffic'=>['#fffbeb','#d97706'],'barangay'=>['#f0fdf4','#166534'],'police'=>['#eff6ff','#2563eb'],'fire'=>['#fef2f2','#dc2626'],'other'=>['#f5f3ff','#7c3aed']];
 
-// Per-view data
-$reports = $contacts = $residents = [];
+// Per-view data (preloaded for client-side tabs)
+$reports = $contacts = $residents = $map_reports = [];
 
-if (in_array($view, ['overview','reports'])) {
- $limit = ($view === 'overview') ? 20 : 100;
- // Ensure escalated_to_lgu column exists (added in a later migration)
- $db_b = $conn->query("SELECT DATABASE()")->fetch_row()[0];
- $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
- $has_esc_col = ($bc && $bc->num_rows > 0);
- $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
- if ($brgy) {
-  $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at{$esc_sel},u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
-  $s->bind_param("s", $brgy_key);
-  $s->execute(); $res=$s->get_result();
-  while($row=$res->fetch_assoc()) $reports[]=$row;
-  $s->close();
- } else {
-  $reports = [];
- }
+// Ensure escalated_to_lgu column exists (added in a later migration)
+$db_b = $conn->query("SELECT DATABASE()")->fetch_row()[0];
+$bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
+$has_esc_col = ($bc && $bc->num_rows > 0);
+$esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
+
+if ($brgy) {
+    $brgy_where = " AND $BRGY_COND";
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,r.assigned_to,r.resolved_at,r.is_archived{$esc_sel},(SELECT COUNT(*) FROM report_images WHERE report_id=r.id) AS image_count,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1){$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT 100");
+    $s->bind_param("s", $brgy_key);
+    $s->execute(); $res=$s->get_result();
+    while($row=$res->fetch_assoc()) $reports[]=$row;
+    $s->close();
+
+    $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
+    $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
+    $res=$s->get_result();
+    while($r=$res->fetch_assoc()) $contacts[]=$r;
+    $s->close();
+
+    $q = "SELECT id,first_name,last_name,email,phone_number,resident_address,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
+    $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
+    $res=$s->get_result();
+    while($r=$res->fetch_assoc()) $residents[]=$r;
+    $s->close();
+
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.is_archived,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+    $s->bind_param("s", $brgy_key);
+    $s->execute(); $res=$s->get_result();
+    while($row=$res->fetch_assoc()) $map_reports[]=$row;
+    $s->close();
 }
 
-if ($view === 'contacts') {
- if ($brgy) {
-  $q = "SELECT * FROM emergency_contacts WHERE is_active=1 AND (barangay=? OR barangay IS NULL) ORDER BY type,name";
-  $s = $conn->prepare($q); $s->bind_param("s",$brgy); $s->execute();
-  $res=$s->get_result();
-  while($r=$res->fetch_assoc()) $contacts[]=$r;
-  $s->close();
- } else {
-  $contacts = [];
- }
-}
-
-if ($view === 'residents') {
- if ($brgy) {
-  $q = "SELECT id,first_name,last_name,email,phone_number,resident_address,created_at FROM users WHERE role IN('community','user') AND " . brgy_sql('barangay_name') . "=? ORDER BY last_name";
-  $s=$conn->prepare($q); $s->bind_param("s",$brgy_key); $s->execute();
-  $res=$s->get_result();
-  while($r=$res->fetch_assoc()) $residents[]=$r;
-  $s->close();
- } else {
-  $residents = [];
- }
-}
-
-$map_reports = [];
-if ($view === 'map') {
- if ($brgy) {
-  $brgy_where = " AND $BRGY_COND";
-  $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name,u.barangay_name,u.resident_address FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
-  $s->bind_param("s", $brgy_key);
-  $s->execute(); $res=$s->get_result();
-  while($row=$res->fetch_assoc()) $map_reports[]=$row;
-  $s->close();
- }
+if (isset($_GET['ajax_reports'])) {
+    header('Content-Type: application/json');
+    ob_start();
+    if (empty($reports)) {
+        echo '<div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>';
+    } else {
+        include __DIR__.'/../portal/_report_table.php';
+    }
+    $table_html = ob_get_clean();
+    echo json_encode([
+        'status' => 'success',
+        'total' => $total,
+        'danger' => $danger,
+        'caution' => $caution,
+        'safe' => $safe,
+        'count' => count($reports),
+        'html' => $table_html
+    ]);
+    exit;
 }
 $map_total_all = $brgy
- ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE r.is_archived=0 AND $BRGY_COND","s",[$brgy_key])
+ ? cq($conn,"SELECT COUNT(*) FROM reports r WHERE (r.is_archived=0 OR r.status='safe' OR r.is_archived=1) AND $BRGY_COND","s",[$brgy_key])
  : 0;
 
 $nav_items = [
@@ -148,6 +153,14 @@ $page_titles = [
 <?= csrf_meta_tag() ?>
 <link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
+<script src="../assets/vendor/leaflet/leaflet.js"></script>
+<script src="../assets/js/sentri-geo.js"></script>
+<style>
+.tab-panel { display: none; }
+.tab-panel.active { display: block; animation: fadeInView 0.22s ease both; }
+@keyframes fadeInView { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
 <style>
 :root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;--sentri-danger:#b91c1c;--sentri-caution:#b45309;--sentri-safe:#166534;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
@@ -160,12 +173,12 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .sb-seal{width:40px;height:40px;border-radius:50%;background:rgba(243,156,18,0.2);border:2px solid rgba(243,156,18,0.45);display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--gold);flex-shrink:0;}
 .sb-title{font-size:0.96rem;font-weight:800;line-height:1.2;}
 .sb-sub{font-size:0.58rem;color:rgba(255,255,255,0.45);letter-spacing:1.5px;text-transform:uppercase;}
-.sb-close{background:none;border:none;color:rgba(255,255,255,0.6);font-size:1.1rem;cursor:pointer;padding:4px 6px;border-radius:6px;display:none;flex-shrink:0;}
+.sb-close{background:none;border:none;color:rgba(255,255,255,0.7);font-size:1.2rem;cursor:pointer;padding:8px 12px;border-radius:8px;display:none;flex-shrink:0;min-width:44px;min-height:44px;align-items:center;justify-content:center;touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
 .sb-juri{padding:10px 16px;background:rgba(0,0,0,0.2);border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0;}
 .sb-juri p{font-size:0.65rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;}
 .sb-juri strong{font-size:0.82rem;color:#fff;font-weight:700;display:block;word-break:break-word;}
 .sb-nav{padding:12px 8px;flex:1;overflow-y:auto;}
-.sb-nav a{display:flex;align-items:center;gap:10px;color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.84rem;font-weight:500;padding:10px 12px;border-radius:10px;transition:all 0.18s;margin-bottom:2px;white-space:nowrap;}
+.sb-nav a{display:flex;align-items:center;gap:10px;color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.84rem;font-weight:500;padding:12px 14px;border-radius:10px;transition:all 0.18s;margin-bottom:3px;white-space:nowrap;touch-action:manipulation;-webkit-tap-highlight-color:rgba(255,255,255,0.15);cursor:pointer;}
 .sb-nav a:hover{background:rgba(255,255,255,0.1);color:#fff;}
 .sb-nav a.active{background:rgba(255,255,255,0.15);color:#fff;font-weight:700;}
 .sb-nav a i{width:18px;text-align:center;font-size:0.9rem;flex-shrink:0;}
@@ -183,7 +196,7 @@ body{background:var(--bg);color:var(--text);display:flex;min-height:100vh;overfl
 .topbar{background:#fff;border-bottom:4px solid var(--green);padding:0 24px;min-height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 10px rgba(0,0,0,0.07);gap:10px;}
 .topbar-header-row{display:contents;}
 .topbar-left{display:flex;align-items:center;gap:12px;min-width:0;}
-.ham-btn{background:none;border:none;font-size:1.15rem;color:var(--muted);cursor:pointer;padding:7px;border-radius:8px;display:none;flex-shrink:0;}
+.ham-btn{background:none;border:none;font-size:1.25rem;color:var(--muted);cursor:pointer;padding:10px 12px;border-radius:8px;display:none;flex-shrink:0;align-items:center;justify-content:center;min-width:44px;min-height:44px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
 .ham-btn:hover{background:#f3f4f6;}
 .page-title{font-size:1rem;font-weight:800;color:var(--green-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .page-sub{font-size:0.72rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -241,6 +254,10 @@ tr:hover td{background:#fafafa;}
 .contact-name{font-size:0.88rem;font-weight:700;margin-bottom:3px;}
 .contact-meta{font-size:0.75rem;color:var(--muted);line-height:1.6;}
 .contact-type-badge{display:inline-block;font-size:0.63rem;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:2px 8px;border-radius:4px;margin-bottom:4px;}
+.phone-type-tag{display:inline-flex;align-items:center;gap:4px;font-size:0.64rem;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:0.3px;text-transform:uppercase;flex-shrink:0;}
+.phone-type-telephone{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;}
+.phone-type-mobile{background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;}
+.phone-type-hotline{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;}
 /* RESIDENT ROW */
 .resident-row{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid #f3f4f6;}
 .resident-row:last-child{border-bottom:none;}
@@ -303,6 +320,12 @@ tr:hover td{background:#fafafa;}
 /* OVERLAY */
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1050;}
 .overlay.show{display:block;}
+/* LIGHTBOX PREVIEW */
+.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:2000;justify-content:center;align-items:center;cursor:zoom-out;padding:20px;}
+.lightbox.open{display:flex;}
+.lightbox img{max-width:90vw;max-height:90vh;border-radius:12px;object-fit:contain;box-shadow:0 10px 40px rgba(0,0,0,0.6);}
+.lightbox-close{position:absolute;top:20px;right:24px;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:1.3rem;cursor:pointer;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;transition:background 0.2s;}
+.lightbox-close:hover{background:rgba(255,255,255,0.3);}
 /* RESPONSIVE */
 @media(max-width:1000px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
 @media(max-width:860px){
@@ -322,7 +345,34 @@ tr:hover td{background:#fafafa;}
  .page-sub{display:none;}
  .badge-brgy{font-size:0.65rem;padding:4px 8px;}
 }
+/* NEW-REPORT ALERT POPUP (matches responder / LGU portals) */
+.alert-toast{position:relative;display:flex;align-items:flex-start;gap:12px;background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:0 8px 32px rgba(0,0,0,0.15);border-left:5px solid #ccc;pointer-events:auto;min-width:300px;max-width:340px;overflow:hidden;animation:alertToastSlide 0.4s cubic-bezier(0.34,1.56,0.64,1) both;}
+.alert-toast.alert-dangerous{border-left-color:#dc2626;}
+.alert-toast.alert-caution{border-left-color:#d97706;}
+.alert-toast.alert-escalated{border-left-color:#2563eb;}
+.alert-toast.alert-info{border-left-color:#64748b;}
+.alert-toast.alert-out{animation:alertToastFade 0.4s ease both;}
+.alert-toast-icon{font-size:1.3rem;flex-shrink:0;margin-top:2px;color:#dc2626;}
+.alert-toast.alert-dangerous .alert-toast-icon{color:#dc2626;}
+.alert-toast.alert-caution .alert-toast-icon{color:#d97706;}
+.alert-toast.alert-escalated .alert-toast-icon{color:#2563eb;}
+.alert-toast.alert-info .alert-toast-icon{color:#64748b;}
+.alert-toast-body{min-width:0;flex:1;padding-right:14px;}
+.alert-toast-title{font-size:0.83rem;font-weight:700;color:var(--text);margin-bottom:3px;}
+.alert-toast-text{display:flex;flex-direction:column;gap:2px;font-size:0.76rem;color:var(--muted);line-height:1.55;}
+.alert-toast-text strong{color:var(--text);font-weight:700;}
+.alert-toast-desc{font-size:0.74rem;color:var(--muted);}
+.alert-toast-link{display:inline-flex;align-items:center;gap:5px;margin-top:6px;font-size:0.75rem;font-weight:700;color:#1d4ed8;text-decoration:none;}
+.alert-toast-link:hover{text-decoration:underline;}
+.alert-toast-close{position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.78rem;padding:2px 5px;border-radius:5px;}
+.alert-toast-close:hover{background:#f1f5f9;color:var(--text);}
+.alert-toast-progress{position:absolute;bottom:0;left:0;height:3px;width:100%;background:rgba(0,0,0,0.1);animation-name:alertToastProgress;animation-timing-function:linear;animation-fill-mode:both;}
+@keyframes alertToastSlide{from{opacity:0;transform:translateX(120%);}to{opacity:1;transform:translateX(0);}}
+@keyframes alertToastFade{from{opacity:1;transform:translateX(0);}to{opacity:0;transform:translateX(120%);}}
+@keyframes alertToastProgress{from{width:100%;}to{width:0%;}}
+@media(max-width:480px){.alert-toast{min-width:0;max-width:calc(100vw - 48px);}}
 </style>
+<script src="../assets/js/sentri-report-alerts.js?v=4"></script>
 </head>
 <body>
 <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
@@ -344,13 +394,19 @@ tr:hover td{background:#fafafa;}
  </div>
 </div>
 
+<!-- ═══ LIGHTBOX PREVIEW ═══ -->
+<div class="lightbox" id="lightbox" onclick="closePhotoPreview()">
+ <button class="lightbox-close" onclick="closePhotoPreview()"><i class="fas fa-xmark"></i></button>
+ <img id="lightboxImg" src="" alt="Photo Preview">
+</div>
+
 <aside class="sidebar" id="sidebar">
  <div class="sb-header">
  <div class="sb-brand">
  <div class="sb-seal"><i class="fas fa-house-flag"></i></div>
  <div><div class="sb-title">SenTri</div><div class="sb-sub">Barangay Portal</div></div>
  </div>
- <button class="sb-close" onclick="closeSidebar()"><i class="fas fa-xmark"></i></button>
+ <button type="button" class="sb-close" onclick="closeSidebar()" aria-label="Close sidebar menu"><i class="fas fa-xmark" style="pointer-events:none;"></i></button>
  </div>
  <div class="sb-juri">
  <p>Jurisdiction</p>
@@ -360,8 +416,8 @@ tr:hover td{background:#fafafa;}
  <?php foreach($nav_items as $key => $item): ?>
  <?php if($key === 'contacts'): ?><div class="sb-section">Management</div><?php endif; ?>
  <?php if($key === 'profile'): ?><div class="sb-section">Account</div><?php endif; ?>
- <a href="barangay.php?view=<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
- <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
+ <a href="#tab=<?= $key ?>" onclick="showTab('<?= $key ?>'); return false;" id="nav-<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
+ <i class="fas <?= $item['icon'] ?>" style="pointer-events:none;"></i> <?= $item['label'] ?>
  </a>
  <?php endforeach; ?>
  </nav>
@@ -378,9 +434,9 @@ tr:hover td{background:#fafafa;}
  <div class="topbar">
   <div class="topbar-header-row">
    <div class="topbar-left">
-    <button class="ham-btn" onclick="openSidebar()"><i class="fas fa-bars"></i></button>
+    <button type="button" class="ham-btn" onclick="openSidebar()" aria-label="Open sidebar menu"><i class="fas fa-bars" style="pointer-events:none;"></i></button>
     <div style="min-width:0;">
-     <div class="page-title"><?= htmlspecialchars($page_titles[$view] ?? 'Barangay Portal') ?></div>
+     <div class="page-title" id="brgyPageTitle"><?= htmlspecialchars($page_titles[$view] ?? 'Barangay Portal') ?></div>
      <div class="page-sub"><?= htmlspecialchars($org) ?><?= $city ? ' - '.htmlspecialchars($city) : '' ?></div>
     </div>
    </div>
@@ -407,7 +463,7 @@ tr:hover td{background:#fafafa;}
  </div>
  <?php endif; ?>
 
- <?php if($view === 'overview'): ?>
+ <div class="tab-panel <?= $view==='overview'?'active':'' ?>" id="tab-overview">
  <div class="stat-grid">
  <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="stat-num"><?= $total ?></div><div class="stat-lbl">Total Reports</div></div></div>
  <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num"><?= $danger ?></div><div class="stat-lbl">Dangerous</div></div></div>
@@ -415,12 +471,16 @@ tr:hover td{background:#fafafa;}
  <div class="stat-card"><div class="stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="stat-num"><?= $safe ?></div><div class="stat-lbl">Resolved</div></div></div>
  </div>
  <div class="card">
- <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta"><?= count($reports) ?> records</span></div>
+ <div class="card-header"><h3><i class="fas fa-list" style="color:var(--green);margin-right:6px;"></i>Recent Incidents</h3><span class="card-meta" id="recentCount"><?= count($reports) ?> records</span></div>
+ <div id="brgyTableWrapOverview" class="brgy-table-wrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
  <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
- <?php elseif($view === 'reports'): ?>
+ </div>
+ </div>
+
+  <div class="tab-panel <?= $view==='reports'?'active':'' ?>" id="tab-reports">
  <div class="rpt-stats">
  <div class="map-stat"><div class="map-stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="map-stat-num"><?= $total ?></div><div class="map-stat-lbl">Total</div></div></div>
  <div class="map-stat"><div class="map-stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="map-stat-num"><?= $danger ?></div><div class="map-stat-lbl">Dangerous</div></div></div>
@@ -433,18 +493,22 @@ tr:hover td{background:#fafafa;}
  <span class="card-meta" id="rptCount"><?= count($reports) ?> records</span>
  </div>
  <div class="reports-filter-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
- <button class="rf-btn rf-active" onclick="filterReports('all',this)">All</button>
+ <button class="rf-btn rf-active" onclick="filterReports('all',this)">All Active</button>
  <button class="rf-btn" onclick="filterReports('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="rf-btn" onclick="filterReports('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
- <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+ <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)" style="flex:1;min-width:180px;">
- <a href="../api/reports.php?action=export&type=reports&format=csv<?= $brgy ? '&barangay='.rawurlencode($brgy) : '' ?>" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;"><i class="fas fa-file-csv"></i> Export CSV</a>
+ <button type="button" onclick="openExportModal()" class="rf-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;font-weight:700;cursor:pointer;"><i class="fas fa-file-csv"></i> Export CSV</button>
  </div>
+ <div id="brgyTableWrap" class="brgy-table-wrap">
  <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports match your view yet.</p></div>
- <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
+ <?php else: ?><?php include __DIR__.'/../portal/_report_table.php'; endif; ?>
  </div>
 
- <?php elseif($view === 'contacts'): ?>
+ </div>
+ </div>
+
+  <div class="tab-panel <?= $view==='contacts'?'active':'' ?>" id="tab-contacts">
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-address-book" style="color:var(--green);margin-right:6px;"></i>Emergency Contacts</h3><span class="card-meta"><?= count($contacts) ?> contacts</span></div>
  <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:flex-end;">
@@ -458,7 +522,7 @@ tr:hover td{background:#fafafa;}
  <div class="contact-type-badge" style="background:<?= $tc[0] ?>;color:<?= $tc[1] ?>;"><?= strtoupper($c['type']) ?></div>
  <div class="contact-name"><?= htmlspecialchars($c['name']) ?></div>
  <div class="contact-meta">
- <?php if($c['contact_number']): ?><span><i class="fas fa-phone" style="margin-right:4px;color:var(--green);"></i><?= htmlspecialchars($c['contact_number']) ?></span>&ensp;<?php endif; ?>
+ <?= sentri_render_contact_numbers_html($c['contact_number'] ?? '', 'inline') ?>
  <?php if($c['contact_email']): ?><span><i class="fas fa-envelope" style="margin-right:4px;color:var(--green);"></i><?= htmlspecialchars($c['contact_email']) ?></span>&ensp;<?php endif; ?>
  <?php if($c['barangay']): ?><span><i class="fas fa-location-dot" style="margin-right:4px;color:var(--muted);"></i><?= htmlspecialchars($c['barangay']) ?><?= $c['city'] ? ', '.htmlspecialchars($c['city']) : '' ?></span><?php endif; ?>
  </div>
@@ -467,7 +531,9 @@ tr:hover td{background:#fafafa;}
  <?php endforeach; endif; ?>
  </div>
 
- <?php elseif($view === 'residents'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='residents'?'active':'' ?>" id="tab-residents">
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-users" style="color:var(--green);margin-right:6px;"></i>Registered Residents<?= $brgy ? ' - '.htmlspecialchars($brgy) : '' ?></h3><span class="card-meta"><?= count($residents) ?> residents</span></div>
  <?php if(empty($residents)): ?><div class="empty"><i class="fas fa-users"></i><p>No registered residents found<?= $brgy ? ' in '.htmlspecialchars($brgy) : '' ?>.</p></div>
@@ -485,7 +551,9 @@ tr:hover td{background:#fafafa;}
  </div>
 
 
- <?php elseif($view === 'map'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='map'?'active':'' ?>" id="tab-map">
  <!-- ── INCIDENT MAP ── -->
  <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
  <script src="../assets/vendor/leaflet/leaflet.js"></script>
@@ -509,10 +577,10 @@ tr:hover td{background:#fafafa;}
  <div class="map-wrap">
  <div class="map-controls">
  <h3><i class="fas fa-map-location-dot" style="color:var(--green);margin-right:6px;"></i>Incident Map<?= $brgy ? ' - '.htmlspecialchars($brgy) : '' ?></h3>
- <button class="filter-btn active-all" onclick="filterMap('all',this)">All</button>
+ <button class="filter-btn active-all" onclick="filterMap('all',this)">All Active</button>
  <button class="filter-btn" onclick="filterMap('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
  <button class="filter-btn" onclick="filterMap('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
- <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+ <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe / Archived</button>
  <button class="filter-btn" id="toggleHazardRings" onclick="toggleHazardBuffer(this)" title="Toggle 250m/150m safety hazard buffer rings"><i class="fas fa-bullseye" style="color:#ef4444;font-size:0.7rem;"></i> Hazard Buffers</button>
  <button class="filter-btn" id="toggleHeatmap" onclick="toggleHeatmapDensity(this)" title="Toggle incident intensity cluster overlay"><i class="fas fa-fire-flame-curved" style="color:#f59e0b;font-size:0.7rem;"></i> Density Heatmap</button>
  <div style="position:relative;margin-left:auto;">
@@ -537,6 +605,7 @@ tr:hover td{background:#fafafa;}
  return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],
  'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),
  'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
+ 'is_archived'=>(int)($r['is_archived']??0),
  'reporter'=>htmlspecialchars(trim($r['first_name'].' '.$r['last_name']),ENT_QUOTES),
  'reporter_brgy'=>htmlspecialchars(trim((string)($r['barangay_name']??'')),ENT_QUOTES),
  'reporter_address'=>htmlspecialchars(trim((string)($r['resident_address']??'')),ENT_QUOTES),
@@ -557,46 +626,189 @@ tr:hover td{background:#fafafa;}
  }
  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(lmap);
  var allMapMarkers = [];
+ var spiderGuideLines = [];
  var hazardCircles = [];
  var showHazardRings = false;
  var currentMapStatus = 'all';
  var currentMapQuery = '';
  var mapPinPts = [];
 
- function renderReportMarkers(){
- // Only plot pins that fall inside the Imus perimeter. Wait for the GeoJSON
- // cache (geoReady) so isInImus() can actually answer; before it loads every
- // point reports false and would be hidden.
- var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
- mapReports.forEach(function(r){
-  if(!isFinite(r.lat) || !isFinite(r.lng)) return;
-  if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return; // outside Imus
-  mapPinPts.push([r.lat, r.lng]);
-  var color = markerColors[r.status]||'#888';
-  var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
-  m.reportData = r;
-  m.bindPopup(
-  '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
-  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+ function openReportFromMap(id) {
+  var r = mapReports.find(function(x){ return x.id == id; });
+  if (r) {
+   viewReport(r.id, r.title, r.category, r.status, r.barangay, r.reporter, r.date, r.desc, r.escalated, (r.reporter_brgy ? 'Brgy ' + r.reporter_brgy + (r.reporter_address ? ', ' + r.reporter_address : '') : ''), r.responder_pending);
+  }
+ }
+
+ function buildBarangaySinglePopup(r) {
+  return '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
+  '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+esc(r.title)+'</div>'+
   '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
   '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'var(--sentri-danger)':r.status==='caution'?'var(--sentri-caution)':'var(--sentri-safe)')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
   '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
-  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
-  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+r.reporter+'</div>'+
-  (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+r.reporter_brgy+(r.reporter_address?', '+r.reporter_address:'')+'</div>':'')+
-  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
-  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
-  {maxWidth:260}
-  );
-  m.addTo(lmap);
-  allMapMarkers.push(m);
- });
- if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
- else{lmap.setView([14.4240,120.9215],12);}
- // Keep barangay labels clear of the report pins once both are on the map.
- if(typeof SentriGeo !== 'undefined' && SentriGeo.avoidLabelOverlap){
-  SentriGeo.avoidLabelOverlap(lmap, mapPinPts);
+  (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+esc(r.barangay)+'</div>':'')+
+  '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Reported by:</b> '+esc(r.reporter)+'</div>'+
+  (r.reporter_brgy?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Resident of:</b> Brgy '+esc(r.reporter_brgy)+(r.reporter_address?', '+esc(r.reporter_address):'')+'</div>':'')+
+  (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+esc(r.desc.substring(0,120))+(r.desc.length>120?'…':'')+'</div>':'')+
+  '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;margin-bottom:8px;">'+esc(r.date)+' &middot; Report #'+r.id+'</div>'+
+  '<button type="button" onclick="openReportFromMap('+r.id+')" style="display:block;width:100%;padding:6px;background:#166534;color:#fff;border:none;border-radius:6px;font-size:0.75rem;font-weight:700;cursor:pointer;">View Report Details</button>'+
+  '</div>';
  }
+
+ function buildBarangayClusterPopup(reps, activeId) {
+  var locName = reps[0].barangay || 'Imus';
+  var count = reps.length;
+  var h = '<div style="min-width:230px;max-width:280px;font-family:Inter,sans-serif;">' +
+   '<div style="font-weight:800;font-size:0.88rem;color:#166534;margin-bottom:2px;">' + esc(locName) + '</div>' +
+   '<div style="font-size:0.74rem;color:#d97706;margin-bottom:8px;font-weight:700;"><i class="fas fa-layer-group"></i> ' + count + ' Overlapping Reports at this location:</div>' +
+   '<div style="max-height:240px;overflow-y:auto;padding-right:2px;display:flex;flex-direction:column;gap:6px;">';
+
+  reps.forEach(function(r) {
+   var isActive = (r.id === activeId);
+   var borderCol = isActive ? '#166534' : '#e2e8f0';
+   var bgCol = isActive ? '#f0f7ff' : '#ffffff';
+   var st = r.status || 'caution';
+   var stBg = st === 'dangerous' ? '#fef2f2' : (st === 'caution' ? '#fffbeb' : '#f0fdf4');
+   var stClr = st === 'dangerous' ? 'var(--sentri-danger)' : (st === 'caution' ? 'var(--sentri-caution)' : 'var(--sentri-safe)');
+   var cat = catLabels[r.category] || r.category || 'Incident';
+
+   h += '<div style="border:1.5px solid ' + borderCol + ';background:' + bgCol + ';border-radius:8px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">' +
+    '<div style="font-weight:700;font-size:0.82rem;color:#1f2937;margin-bottom:3px;">' + esc(r.title) + '</div>' +
+    '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">' +
+     '<span style="background:' + stBg + ';color:' + stClr + ';padding:2px 7px;border-radius:12px;font-size:0.68rem;font-weight:700;text-transform:uppercase;">' + st + '</span>' +
+     '<span style="background:#f3f4f6;color:#4b5563;padding:2px 7px;border-radius:12px;font-size:0.68rem;font-weight:600;">' + esc(cat) + '</span>' +
+    '</div>' +
+    '<div style="font-size:0.71rem;color:#6b7280;margin-bottom:3px;">' + esc(r.reporter) + ' &middot; ' + esc(r.date) + '</div>' +
+    '<button type="button" onclick="openReportFromMap(' + r.id + ')" style="margin-top:4px;background:#166534;color:#fff;border:none;padding:5px 8px;border-radius:6px;font-size:0.72rem;font-weight:700;cursor:pointer;width:100%;text-align:center;">View Details</button>' +
+   '</div>';
+  });
+
+  h += '</div></div>';
+  return h;
+ }
+
+ function clearMapMarkersAndGuides(){
+  allMapMarkers.forEach(function(m){ lmap.removeLayer(m); });
+  allMapMarkers = [];
+  spiderGuideLines.forEach(function(l){ lmap.removeLayer(l); });
+  spiderGuideLines = [];
+  mapPinPts = [];
+ }
+
+ function renderReportMarkers(){
+  clearMapMarkersAndGuides();
+  var canFilter = (typeof SentriGeo !== 'undefined' && SentriGeo.geoReady && SentriGeo.geoReady());
+  
+  var validReports = [];
+  mapReports.forEach(function(r){
+   if(!isFinite(r.lat) || !isFinite(r.lng)) return;
+   if(canFilter && !SentriGeo.isInImus(r.lat, r.lng)) return;
+
+   var isArchivedOrSafe = (r.status === 'safe');
+   var matchStatus = false;
+   if(currentMapStatus === 'all'){
+    matchStatus = !isArchivedOrSafe;
+   } else if(currentMapStatus === 'safe' || currentMapStatus === 'archived'){
+    matchStatus = isArchivedOrSafe;
+   } else {
+    matchStatus = (r.status === currentMapStatus && !r.is_archived);
+   }
+
+   var matchQuery = true;
+   if(currentMapQuery){
+    var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'') + ' ' + (r.reporter||'')).toLowerCase();
+    matchQuery = text.indexOf(currentMapQuery) !== -1;
+   }
+
+   if(matchStatus && matchQuery){
+    validReports.push(r);
+    mapPinPts.push([r.lat, r.lng]);
+   }
+  });
+
+  var clusters = [];
+  validReports.forEach(function(r){
+   var matched = false;
+   for(var i=0; i<clusters.length; i++){
+    var c = clusters[i];
+    if(Math.abs(c.lat - r.lat) < 0.00018 && Math.abs(c.lng - r.lng) < 0.00018){
+     c.reports.push(r);
+     matched = true;
+     break;
+    }
+   }
+   if(!matched){
+    clusters.push({ lat: r.lat, lng: r.lng, reports: [r] });
+   }
+  });
+
+  clusters.forEach(function(cluster){
+   var cLat = cluster.lat;
+   var cLng = cluster.lng;
+   var reps = cluster.reports;
+   var count = reps.length;
+
+   if(count === 1){
+    var r = reps[0];
+    var color = markerColors[r.status] || '#888';
+    var m = L.marker([cLat, cLng], { icon: makeMapIcon(color) });
+    m.reportData = r;
+    m.bindPopup(buildBarangaySinglePopup(r), { maxWidth: 260 });
+    m.addTo(lmap);
+    allMapMarkers.push(m);
+   } else {
+    // Center hub dot
+    var hub = L.circleMarker([cLat, cLng], {
+     radius: 6,
+     color: '#ffffff',
+     weight: 2.5,
+     fillColor: '#166534',
+     fillOpacity: 1,
+     bubblingMouseEvents: false
+    }).addTo(lmap);
+    hub.bindTooltip('<div style="font-weight:700;font-size:0.75rem;"><i class="fas fa-layer-group" style="color:#f59e0b;margin-right:4px;"></i>' + count + ' Overlapping Reports (Click to view)</div>', { direction: 'top', offset: [0, -8] });
+    hub.bindPopup(buildBarangayClusterPopup(reps, null), { maxWidth: 280 });
+    allMapMarkers.push(hub);
+
+    // Spider out markers
+    var offsetRadius = 0.00022; // ~24 meters
+    reps.forEach(function(r, idx){
+     var angle = (2 * Math.PI * idx / count) - (Math.PI / 2);
+     var oLat = cLat + (offsetRadius * Math.cos(angle));
+     var oLng = cLng + (offsetRadius * 1.03 * Math.sin(angle));
+
+     var line = L.polyline([[cLat, cLng], [oLat, oLng]], {
+      color: '#166534',
+      weight: 1.5,
+      dashArray: '3, 4',
+      opacity: 0.65,
+      interactive: false
+     }).addTo(lmap);
+     spiderGuideLines.push(line);
+
+     var color = markerColors[r.status] || '#888';
+     var m = L.marker([oLat, oLng], { icon: makeMapIcon(color) });
+     m.reportData = r;
+     m.bindTooltip('<div style="font-weight:700;font-size:0.75rem;">' + esc(r.title) + ' (' + (r.status.charAt(0).toUpperCase() + r.status.slice(1)) + ')</div>', { direction: 'top', offset: [0, -14] });
+     m.bindPopup(buildBarangayClusterPopup(reps, r.id), { maxWidth: 280 });
+     m.addTo(lmap);
+     allMapMarkers.push(m);
+    });
+   }
+  });
+
+  if(showHazardRings) drawHazardCircles();
+  if(showHeatmap) drawHeatmap();
+
+  if(allMapMarkers.length > 0 && !window.__mapBoundsSet){
+   var g = L.featureGroup(allMapMarkers);
+   lmap.fitBounds(g.getBounds().pad(0.15));
+   window.__mapBoundsSet = true;
+  }
+
+  if(typeof SentriGeo !== 'undefined' && SentriGeo.avoidLabelOverlap){
+   SentriGeo.avoidLabelOverlap(lmap, mapPinPts);
+  }
  }
 
  // Render pins only after the Imus geometry is available so out-of-city
@@ -660,9 +872,13 @@ tr:hover td{background:#fafafa;}
 
  function drawHazardCircles() {
  clearHazardCircles();
+ var drawnPos = {};
  allMapMarkers.forEach(function(m){
  if(lmap.hasLayer(m) && m.reportData){
  var r = m.reportData;
+ var posKey = r.lat.toFixed(5) + ',' + r.lng.toFixed(5);
+ if(drawnPos[posKey]) return;
+ drawnPos[posKey] = true;
  if(r.status === 'dangerous' || r.status === 'caution'){
  var rad = r.status === 'dangerous' ? 250 : 150;
  var col = r.status === 'dangerous' ? '#dc2626' : '#d97706';
@@ -673,7 +889,7 @@ tr:hover td{background:#fafafa;}
  dashArray: '5 5',
  fillColor: col,
  fillOpacity: 0.16
- }).bindTooltip('<div style="font-weight:700;font-size:0.74rem;">'+(r.status==='dangerous'?'Hazard Perimeter (250m)':'Caution Zone (150m)')+'<br><span style="font-weight:400;font-size:0.7rem;">'+r.title+'</span></div>');
+ }).bindTooltip('<div style="font-weight:700;font-size:0.74rem;">'+(r.status==='dangerous'?'Hazard Perimeter (250m)':'Caution Zone (150m)')+'<br><span style="font-weight:400;font-size:0.7rem;">'+esc(r.title)+'</span></div>');
  circle.addTo(lmap);
  hazardCircles.push(circle);
  }
@@ -742,20 +958,7 @@ tr:hover td{background:#fafafa;}
  }
 
  function updateMapFilter(){
- allMapMarkers.forEach(function(m){
- var r = m.reportData;
- var matchStatus = (currentMapStatus === 'all' || r.status === currentMapStatus);
- var matchQuery = true;
- if(currentMapQuery){
- var text = (r.title + ' ' + (r.barangay||'') + ' ' + (r.desc||'') + ' ' + (r.reporter||'')).toLowerCase();
- matchQuery = text.indexOf(currentMapQuery) !== -1;
- }
- var show = matchStatus && matchQuery;
- if(show){ if(!lmap.hasLayer(m)) m.addTo(lmap); }
- else { if(lmap.hasLayer(m)) lmap.removeLayer(m); }
- });
- if(showHazardRings) drawHazardCircles();
- if(showHeatmap) drawHeatmap();
+  renderReportMarkers();
  }
 
  function filterMap(status,btn){
@@ -771,7 +974,9 @@ tr:hover td{background:#fafafa;}
  }
  </script>
 
- <?php elseif($view === 'profile'): ?>
+ </div>
+
+  <div class="tab-panel <?= $view==='profile'?'active':'' ?>" id="tab-profile">
  <div class="card">
  <div class="card-header"><h3><i class="fas fa-id-card" style="color:var(--green);margin-right:6px;"></i>My Profile</h3></div>
  <div style="padding:24px;">
@@ -786,14 +991,90 @@ tr:hover td{background:#fafafa;}
  </div>
  </div>
 
- <?php else: ?>
- <div class="card"><div class="coming-soon"><i class="fas <?= $nav_items[$view]['icon'] ?? 'fa-gear' ?>"></i><h3><?= htmlspecialchars($page_titles[$view] ?? ucfirst($view)) ?></h3><p>This section is under development.</p></div></div>
- <?php endif; ?>
+</div>
 
  </div>
 </div>
 
 <script>
+
+// ── Sidebar toggling (fast mobile touch support) ──────────────────────────
+function openSidebar(){
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('overlay');
+  if (sb) sb.classList.add('open');
+  if (ov) ov.classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSidebar(){
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('overlay');
+  if (sb) sb.classList.remove('open');
+  if (ov) ov.classList.remove('show');
+  document.body.style.overflow = '';
+}
+
+// ── Client-side Tab Navigation ───────────────────────────────────────────
+const tabTitles = {
+  overview: 'Barangay Dashboard',
+  reports: 'Incident Reports',
+  map: 'Incident Map',
+  contacts: 'Emergency Contacts',
+  residents: 'Residents',
+  profile: 'My Profile'
+};
+
+function showTab(name) {
+  if (!tabTitles[name]) return;
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.sb-nav a').forEach(function(a){ a.classList.remove('active'); });
+  var target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+  var titleEl = document.getElementById('brgyPageTitle');
+  if (titleEl) titleEl.textContent = tabTitles[name];
+  try { history.replaceState(null, '', '#tab=' + name); } catch(e){}
+  if (name === 'map') {
+    setTimeout(function(){
+      if (typeof lmap !== 'undefined' && lmap) {
+        lmap.invalidateSize();
+      }
+    }, 80);
+  }
+  closeSidebar();
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  var ham = document.querySelector('.ham-btn');
+  if (ham) {
+    ham.addEventListener('touchstart', function(e){
+      openSidebar();
+      e.preventDefault();
+    }, {passive: false});
+  }
+  var closeBtn = document.querySelector('.sb-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('touchstart', function(e){
+      closeSidebar();
+      e.preventDefault();
+    }, {passive: false});
+  }
+  var overlay = document.getElementById('overlay');
+  if (overlay) {
+    overlay.addEventListener('touchstart', function(e){
+      closeSidebar();
+      e.preventDefault();
+    }, {passive: false});
+  }
+
+  var hash = (location.hash || '').replace('#tab=', '').replace('#view=', '').replace('#', '');
+  if (hash && tabTitles[hash]) {
+    showTab(hash);
+  }
+});
+
 // Escape user-controlled values before they are concatenated into innerHTML.
 function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -823,7 +1104,7 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  currentReportId = id;
  currentReportStatus = status;
  currentEscalated = !!escalated;
- currentResponderPending = !!responderPending;
+ currentResponderPending = !!responderPending && status === 'dangerous';
  document.getElementById('modalTitle').textContent = title;
 
  // Status colour
@@ -841,18 +1122,58 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  (residence?'<div class="detail-row"><div class="detail-lbl">Resident of</div><div class="detail-val">'+esc(residence)+'</div></div>':'')+
  '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+esc(date)+'</div></div>'+
  (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+esc(desc)+'</div></div>':'')+
- '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
+ '<div id="brgyModalPhotosWrap" style="margin-top:14px;display:none;"></div>' +
+  '<div id="brgyModalTimelineWrap"><div style="font-size:0.75rem;color:var(--muted);padding:10px 0;"><i class="fas fa-spinner fa-spin"></i> Loading telemetry audit trail…</div></div>';
 
  try {
- fetch('../api/reports.php?action=get_lifecycle&report_id=' + id).then(r=>r.json()).then(data=>{
+  fetch('../api/reports.php?action=get_report_images&report_id=' + id).then(function(r){ return r.json(); }).then(function(data){
+   var pw = document.getElementById('brgyModalPhotosWrap');
+   if (!pw) return;
+   if (data && data.status === 'success' && Array.isArray(data.images) && data.images.length > 0) {
+    pw.style.display = 'block';
+    var count = data.images.length;
+    var h = '<div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">' +
+     '<i class="fas fa-camera" style="color:var(--green,#16a34a);"></i> Attached Photos (' + count + ')' +
+     '</div>' +
+     '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:10px;">';
+    data.images.forEach(function(img, idx) {
+     var raw = img.url || ('uploads/reports/' + img.file_name);
+     var imgUrl = raw.startsWith('/') ? raw : ('../' + raw.replace(/^\.\//, ''));
+     h += '<div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);aspect-ratio:4/3;background:#0f172a;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.1);" onclick="openPhotoPreview(\'' + imgUrl.replace(/'/g, "\\'") + '\')">' +
+      '<img src="' + imgUrl + '" alt="Incident Photo ' + (idx + 1) + '" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy" onerror="this.parentElement.style.display=\'none\'">' +
+      '<div style="position:absolute;bottom:5px;right:6px;background:rgba(0,0,0,0.65);color:#fff;font-size:0.65rem;font-weight:600;padding:2px 7px;border-radius:12px;backdrop-filter:blur(2px);display:flex;align-items:center;gap:3px;"><i class="fas fa-magnifying-glass-plus"></i> ' + (idx+1) + '/' + count + '</div>' +
+      '</div>';
+    });
+    h += '</div>';
+    pw.innerHTML = h;
+   } else {
+    pw.style.display = 'none';
+    pw.innerHTML = '';
+   }
+  }).catch(function(){
+   var pw = document.getElementById('brgyModalPhotosWrap');
+   if (pw) pw.style.display = 'none';
+  });
+ } catch(e) {}
+
+ try {
+  fetch('../api/reports.php?action=get_lifecycle&report_id=' + id).then(r=>r.json()).then(data=>{
  if (data.status === 'success' && data.report) {
  var rep = data.report;
+ var parsePhtDate = function(s) {
+  if (!s) return null;
+  var d = new Date(String(s).replace(' ', 'T'));
+  return isNaN(d.getTime()) ? null : d;
+ };
+ var citizenDate = parsePhtDate(rep.created_at);
+ var respondedDate = parsePhtDate(rep.responded_at);
+ var resolvedDate = parsePhtDate(rep.resolved_at);
  var steps = [
- { title: 'Citizen Reported', icon: 'fa-bullhorn', color: '#3b82f6', done: true, time: rep.created_at ? new Date(rep.created_at).toLocaleString('en-PH') : date, desc: 'Reported by ' + (rep.reporter_name || reporter) },
+ { title: 'Citizen Reported', icon: 'fa-bullhorn', color: '#3b82f6', done: true, time: citizenDate ? citizenDate.toLocaleString('en-PH') : date, desc: 'Reported by ' + (rep.reporter_name || reporter) },
  { title: 'Barangay / LGU Escalation', icon: 'fa-building-shield', color: '#f59e0b', done: !!rep.escalated_to_lgu || rep.status === 'dangerous' || !!escalated, time: (rep.escalated_to_lgu || escalated) ? 'Escalated to LGU' : 'Monitored locally', desc: (rep.escalated_to_lgu || escalated) ? 'Prioritized for municipal response' : 'Barangay tier monitoring' },
  { title: 'LGU Dispatch to Unit', icon: 'fa-truck-fast', color: '#8b5cf6', done: !!rep.assigned_to, time: rep.assigned_to ? ('Unit: ' + (rep.responder_name || 'Unit') + (rep.responder_agency ? ' (' + rep.responder_agency.toUpperCase() + ')' : '')) : 'Pending assignment', desc: rep.assigned_to ? 'Emergency unit assigned' : 'Awaiting LGU dispatch' },
- { title: 'Unit Response & En Route', icon: 'fa-person-running', color: '#06b6d4', done: !!rep.responded_at || !!rep.accepted_at, time: rep.responded_at ? new Date(rep.responded_at).toLocaleTimeString('en-PH') : (rep.accepted_at ? 'Accepted' : 'Standby'), desc: rep.responded_at ? 'Responders arrived on scene' : 'Dispatched unit in transit' },
- { title: 'Scene Cleared & Resolved', icon: 'fa-circle-check', color: '#10b981', done: (rep.status === 'safe' || !!rep.resolved_at || isResolved), time: rep.resolved_at ? new Date(rep.resolved_at).toLocaleString('en-PH') : (rep.status === 'safe' ? 'Resolved' : 'Active'), desc: (rep.status === 'safe' || !!rep.resolved_at || isResolved) ? 'Hazard safely resolved' : 'Active emergency resolution in progress' }
+ { title: 'Unit Response & En Route', icon: 'fa-person-running', color: '#06b6d4', done: !!rep.responded_at || !!rep.accepted_at, time: respondedDate ? respondedDate.toLocaleTimeString('en-PH') : (rep.accepted_at ? 'Accepted' : 'Standby'), desc: rep.responded_at ? 'Responders arrived on scene' : 'Dispatched unit in transit' },
+ { title: 'Scene Cleared & Resolved', icon: 'fa-circle-check', color: '#10b981', done: (rep.status === 'safe' || !!rep.resolved_at || isResolved), time: resolvedDate ? resolvedDate.toLocaleString('en-PH') : (rep.status === 'safe' ? 'Resolved' : 'Active'), desc: (rep.status === 'safe' || !!rep.resolved_at || isResolved) ? 'Hazard safely resolved' : 'Active emergency resolution in progress' }
  ];
 
  var tlHtml = '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">' +
@@ -892,18 +1213,18 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  actions.innerHTML = '';
 
  if (!isResolved) {
- if (responderPending) {
- // A dispatched responder must clear the incident first.
+ if (status === 'dangerous') {
+ // Dangerous incidents are cleared by the LGU or the dispatched responder.
  var waitBtn = document.createElement('button');
  waitBtn.className = 'btn-action btn-done';
  waitBtn.id = 'modalResolveBtn';
  waitBtn.disabled = true;
- waitBtn.title = 'The assigned first responder must resolve this incident first';
- waitBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Awaiting Responder';
+ waitBtn.title = responderPending ? 'The assigned first responder must resolve this incident first' : 'Dangerous incidents must be resolved by the LGU or the assigned responder';
+ waitBtn.innerHTML = responderPending ? '<i class="fas fa-hourglass-half"></i> Awaiting Responder' : '<i class="fas fa-hourglass-half"></i> LGU / Responder resolves';
  waitBtn.style.cssText = 'background:#fffbeb;color:#92400e;border:1.5px solid #fde68a;cursor:not-allowed;';
  actions.appendChild(waitBtn);
  } else {
- // Resolve button
+ // Resolve button (caution reports are resolvable by the barangay)
  var resolveBtn = document.createElement('button');
  resolveBtn.className = 'btn-action btn-resolve-full';
  resolveBtn.id = 'modalResolveBtn';
@@ -938,9 +1259,9 @@ async function viewReport(id, title, category, status, barangay, reporter, date,
  var sel = document.createElement('select');
  sel.id = 'modalStatusSelect';
  sel.style.cssText = 'padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:\'Inter\',sans-serif;cursor:pointer;background:#fff;';
- sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (responderPending ? ' disabled title="Waiting for the assigned responder to resolve this incident"' : '') + '>✅ Mark Safe</option>';
+ sel.innerHTML = '<option value="">Change Status</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe"' + (status === 'dangerous' ? ' disabled title="Dangerous incidents must be resolved by the LGU or the assigned responder"' : '') + '>✅ Mark Safe</option>';
  var safeOpt = sel.querySelector('option[value="safe"]');
- if (safeOpt && responderPending) safeOpt.textContent = '✅ Mark Safe (awaiting responder)';
+ if (safeOpt && status === 'dangerous') safeOpt.textContent = '✅ Mark Safe (LGU / Responder resolves)';
  sel.onchange = function() { changeStatus(this.value); };
  actions.appendChild(sel);
  }
@@ -952,11 +1273,23 @@ document.getElementById('reportModal').addEventListener('click', function(e) { i
 
 function closeModal() { document.getElementById('reportModal').classList.remove('show'); }
 
+function openPhotoPreview(url) {
+ var lb = document.getElementById('lightbox');
+ var img = document.getElementById('lightboxImg');
+ if (!lb || !img) return;
+ img.src = url;
+ lb.classList.add('open');
+}
+function closePhotoPreview() {
+ var lb = document.getElementById('lightbox');
+ if (lb) lb.classList.remove('open');
+}
+
 // ── Resolve ───────────────────────────────────────────────────────────────
 async function doResolve(btn) {
  if (!currentReportId) return;
- if (currentResponderPending) {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (currentReportStatus === 'dangerous') {
+  showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  return;
  }
  btn.disabled = true;
@@ -1026,8 +1359,8 @@ async function doEscalate(btn) {
 // ── Change Status (dropdown) ───────────────────────────────────────────────
 async function changeStatus(newStatus) {
  if (!newStatus || !currentReportId) return;
- if (newStatus === 'safe' && currentResponderPending) {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (newStatus === 'safe' && currentReportStatus === 'dangerous') {
+ showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  var s0 = document.getElementById('modalStatusSelect'); if (s0) s0.value = '';
  return;
  }
@@ -1057,8 +1390,8 @@ async function changeStatus(newStatus) {
 // ── Quick inline actions (table row buttons) ──────────────────────────────
 function quickResolve(id, btn) {
  var row = btn && btn.closest ? btn.closest('tr') : null;
- if (row && row.getAttribute('data-responder-pending') === '1') {
- showToast('A first responder is handling this incident. The responder must resolve it first.', 'error');
+ if (row && row.getAttribute('data-status') === 'dangerous') {
+ showToast('Dangerous incidents must be resolved by the LGU or the assigned responder.', 'error');
  return;
  }
  if (!confirm('Mark this report as resolved?')) return;
@@ -1132,7 +1465,8 @@ function refreshReportRow(id, newStatus, escalated) {
  pill.className = 'pill pill-' + newStatus;
  pill.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
  }
- if (newStatus === 'safe') {
+ row.setAttribute('data-status', newStatus);
+ if (newStatus !== 'dangerous') {
  row.removeAttribute('data-responder-pending');
  var pendingChip = row.querySelector('.responder-pending-chip');
  if (pendingChip) pendingChip.remove();
@@ -1144,13 +1478,21 @@ function refreshReportRow(id, newStatus, escalated) {
  if (actionsCell) {
  // Remove old resolve/escalate buttons, leave view button
  actionsCell.querySelectorAll('.btn-resolve, .btn-escalate, .btn-resolve-pending').forEach(function(b) { b.remove(); });
- if (newStatus !== 'safe' && !rowPending) {
- // Re-add resolve button
+ if (newStatus !== 'safe') {
  var rb = document.createElement('button');
+ if (newStatus === 'dangerous') {
+ rb.className = 'btn-icon btn-resolve-pending';
+ rb.type = 'button';
+ rb.disabled = true;
+ rb.title = rowPending ? 'A first responder has been dispatched and must resolve this incident' : 'Dangerous incidents must be resolved by the LGU or the assigned responder';
+ rb.style.cssText = 'background:#fffbeb;color:#92400e;opacity:.75;cursor:not-allowed;';
+ rb.innerHTML = '<i class="fas fa-hourglass-half"></i>';
+ } else {
  rb.className = 'btn-icon btn-resolve';
  rb.title = 'Mark Resolved';
  rb.innerHTML = '<i class="fas fa-check"></i>';
  rb.onclick = function() { quickResolve(id, rb); };
+ }
  actionsCell.appendChild(rb);
  }
  }
@@ -1163,9 +1505,7 @@ function updateEscalateBadgeInRow(id) {
  // No-op - escalation doesn't change the row's status pill, just a note
 }
 
-// ── Sidebar & filter ──────────────────────────────────────────────────────
-function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.style.overflow='hidden';}
-function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.style.overflow='';}
+// ── Report filtering ─────────────────────────────────────────────────────
 
 var activeRptStatus = 'all';
 function filterReports(status, btn) {
@@ -1177,19 +1517,235 @@ function filterReports(status, btn) {
 function searchReports(q) { applyRptFilters(); }
 function applyRptFilters() {
  var q = (document.getElementById('rptSearch')||{value:''}).value.toLowerCase();
- var rows = document.querySelectorAll('tbody tr');
+ var rows = document.querySelectorAll('#brgyTableWrap tbody tr');
  var visible = 0;
  rows.forEach(function(row) {
  var statusEl = row.querySelector('.pill');
  var status = statusEl ? statusEl.className.replace(/pill\s*/g,'').replace('pill-','').trim() : '';
+ var isArchivedOrSafe = (status === 'safe');
+ var matchStatus = false;
+ if(activeRptStatus === 'all'){
+  matchStatus = !isArchivedOrSafe;
+ } else if(activeRptStatus === 'safe' || activeRptStatus === 'archived'){
+  matchStatus = isArchivedOrSafe;
+ } else {
+  matchStatus = (status === activeRptStatus && row.getAttribute('data-archived') !== '1');
+ }
  var text = row.textContent.toLowerCase();
- var show = (activeRptStatus === 'all' || status === activeRptStatus) && (!q || text.includes(q));
+ var show = matchStatus && (!q || text.includes(q));
  row.style.display = show ? '' : 'none';
  if (show) visible++;
  });
  var cnt = document.getElementById('rptCount');
  if (cnt) cnt.textContent = visible + ' records';
 }
+
+document.addEventListener('DOMContentLoaded', function(){
+ applyRptFilters();
+});
+
+// ── 30s background auto-refresh for overview & reports ─────────
+(function initBarangayTablePolling(){
+ var currentView = '<?= htmlspecialchars($view, ENT_QUOTES, 'UTF-8') ?>';
+ if (currentView !== 'overview' && currentView !== 'reports') return;
+ var pollInterval = 30000;
+ var inFlight = false;
+
+ async function pollTable(){
+  if (inFlight || document.hidden) return;
+  // Don't interrupt while viewing report detail modal
+  var detailModal = document.getElementById('reportModal');
+  if (detailModal && detailModal.classList.contains('show')) return;
+
+  inFlight = true;
+  try {
+   var res = await fetch('barangay.php?view=' + encodeURIComponent(currentView) + '&ajax_reports=1', {
+    credentials: 'same-origin',
+    cache: 'no-store'
+   });
+   var data = await res.json();
+   if (data && data.status === 'success') {
+    document.querySelectorAll('.brgy-table-wrap').forEach(function(wrap){
+     if (wrap.innerHTML !== data.html) {
+      wrap.innerHTML = data.html;
+     }
+    });
+    applyRptFilters();
+    // Update overview stats
+    if (document.getElementById('statTotal')) document.getElementById('statTotal').textContent = data.total;
+    if (document.getElementById('statDanger')) document.getElementById('statDanger').textContent = data.danger;
+    if (document.getElementById('statCaution')) document.getElementById('statCaution').textContent = data.caution;
+    if (document.getElementById('statSafe')) document.getElementById('statSafe').textContent = data.safe;
+    if (document.getElementById('recentCount')) document.getElementById('recentCount').textContent = data.count + ' records';
+    // Update reports stats
+    if (document.getElementById('rptStatTotal')) document.getElementById('rptStatTotal').textContent = data.total;
+    if (document.getElementById('rptStatDanger')) document.getElementById('rptStatDanger').textContent = data.danger;
+    if (document.getElementById('rptStatCaution')) document.getElementById('rptStatCaution').textContent = data.caution;
+    if (document.getElementById('rptStatSafe')) document.getElementById('rptStatSafe').textContent = data.safe;
+   }
+  } catch(e) {
+   // Silent background retry on next tick
+  } finally {
+   inFlight = false;
+  }
+ }
+
+ setInterval(pollTable, pollInterval);
+ document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible') pollTable();
+ });
+})();
+
+// ── New-report popup alerts via SentriReportAlerts ─────────────
+var BRGY_ALERT_ICONS = {fire:'fa-fire',crime:'fa-user-shield',accident:'fa-car-burst',flooding:'fa-water',health:'fa-heart-pulse',infrastructure:'fa-road-barrier',other:'fa-circle-exclamation'};
+var BRGY_ALERT_LABELS = {fire:'Fire',crime:'Crime',accident:'Accident',flooding:'Flooding',health:'Health',infrastructure:'Infrastructure',other:'Other'};
+var brgyAlertFeedTimer = null;
+
+function brgyAlertTone(report, reason) {
+ if (reason === 'escalated') return 'escalated';
+ if (report.status === 'caution') return 'caution';
+ if (report.status === 'dangerous') return 'dangerous';
+ return 'info';
+}
+
+function brgyAlertTime(report) {
+ var raw = report.created_at || '';
+ var d = new Date(String(raw).replace(' ', 'T'));
+ if (isNaN(d.getTime())) return raw;
+ var diff = Math.round((Date.now() - d.getTime()) / 1000);
+ if (diff >= 0 && diff < 60) return 'just now';
+ if (diff >= 60 && diff < 3600) return Math.round(diff / 60) + 'm ago';
+ if (diff >= 3600 && diff < 86400) return Math.round(diff / 3600) + 'h ago';
+ return d.toLocaleString('en-PH', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+
+function dismissBrgyAlert(el) {
+ if (!el || !el.parentNode) return;
+ el.classList.add('alert-out');
+ setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 380);
+}
+
+function renderBrgyAlert(report, label, reason) {
+ var container = document.getElementById('toastContainer');
+ if (!container) return;
+ var tone = brgyAlertTone(report, reason);
+ var category = BRGY_ALERT_LABELS[report.category] || report.category || 'Report';
+ var location = [report.barangay, report.city].filter(function (part) {
+  return part && String(part).trim() !== '';
+ }).join(', ');
+ var meta = [category, location, brgyAlertTime(report)].filter(function (part) {
+  return part && String(part).trim() !== '';
+ }).join(' \u00b7 ');
+ var description = String(report.description || '');
+ if (description.length > 120) description = description.slice(0, 119) + '\u2026';
+ var icon = reason === 'escalated' ? 'fa-arrow-up-from-bracket' : (BRGY_ALERT_ICONS[report.category] || 'fa-circle-exclamation');
+
+ var el = document.createElement('div');
+ el.className = 'alert-toast alert-' + tone;
+ el.setAttribute('role', 'alert');
+ el.setAttribute('aria-live', 'assertive');
+ el.innerHTML =
+  '<div class="alert-toast-icon"><i class="fas ' + esc(icon) + '"></i></div>' +
+  '<div class="alert-toast-body">' +
+   '<div class="alert-toast-title">' + esc(label || 'New Report') + '</div>' +
+   '<div class="alert-toast-text">' +
+    '<strong>' + esc(report.title || 'Untitled report') + '</strong>' +
+    (meta ? '<span>' + esc(meta) + '</span>' : '') +
+    (description ? '<span class="alert-toast-desc">' + esc(description) + '</span>' : '') +
+   '</div>' +
+   '<a class="alert-toast-link" href="javascript:void(0)" onclick="showTab(\'reports\')">View in reports <i class="fas fa-arrow-right"></i></a>' +
+  '</div>' +
+  '<button type="button" class="alert-toast-close" aria-label="Dismiss alert"><i class="fas fa-xmark"></i></button>' +
+  '<div class="alert-toast-progress" style="animation-duration:7s;"></div>';
+
+ container.appendChild(el);
+ var close = el.querySelector('.alert-toast-close');
+ if (close) close.onclick = function () { dismissBrgyAlert(el); };
+ var visible = container.querySelectorAll('.alert-toast');
+ if (visible.length > 3) {
+  for (var i = 0; i < visible.length - 3; i++) dismissBrgyAlert(visible[i]);
+ }
+ setTimeout(function () { dismissBrgyAlert(el); }, 7000);
+}
+
+// Only the dashboard and reports views render the incident table.
+function brgyFeedView() {
+ var v = new URLSearchParams(window.location.search).get('view') || 'overview';
+ return (v === 'overview' || v === 'reports') ? v : '';
+}
+
+// Re-render the feed from the same page without a full reload, so scroll,
+// filters and any open modal survive. Errors are swallowed: the next poll retries.
+function softRefreshFeed(highlightId) {
+ if (!brgyFeedView()) return;
+ fetch(window.location.pathname + window.location.search, { credentials: 'same-origin', cache: 'no-store' })
+ .then(function (response) { return response.ok ? response.text() : null; })
+ .then(function (html) {
+  if (!html) return;
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  var searchEl = document.getElementById('rptSearch');
+  var keepSearch = searchEl ? searchEl.value : '';
+
+  var curCard = document.querySelector('.content > .card');
+  var newCard = doc.querySelector('.content > .card');
+  if (curCard && newCard) {
+   curCard.replaceWith(newCard);
+   var newSearch = document.getElementById('rptSearch');
+   if (newSearch && keepSearch) newSearch.value = keepSearch;
+  }
+
+  ['stat-grid', 'rpt-stats'].forEach(function (cls) {
+   var cur = document.querySelector('.content > .' + cls);
+   var next = doc.querySelector('.content > .' + cls);
+   if (cur && next) cur.replaceWith(next);
+  });
+
+  // Restore the active status filter button of the freshly parsed markup.
+  if (typeof activeRptStatus !== 'undefined') {
+   document.querySelectorAll('.rf-btn').forEach(function (btn) {
+    btn.classList.remove('rf-active');
+    var onclick = btn.getAttribute('onclick') || '';
+    if (onclick.indexOf("filterReports('" + activeRptStatus + "'") !== -1) btn.classList.add('rf-active');
+   });
+  }
+  if (typeof applyRptFilters === 'function') applyRptFilters();
+
+  if (highlightId) {
+   var rows = document.querySelectorAll('.content > .card tbody tr');
+   rows.forEach(function (row) {
+    var first = row.firstElementChild;
+    if (first && first.textContent.trim() === '#' + highlightId) {
+     row.style.transition = 'background 0.4s';
+     row.style.background = '#fef9c3';
+     setTimeout(function () { row.style.background = ''; }, 2600);
+    }
+   });
+  }
+ })
+ .catch(function () { /* keep the existing feed; next poll retries */ });
+}
+
+function scheduleBrgyFeedRefresh(id) {
+ if (brgyAlertFeedTimer) clearTimeout(brgyAlertFeedTimer);
+ brgyAlertFeedTimer = setTimeout(function () {
+  brgyAlertFeedTimer = null;
+  softRefreshFeed(id);
+ }, 700);
+}
+
+(function () {
+ if (!window.SentriReportAlerts) return;
+ SentriReportAlerts.create({
+  api: '../api/reports.php',
+  seenKey: 'sentri_brgy_alert_seen_v1',
+  containerId: 'toastContainer',
+  interval: 15000,
+  onAlert: function (report, label, reason) {
+   renderBrgyAlert(report, label, reason);
+   scheduleBrgyFeedRefresh(report && report.id);
+  }
+ }).start();
+})();
 </script>
 
 <!-- ADD CONTACT MODAL -->
@@ -1700,6 +2256,131 @@ function toggleVulnStatus(id, btn){
  showToast('Resident status updated to Needs Assistance.', 'info');
  }
 }
+
+function openExportModal() {
+ const m = document.getElementById('exportModal');
+ if (m) m.classList.add('show');
+}
+function closeExportModal() {
+ const m = document.getElementById('exportModal');
+ if (m) m.classList.remove('show');
+}
+function onExportRangeChange(val) {
+ const yg = document.getElementById('exportYearGroup');
+ const mg = document.getElementById('exportMonthGroup');
+ const cg = document.getElementById('exportCustomGroup');
+ if (yg) yg.style.display = (val === 'annual') ? 'block' : 'none';
+ if (mg) mg.style.display = (val === 'month') ? 'block' : 'none';
+ if (cg) cg.style.display = (val === 'custom') ? 'block' : 'none';
+}
+function triggerDownload(format) {
+ const range = document.getElementById('exportRange')?.value || 'annual';
+ const status = document.getElementById('exportStatus')?.value || '';
+ let url = `../api/reports.php?action=export&type=reports&format=${format}&range=${encodeURIComponent(range)}`;
+ <?php if (!empty($brgy)): ?>
+ url += `&barangay=<?= rawurlencode($brgy) ?>`;
+ <?php endif; ?>
+ if (status) url += `&status=${encodeURIComponent(status)}`;
+ if (range === 'annual') {
+  const y = document.getElementById('exportYear')?.value;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'month') {
+  const m = document.getElementById('exportMonth')?.value;
+  const y = document.getElementById('exportMonthYear')?.value;
+  if (m) url += `&month=${encodeURIComponent(m)}`;
+  if (y) url += `&year=${encodeURIComponent(y)}`;
+ } else if (range === 'custom') {
+  const s = document.getElementById('exportStartDate')?.value;
+  const e = document.getElementById('exportEndDate')?.value;
+  if (s) url += `&start_date=${encodeURIComponent(s)}`;
+  if (e) url += `&end_date=${encodeURIComponent(e)}`;
+ }
+ closeExportModal();
+ window.location.href = url;
+}
+</script>
+
+<!-- ── Export to CSV / JSON Modal ── -->
+<div class="modal-bg" id="exportModal" onclick="if(event.target===this)closeExportModal()">
+ <div class="modal" style="max-width:480px;">
+ <div class="modal-header">
+ <h3 style="display:flex;align-items:center;gap:8px;"><i class="fas fa-file-csv" style="color:#16a34a;"></i> Export Incident Reports</h3>
+ <button class="modal-close" onclick="closeExportModal()"><i class="fas fa-xmark"></i></button>
+ </div>
+ <div class="modal-body">
+ <p style="font-size:0.83rem;color:var(--muted);margin-bottom:14px;">Select the time and date range to export incident telemetry for your barangay.</p>
+ 
+ <div style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Timeframe</label>
+ <select id="exportRange" onchange="onExportRangeChange(this.value)" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="annual" selected>Annual (Full Year)</option>
+ <option value="month">Specific Month & Year</option>
+ <option value="last_month">Last Month</option>
+ <option value="custom">Custom Date Range (From - To)</option>
+ <option value="all">Full Archive (All Time)</option>
+ </select>
+ </div>
+
+ <div id="exportYearGroup" style="margin-bottom:14px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Select Year</label>
+ <select id="exportYear" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php $curY = (int)date('Y'); for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?> Annual Report</option>
+ <?php endfor; ?>
+ </select>
+ </div>
+
+ <div id="exportMonthGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Month & Year</label>
+ <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:10px;">
+ <select id="exportMonth" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php
+ $months = [1=>'January',2=>'February',3=>'March',4=>'April',5=>'May',6=>'June',7=>'July',8=>'August',9=>'September',10=>'October',11=>'November',12=>'December'];
+ $curM = (int)date('n');
+ foreach($months as $num => $mName): ?>
+ <option value="<?= $num ?>" <?= $num === $curM ? 'selected' : '' ?>><?= $mName ?></option>
+ <?php endforeach; ?>
+ </select>
+ <select id="exportMonthYear" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <?php for($y = $curY; $y >= $curY - 4; $y--): ?>
+ <option value="<?= $y ?>"><?= $y ?></option>
+ <?php endfor; ?>
+ </select>
+ </div>
+ </div>
+
+ <div id="exportCustomGroup" style="margin-bottom:14px;display:none;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Date Range</label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">Start Date</span>
+ <input type="date" id="exportStartDate" value="<?= date('Y-m-01') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ <div>
+ <span style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:3px;">End Date</span>
+ <input type="date" id="exportEndDate" value="<?= date('Y-m-d') ?>" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;font-size:0.82rem;background:#fff;outline:none;box-sizing:border-box;">
+ </div>
+ </div>
+ </div>
+
+ <div style="margin-bottom:6px;">
+ <label style="display:block;font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:6px;text-transform:uppercase;">Status Filter</label>
+ <select id="exportStatus" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:0.85rem;background:#fff;outline:none;">
+ <option value="">All Incident Statuses</option>
+ <option value="dangerous">Dangerous Only</option>
+ <option value="caution">Caution Only</option>
+ <option value="safe">Safe / Resolved Only</option>
+ </select>
+ </div>
+ </div>
+ <div class="modal-actions" style="justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+ <button type="button" onclick="closeExportModal()" style="padding:8px 16px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:0.84rem;font-weight:600;cursor:pointer;">Cancel</button>
+ <button type="button" onclick="triggerDownload('json')" style="padding:8px 14px;border:none;background:#0284c7;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-code"></i> JSON</button>
+ <button type="button" onclick="triggerDownload('csv')" style="padding:8px 16px;border:none;background:#16a34a;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-csv"></i> Download CSV</button>
+ <button type="button" onclick="triggerDownload('xlsx')" style="padding:8px 18px;border:none;background:#0f766e;color:#fff;border-radius:8px;font-size:0.84rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-file-excel"></i> SenTri Excel (.xlsx)</button>
+ </div>
+ </div>
+</div>
 </script>
 <?= csrf_script() ?>
 </body>
