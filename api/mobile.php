@@ -262,6 +262,8 @@ switch ($action) {
         $limit = min(max((int)($_GET['limit'] ?? 100), 1), 200);
 
         $is_mine = (!empty($_GET['mine']) || !empty($_GET['mine_only']));
+        $req_uid = !empty($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
+        $target_uid = $auth_uid > 0 ? $auth_uid : $req_uid;
         $allow_archived = !empty($_GET['include_archived']) || ($status === 'safe') || ($status === 'archived');
 
         $query = "SELECT r.*, u.first_name, u.last_name, u.avatar_color, 
@@ -277,7 +279,7 @@ switch ($action) {
 
         if ($is_mine) {
             $query .= "r.user_id = ?";
-            $params[] = $auth_uid;
+            $params[] = $target_uid;
             $types .= "i";
         } else {
             if ($allow_archived) {
